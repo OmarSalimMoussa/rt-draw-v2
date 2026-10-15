@@ -3,6 +3,7 @@
 // browser, no network, no model calls; a few seconds for hundreds of marks.
 //
 //   node scripts/tune.ts sets/*.json [--parts marks,arrow,hit] [--out best.json]
+//   node scripts/tune.ts router-set.json --parts router
 //
 // Every 4th example is held out, so a "better" tuning that only memorized the
 // set shows up as a drop on the held-out score.
@@ -12,6 +13,7 @@ import { HitIndex } from "../src/core/hittest.ts";
 import type { Example, LabeledSet } from "../src/core/labels.ts";
 import { kindLabel, markOf, readMark } from "../src/core/marks.ts";
 import { runScript } from "../src/core/ops.ts";
+import { route } from "../src/core/router.ts";
 import { DEFAULTS, KNOBS, type Tuning, diff, tune, tuningId } from "../src/core/tuning.ts";
 
 const args = process.argv.slice(2);
@@ -39,6 +41,13 @@ const held = cases.filter((_, i) => i % 4 === 3);
 function decide({ ex, scene }: Case, t: Tuning): string {
   if (ex.decision === "marks.arrow") return readArrow(ex.strokes.map((s) => s.points), t).arrow ? "arrow" : "not";
   if (ex.decision === "marks.kind") return kindLabel(readMark(markOf(ex.strokes), hitsFor(scene), t));
+  if (ex.decision === "router.lane") {
+    // The send is kept as features: its words, its mark kinds and the scene's shape count.
+    const f = ex.features ?? {};
+    const kinds = String(f.markKinds ?? "").split(",").filter(Boolean);
+    const marks = kinds.map((k) => (k === "sketch" ? { kind: "sketch" as const, how: "sketch" as const } : { kind: "pointing" as const, how: k as "loop" }));
+    return route({ words: String(f.text ?? ""), marks, sceneShapes: Number(f.sceneShapes ?? 0) }, t).lane;
+  }
   throw new Error(`no replay for decision "${ex.decision}"`);
 }
 const accuracy = (cs: Case[], t: Tuning) => (cs.length ? cs.filter((c) => decide(c, t) === c.ex.label).length / cs.length : 1);

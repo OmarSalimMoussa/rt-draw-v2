@@ -1,0 +1,416 @@
+[
+ {
+  "words": "move this to the right",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one shape, one move"
+ },
+ {
+  "words": "delete this",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "remove one shape"
+ },
+ {
+  "words": "make this bigger",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "resize one shape"
+ },
+ {
+  "words": "make the headline smaller",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "resize a named shape"
+ },
+ {
+  "words": "rename this button to Sign up",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "new text for one shape"
+ },
+ {
+  "words": "change the text here to Our story",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "new text for one shape"
+ },
+ {
+  "words": "bold this",
+  "marks": [
+   "line"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one style change"
+ },
+ {
+  "words": "recolor this blue",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one style change"
+ },
+ {
+  "words": "remove the footer",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "remove a named shape"
+ },
+ {
+  "words": "move this up a bit",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "small move"
+ },
+ {
+  "words": "make the logo bigger",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "resize a named shape"
+ },
+ {
+  "words": "delete these",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one loop around several shapes, removed"
+ },
+ {
+  "words": "move this over here",
+  "marks": [
+   "arrow"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "an arrow says where to move it"
+ },
+ {
+  "words": "make the title red",
+  "marks": [
+   "line"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one style change, even with no listed verb"
+ },
+ {
+  "words": "swap these two",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "two shapes trade places"
+ },
+ {
+  "words": "make this smaller and bold",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "two style changes to one shape"
+ },
+ {
+  "words": "hide the second toy",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "remove or hide a named shape"
+ },
+ {
+  "words": "rename the nav links to Home Shop About",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "new text for one shape"
+ },
+ {
+  "words": "move the story card down",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "small move"
+ },
+ {
+  "words": "delete that",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "remove one shape"
+ },
+ {
+  "words": "put this one first",
+  "marks": [
+   "arrow"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "reorder by moving one shape"
+ },
+ {
+  "words": "make this text bold",
+  "marks": [
+   "line"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one style change"
+ },
+ {
+  "words": "recolor the rails pale yellow",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one style change on named shapes"
+ },
+ {
+  "words": "bigger",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one word, one resize"
+ },
+ {
+  "words": "add a pricing section with three plans under the hero",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a new section with several shapes"
+ },
+ {
+  "words": "put a search bar here",
+  "marks": [
+   "sketch"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a sketch to read and a new shape"
+ },
+ {
+  "words": "make it pop",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "vague taste request"
+ },
+ {
+  "words": "make a login screen for a banking app",
+  "marks": [],
+  "sceneShapes": 0,
+  "lane": "full",
+  "why": "empty canvas, all new"
+ },
+ {
+  "words": "draw a phone app with a tab bar",
+  "marks": [],
+  "sceneShapes": 0,
+  "lane": "full",
+  "why": "empty canvas, all new"
+ },
+ {
+  "words": "like this",
+  "marks": [
+   "sketch"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "the sketch carries the whole request"
+ },
+ {
+  "words": "add a photo of a clown juggling here",
+  "marks": [
+   "sketch"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "new shape with a picture"
+ },
+ {
+  "words": "move this here and make it bigger and change its color to green",
+  "marks": [
+   "arrow"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "several steps in one send"
+ },
+ {
+  "words": "these three should line up and match this one",
+  "marks": [
+   "loop",
+   "loop",
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "several marks to relate"
+ },
+ {
+  "words": "make the whole page feel more playful",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "vague taste request across the page"
+ },
+ {
+  "words": "add a footer with links to terms privacy and contact",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a new section"
+ },
+ {
+  "words": "turn this into a carousel",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "restructures a shape into new ones"
+ },
+ {
+  "words": "delete everything and start a pricing page",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "wipes the page and builds new"
+ },
+ {
+  "words": "this goes to that",
+  "marks": [
+   "arrow"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a link or flow between shapes, not a move"
+ },
+ {
+  "words": "add a button like this under the form",
+  "marks": [
+   "sketch"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a sketch for a new shape"
+ },
+ {
+  "words": "make a dark mode version",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "restyles the whole page"
+ },
+ {
+  "words": "move this",
+  "marks": [
+   "scribble"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "scribble picks one shape; a simple move"
+ },
+ {
+  "words": "can you make the hero image take up the full width and push everything else down",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "layout change that moves many shapes"
+ },
+ {
+  "words": "add a toy",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a new shape with a picture"
+ },
+ {
+  "words": "remove these and add a newsletter signup instead",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "removal plus a new section"
+ },
+ {
+  "words": "make the cards the same size",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "relates several shapes"
+ },
+ {
+  "words": "rename this",
+  "marks": [
+   "tap"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "no new name given: needs to ask or invent text"
+ },
+ {
+  "words": "smaller",
+  "marks": [
+   "loop"
+  ],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one word, one resize"
+ },
+ {
+  "words": "make this look like a sticky note",
+  "marks": [
+   "sketch"
+  ],
+  "sceneShapes": 18,
+  "lane": "full",
+  "why": "a sketch and a restyle"
+ },
+ {
+  "words": "delete the third toy and the kite",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "two named removals, simple"
+ },
+ {
+  "words": "bold the prices",
+  "marks": [],
+  "sceneShapes": 18,
+  "lane": "fast",
+  "why": "one style change on named shapes"
+ }
+]
