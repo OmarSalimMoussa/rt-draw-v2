@@ -76,7 +76,10 @@ export function tuningPanel(host: HTMLElement, parts: string[], onChange: (t: Tu
   // One switch per patched model, off by default: the model as it comes is the baseline.
   card.innerHTML = `<h2>Knobs</h2>${models.map((m) => `<div class="row"><button data-act="patches" data-model="${m}" title="Turns our ⚙ adjustments to ${m}'s output on or off; off is ${m} exactly as it comes"></button></div>`).join("")}${parts
     .map((part, i) => `<details${i ? "" : " open"}><summary>${part}</summary>${knobsOf(part)
-      .map((k) => `<label title="${k.key}: ${k.doc}${k.patches ? ` (patches ${k.patches})` : ""}"><span>${k.patches ? "⚙ " : ""}${k.doc}${k.unit ? ` (${k.unit})` : ""}</span><input type="range" data-key="${k.key}" min="${k.min}" max="${k.max}" step="${k.step}" value="${k.value}"><span class="stat" data-v="${k.key}">${k.value}</span></label>`)
+      .map((k) => k.name
+        // On/off knobs are buttons, like the patches switch.
+        ? `<div class="row" style="margin:4px 0"><button data-toggle="${k.key}" title="${k.key}: ${k.doc}"></button></div>`
+        : `<label title="${k.key}: ${k.doc}${k.patches ? ` (patches ${k.patches})` : ""}"><span>${k.patches ? "⚙ " : ""}${k.doc}${k.unit ? ` (${k.unit})` : ""}</span><input type="range" data-key="${k.key}" min="${k.min}" max="${k.max}" step="${k.step}" value="${k.value}"><span class="stat" data-v="${k.key}">${k.value}</span></label>`)
       .join("")}</details>`)
     .join("")}<div class="row"><button data-act="reset">Defaults</button><button data-act="copy">Copy changes</button><span class="stat" data-id></span></div>`;
   host.append(card);
@@ -89,6 +92,12 @@ export function tuningPanel(host: HTMLElement, parts: string[], onChange: (t: Tu
       input.value = String(t[k]);
       // Off: a patch reads neutral, or "model" when it isn't sent at all (the model's own default).
       card.querySelector(`[data-v="${k}"]`)!.textContent = off ? (p!.neutral === undefined ? "model" : String(p!.neutral)) : String(t[k]);
+    }
+    for (const btn of card.querySelectorAll<HTMLButtonElement>("[data-toggle]")) {
+      const k = knobsOf(btn.dataset.toggle!.split(".")[0]).find((x) => x.key === btn.dataset.toggle)!;
+      const on = t[k.key] === 1;
+      btn.textContent = `${k.name}: ${on ? "on" : "off"}`;
+      btn.classList.toggle("primary", on);
     }
     for (const btn of card.querySelectorAll<HTMLButtonElement>('[data-act="patches"]')) {
       const on = patching(t, btn.dataset.model!);
@@ -110,6 +119,7 @@ export function tuningPanel(host: HTMLElement, parts: string[], onChange: (t: Tu
   card.addEventListener("click", (e) => {
     const el = e.target as HTMLElement;
     const act = el.dataset.act;
+    if (el.dataset.toggle) set(tune({ [el.dataset.toggle]: t[el.dataset.toggle] === 1 ? 0 : 1 }, t));
     if (act === "reset") set(DEFAULTS);
     if (act === "patches") set(tune({ [`patches.${el.dataset.model}`]: patching(t, el.dataset.model!) ? 0 : 1 }, t));
     if (act === "copy") navigator.clipboard?.writeText(JSON.stringify(diff(t), null, 1));

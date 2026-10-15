@@ -21,6 +21,8 @@ export type Knob = {
   /** What it does, in a sentence someone tuning it can act on. */
   doc: string;
   unit?: string;
+  /** Set on on/off knobs (0 or 1): the short name their button shows. */
+  name?: string;
   /** Set on knobs that adjust a purpose-built model's output: which model it patches. */
   patches?: string;
   /** The value that leaves that model's output alone. Unset: the knob isn't sent, so the model's own default applies. */
@@ -28,6 +30,8 @@ export type Knob = {
 };
 
 const K = (key: string, value: number, min: number, max: number, step: number, doc: string, unit?: string): Knob => ({ key, value, min, max, step, doc, unit });
+/** An on/off knob (0 or 1), shown as a button named `name`. */
+const B = (key: string, value: 0 | 1, name: string, doc: string): Knob => ({ key, value, min: 0, max: 1, step: 1, doc, name });
 /** A patch on a purpose-built model's output (see the top of this file). */
 const patch = (model: string, k: Knob, neutral?: number): Knob => ({ ...k, patches: model, neutral });
 
@@ -82,7 +86,7 @@ export const KNOBS: Knob[] = [
   // Link: putting [ink n] markers at the word being said.
   K("link.leadMs", 400, 0, 2000, 50, "a mark can link to a word said up to this long after the pen went down", "ms"),
   K("link.lagMs", 1500, 0, 5000, 100, "or a word said up to this long before it", "ms"),
-  K("link.preferDeictic", 1, 0, 1, 1, "prefer pointing words (this, that, here, there, these) inside the window"),
+  B("link.preferDeictic", 1, "prefer pointing words", "prefer pointing words (this, that, here, there, these) inside the window"),
 
   // Shot: the picture the model gets at Enter.
   K("shot.scale", 0.75, 0.25, 2, 0.05, "screenshot size as a share of canvas pixels"),
@@ -111,19 +115,19 @@ export const KNOBS: Knob[] = [
   K("describe.cropMaxPx", 384, 128, 1024, 32, "a crop's longer side is scaled to at most this", "px"),
   K("describe.minWords", 6, 1, 30, 1, "a description must have at least this many words"),
   K("describe.maxWords", 30, 6, 80, 1, "and at most this many"),
-  K("describe.batch", 1, 0, 1, 1, "1: all shapes in one call (crops numbered); 0: one call per shape"),
+  B("describe.batch", 1, "all shapes in one call", "on: all shapes in one call (crops numbered); off: one call per shape"),
 
   // Resolve: "this headline" + ink → shape ids.
   K("resolve.model", 0, 0, 2, 1, "model that resolves references (0 haiku, 1 sonnet, 2 opus)"),
   K("resolve.maxCandidates", 8, 1, 30, 1, "shapes offered to the model: the ink's hits first, then the rest by word overlap"),
-  K("resolve.inkFirst", 0, 0, 1, 1, "1: when every mark clearly points at its shapes (tap, loop, arrow) and you said this/that/these, use those shapes without asking the model; 0 (default): always ask the model"),
-  K("resolve.sendScreenshot", 0, 0, 1, 1, "1: also send the model screenshot"),
+  B("resolve.inkFirst", 0, "ink-only shortcut", "on: when every mark clearly points at its shapes (tap, loop, arrow) and you said this/that/these, use those shapes without asking the model; off: always ask the model"),
+  B("resolve.sendScreenshot", 0, "send screenshot", "on: also send the model screenshot"),
 
   // Draw: one send → ops.
   K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
-  K("draw.sendScreenshot", 1, 0, 1, 1, "1: send the screenshot with numbered ink"),
-  K("draw.sendIdMap", 1, 0, 1, 1, "1: send every shape's id and description"),
-  K("draw.sendOps", 0, 0, 1, 1, "1: also send the scene as op lines (its exact boxes)"),
+  B("draw.sendScreenshot", 1, "send screenshot", "on: send the screenshot with numbered ink"),
+  B("draw.sendIdMap", 1, "send id map", "on: send every shape's id and description"),
+  B("draw.sendOps", 0, "send scene as ops", "on: also send the scene as op lines (its exact boxes)"),
   K("draw.gridCellPx", 0, 0, 160, 10, "grid on the screenshot, so the model can name cells (0: none)", "px"),
 
   // Picture: a doodle inside a shape.
@@ -135,7 +139,7 @@ export const KNOBS: Knob[] = [
   // Router: fast lane (small model, no picture) vs full lane.
   K("router.fastMaxWords", 12, 1, 40, 1, "a send this short can take the fast lane"),
   K("router.fastMaxMarks", 1, 0, 5, 1, "with at most this many marks"),
-  K("router.sketchIsFull", 1, 0, 1, 1, "1: any sketch mark goes to the full lane"),
+  B("router.sketchIsFull", 1, "sketches go full", "on: any sketch mark goes to the full lane"),
   K("router.fastModel", 0, 0, 2, 1, "the fast lane's model (0 haiku, 1 sonnet, 2 opus)"),
   K("router.fullModel", 1, 0, 2, 1, "the full lane's model"),
 
@@ -147,7 +151,7 @@ export const KNOBS: Knob[] = [
   K("render.lineHeight", 1.25, 1, 2, 0.05, "line height as a multiple of text size"),
 
   // One switch per patched model: 0 (default) uses the model as it comes, 1 applies our patches on it.
-  K("patches.scribe", 0, 0, 1, 1, "1: apply our patches (⚙) on Scribe's output; 0: Scribe as it comes"),
+  B("patches.scribe", 0, "scribe patches", "on: apply our patches (⚙) on Scribe's output; off: Scribe as it comes"),
 ];
 
 export type Tuning = Readonly<Record<string, number>>;
