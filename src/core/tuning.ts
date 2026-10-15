@@ -116,7 +116,7 @@ export const KNOBS: Knob[] = [
   // Resolve: "this headline" + ink → shape ids.
   K("resolve.model", 0, 0, 2, 1, "model that resolves references (0 haiku, 1 sonnet, 2 opus)"),
   K("resolve.maxCandidates", 8, 1, 30, 1, "shapes offered to the model: the ink's hits first, then the rest by word overlap"),
-  K("resolve.inkFirst", 1, 0, 1, 1, "1: a shape the ink clearly points at wins without asking the model"),
+  K("resolve.inkFirst", 0, 0, 1, 1, "1: when every mark clearly points at its shapes (tap, loop, arrow) and you said this/that/these, use those shapes without asking the model; 0 (default): always ask the model"),
   K("resolve.sendScreenshot", 0, 0, 1, 1, "1: also send the model screenshot"),
 
   // Draw: one send → ops.
