@@ -3,7 +3,7 @@
 // caching, limits), how long it took, and the prompt's structure as a bar of
 // its sections. Calls are recorded by callModel (src/core/model.ts).
 import { CALLS_EVENT, type CallRecord, calls } from "./core/model.ts";
-import { type Modal, openModal } from "./modal.ts";
+import { type Modal, dock, openModal } from "./modal.ts";
 
 type Section = { part: "system" | "message" | "image" | "reply"; name: string; text?: string; image?: string; chars: number; tokens: number };
 
@@ -131,8 +131,8 @@ export function openCallInspector(n?: number) {
 /** The page's "Model calls (n)" button, bottom right, shown once the page has made a call. */
 export function mountCallsView() {
   const btn = document.createElement("button");
-  btn.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:20;display:none;box-shadow:2px 3px 0 #0002";
-  document.body.append(btn);
+  btn.style.cssText = "display:none;box-shadow:2px 3px 0 #0002";
+  dock().append(btn);
   btn.addEventListener("click", () => openCallInspector());
   const label = () => {
     btn.style.display = calls.length ? "block" : "none";

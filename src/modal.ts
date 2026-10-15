@@ -26,3 +26,15 @@ export function openModal(title: string, onClose?: () => void): Modal {
   sheet.querySelector("[data-close]")!.addEventListener("click", close);
   return { body: sheet.querySelector("[data-body]") as HTMLElement, close, isOpen: () => open };
 }
+
+/** The bottom-right dock where shared tools put their buttons (Model calls, Latency). */
+export function dock(): HTMLElement {
+  let d = document.querySelector<HTMLElement>("#rt-dock");
+  if (!d) {
+    d = document.createElement("div");
+    d.id = "rt-dock";
+    d.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:20;display:flex;gap:8px";
+    document.body.append(d);
+  }
+  return d;
+}

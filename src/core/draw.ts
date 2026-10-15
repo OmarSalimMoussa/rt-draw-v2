@@ -11,6 +11,7 @@ import { type ModelStats, callModel, modelOf } from "./model.ts";
 import { OpStream, type Parsed, applyOp } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
+import { type TraceContext, mark, span, spanSync, timed } from "./trace.ts";
 import { DEFAULTS, type Tuning, tune } from "./tuning.ts";
 
 /** The op manual, short on purpose: v1's long manual is not carried over. {W} {H} {CELL} are filled in. */
@@ -104,50 +105,61 @@ export function typedWords(text: string, marks: Mark[]): Word[] {
 }
 
 /** What the model gets for this send. Words are spoken (with times) or typed (a string). */
-export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS): Promise<Prompt> {
-  const marks = groupStrokes(strokes, t);
-  const transcript = typeof words === "string" ? typedTranscript(words, marks.length) : linkInk(words, marks, t).text;
-  const cell = t["draw.gridCellPx"];
-  const system = SYSTEM.replace("{W}", String(scene.width))
-    .replace("{H}", String(scene.height))
-    .replace("{CELL}", cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "");
+export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS, parent?: TraceContext): Promise<Prompt> {
+  return span("build the prompt", parent, async (ctx) => {
+    const marks = spanSync("group strokes into marks", ctx, () => groupStrokes(strokes, t), { strokes: strokes.length });
+    const transcript = spanSync("link words to ink", ctx, () => (typeof words === "string" ? typedTranscript(words, marks.length) : linkInk(words, marks, t).text));
+    const cell = t["draw.gridCellPx"];
+    const system = SYSTEM.replace("{W}", String(scene.width))
+      .replace("{H}", String(scene.height))
+      .replace("{CELL}", cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "");
 
-  const parts = [`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`];
-  const idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
-  if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${idMap.join("\n")}`);
-  const ops = t["draw.sendOps"] ? sceneToOps(scene) : "";
-  if (ops) parts.push(`The scene as ops:\n${ops}`);
-  let shot: Shot | undefined;
-  if (t["draw.sendScreenshot"]) {
-    shot = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
-    parts.push(`The screenshot is the canvas at ${Math.round(shot.width)}×${Math.round(shot.height)} (scaled ${t["shot.scale"]}); boxes are always in canvas pixels.`);
-  }
-  // What the ink is, read from its geometry: free, and the screenshot only shows it as pixels.
-  const hits = new HitIndex(scene);
-  const readings = marks.map((m) => readMark(m, hits, t));
-  if (t["draw.sendMarks"] && marks.length) parts.push(`Marks (what each [ink n] is, read from its geometry):\n${readings.map((r, i) => describeMark(i + 1, r)).join("\n")}`);
-  // Which shapes the words and ink mean, from the resolver: one more model call unless the ink settles it.
-  let refs: Resolution | undefined;
-  const r0 = performance.now();
-  if (t["draw.sendRefs"] && (marks.length || (typeof words === "string" ? words.trim() : words.length))) {
-    const said = typeof words === "string" ? typedWords(words, marks) : words;
-    refs = await resolve(said, strokes, marks, scene, hits, t, "draw-refs");
-    const lines = refs.refs.map((x) => `"${x.phrase}" → ${x.ids.join(", ") || "nothing on the canvas"}`);
-    if (lines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${lines.join("\n")}`);
-  }
-  const resolveMs = Math.round(performance.now() - r0);
-  parts.push(`Request: ${transcript || "(no words)"}`);
-  const user = parts.join("\n\n");
-  const imageTokens = shot ? Math.round((shot.width * shot.height) / 750) : 0;
-  return {
-    system,
-    user,
-    images: shot ? [shot.dataUrl] : [],
-    shot,
-    transcript,
-    refs,
-    features: { marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: shot ? 1 : 0, grid: cell },
-  };
+    // What the ink is, read from its geometry: free, and the screenshot only shows it as pixels.
+    const { hits, readings } = spanSync("read marks (hit-test, arrows)", ctx, () => {
+      const hits = new HitIndex(scene);
+      return { hits, readings: marks.map((m) => readMark(m, hits, t)) };
+    }, { marks: marks.length });
+
+    // The screenshot and the resolver don't need each other: run them side by side.
+    const said = typeof words === "string" ? (words.trim() ? typedWords(words, marks) : []) : words;
+    const r0 = performance.now();
+    const [shot, refs] = await Promise.all([
+      t["draw.sendScreenshot"]
+        ? span("screenshot", ctx, async (sctx) => {
+            const sh = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
+            // Its own phases, measured inside takeShot, laid end to end from the span's start.
+            let at = performance.now() - sh.ms.total;
+            for (const phase of ["serialize", "rasterize", "encode"] as const) timed(sctx, `screenshot: ${phase}`, at, (at += sh.ms[phase]));
+            return sh;
+          })
+        : undefined,
+      // Which shapes the words and ink mean: one more model call unless the ink settles it.
+      t["draw.sendRefs"] && (marks.length || said.length) ? span("resolve references", ctx, (rctx) => resolve(said, strokes, marks, scene, hits, t, "draw-refs", rctx)) : undefined,
+    ]);
+    const resolveMs = Math.round(performance.now() - r0);
+
+    const parts = [`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`];
+    const idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
+    if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${idMap.join("\n")}`);
+    const ops = t["draw.sendOps"] ? sceneToOps(scene) : "";
+    if (ops) parts.push(`The scene as ops:\n${ops}`);
+    if (shot) parts.push(`The screenshot is the canvas at ${Math.round(shot.width)}×${Math.round(shot.height)} (scaled ${t["shot.scale"]}); boxes are always in canvas pixels.`);
+    if (t["draw.sendMarks"] && marks.length) parts.push(`Marks (what each [ink n] is, read from its geometry):\n${readings.map((r, i) => describeMark(i + 1, r)).join("\n")}`);
+    const refLines = refs?.refs.map((x) => `"${x.phrase}" → ${x.ids.join(", ") || "nothing on the canvas"}`) ?? [];
+    if (refs && refLines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${refLines.join("\n")}`);
+    parts.push(`Request: ${transcript || "(no words)"}`);
+    const user = parts.join("\n\n");
+    const imageTokens = shot ? Math.round((shot.width * shot.height) / 750) : 0;
+    return {
+      system,
+      user,
+      images: shot ? [shot.dataUrl] : [],
+      shot,
+      transcript,
+      refs,
+      features: { marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: shot ? 1 : 0, grid: cell },
+    };
+  });
 }
 
 export type OpResult = { line: string; ok: boolean; error?: string; ms: number };
@@ -157,7 +169,11 @@ export type SendResult = { ops: OpResult[]; firstOpMs?: number; ms: number; stat
  * Sends the prompt and applies each op line to `scene` as it completes. onOp
  * fires after each line (so the caller re-renders); times are ms since the send.
  */
-export async function run(scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal): Promise<SendResult> {
+export async function run(scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal, parent?: TraceContext): Promise<SendResult> {
+  return span("drawing model and ops", parent, (ctx) => runIn(ctx, scene, prompt, t, onOp, onText, signal));
+}
+
+async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal): Promise<SendResult> {
   const t0 = performance.now();
   const stream = new OpStream();
   const ops: OpResult[] = [];
@@ -180,14 +196,16 @@ export async function run(scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpR
         }
       }
       ops.push(r);
-      onOp(r);
+      if (r.ok && ops.filter((o) => o.ok).length === 1) mark(ctx, "first op applied");
+      // The page's redraw after each op is part of the op's time on screen.
+      spanSync(`op ${ops.length}: ${r.line.slice(0, 48)}`, ctx, () => onOp(r), { ok: r.ok, line: r.line });
     }
   };
   try {
     const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw" }, (chunk, soFar) => {
       handle(stream.push(chunk));
       onText?.(soFar);
-    }, signal);
+    }, signal, ctx);
     handle(stream.end());
     return { ops, firstOpMs, ms: Math.round(performance.now() - t0), stats, reply: text };
   } catch (e) {

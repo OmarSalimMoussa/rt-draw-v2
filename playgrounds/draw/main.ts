@@ -13,6 +13,7 @@ import { render } from "../../src/core/render.ts";
 import type { Scene } from "../../src/core/scene.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { DEFAULTS, type Tuning, tuningId } from "../../src/core/tuning.ts";
+import { span, spanSync } from "../../src/core/trace.ts";
 import { $, download, fontsReady, shell, stage, tuningPanel } from "../../src/ui.ts";
 
 shell("draw", "Draw on the page, then say or type what you want and press Send (or Enter). The model gets your words with [ink n] markers, a screenshot with your numbered ink and the id map, and its ops land on the canvas as each line arrives. Each send is one model call on your Claude subscription.");
@@ -78,33 +79,36 @@ async function send() {
   sending = true;
   $("#errors").textContent = "";
   $<HTMLButtonElement>("#send").disabled = true;
-  if (talking) await stopTalking();
-  const input = words.length ? words : typed;
-  const prompt = await buildPrompt(scene, strokes, input, tuning);
-  showPrompt(prompt);
-  undo.push(cloneScene(scene));
-  $<HTMLButtonElement>("#undo").disabled = false;
-  const model = modelOf(tuning["draw.model"]);
-  const lines: string[] = [];
-  $("#opLog").textContent = "";
-  $("#sendStat").textContent = `Sending to ${model}…`;
-  const result = await run(scene, prompt, tuning, (r) => {
-    lines.push(logLine(r));
-    $("#opLog").textContent = lines.join("\n");
-    draw();
+  // From pressing Send to the last op on screen, as one trace: the Latency modal shows its parts.
+  await span(`send ${sends.length + 1}`, undefined, async (ctx) => {
+    if (talking) await span("finish listening (Scribe)", ctx, () => stopTalking());
+    const input = words.length ? words : typed;
+    const prompt = await buildPrompt(scene, strokes, input, tuning, ctx);
+    showPrompt(prompt);
+    undo.push(cloneScene(scene));
+    $<HTMLButtonElement>("#undo").disabled = false;
+    const model = modelOf(tuning["draw.model"]);
+    const lines: string[] = [];
+    $("#opLog").textContent = "";
+    $("#sendStat").textContent = `Sending to ${model}…`;
+    const result = await run(scene, prompt, tuning, (r) => {
+      lines.push(logLine(r));
+      $("#opLog").textContent = lines.join("\n");
+      draw();
+    }, undefined, undefined, ctx);
+    const sent = { n: sends.length + 1, request: prompt.transcript, prompt, result, strokes, model };
+    sends.push(sent);
+    const s = result.stats;
+    const okOps = result.ops.filter((o) => o.ok).length;
+    $("#sendStat").textContent = result.error
+      ? `✗ ${result.error}`
+      : `${model} · first text ${s?.firstMs ?? "-"} ms · first op ${result.firstOpMs ?? "-"} ms · done ${result.ms} ms · ${okOps}/${result.ops.length} ops applied · tokens in ${s?.inTokens ?? "?"} / out ${s?.outTokens ?? "?"}`;
+    if (result.error) $("#errors").textContent = result.error;
+    clearInk();
+    $<HTMLTextAreaElement>("#words").value = "";
+    spanSync("final redraw", ctx, () => draw());
+    listSends();
   });
-  const sent = { n: sends.length + 1, request: prompt.transcript, prompt, result, strokes, model };
-  sends.push(sent);
-  const s = result.stats;
-  const okOps = result.ops.filter((o) => o.ok).length;
-  $("#sendStat").textContent = result.error
-    ? `✗ ${result.error}`
-    : `${model} · first text ${s?.firstMs ?? "-"} ms · first op ${result.firstOpMs ?? "-"} ms · done ${result.ms} ms · ${okOps}/${result.ops.length} ops applied · tokens in ${s?.inTokens ?? "?"} / out ${s?.outTokens ?? "?"}`;
-  if (result.error) $("#errors").textContent = result.error;
-  clearInk();
-  $<HTMLTextAreaElement>("#words").value = "";
-  draw();
-  listSends();
   sending = false;
   $<HTMLButtonElement>("#send").disabled = false;
 }

@@ -2,6 +2,7 @@
 // Two steps: plan() is free and instant (hit-test, word overlap, and the ink-first
 // rule that settles clear pointing without a model); resolve() asks a small model
 // only when the plan can't settle it.
+import type { TraceContext } from "./trace.ts";
 import type { HitIndex } from "./hittest.ts";
 import type { Stroke } from "./ink.ts";
 import { DEICTIC, type Word, linkInk } from "./link.ts";
@@ -109,12 +110,12 @@ export function parseReply(reply: string, scene: Scene): { refs: Ref[]; dropped:
   return { refs, dropped };
 }
 
-export async function resolve(words: Word[], strokes: Stroke[], marks: Mark[], scene: Scene, hits: HitIndex, t: Tuning, from = "resolve"): Promise<Resolution> {
+export async function resolve(words: Word[], strokes: Stroke[], marks: Mark[], scene: Scene, hits: HitIndex, t: Tuning, from = "resolve", parent?: TraceContext): Promise<Resolution> {
   const p = plan(words, marks, scene, hits, t);
   if (p.inkIds) return { ...p, ids: p.inkIds, refs: [{ phrase: "(ink)", ids: p.inkIds }], via: "ink" };
   const user = prompt(p, scene);
   const images = t["resolve.sendScreenshot"] ? [(await takeShot(scene, strokes, t)).dataUrl] : [];
-  const { text, stats } = await callModel({ model: modelOf(t["resolve.model"]), system: RESOLVE_SYSTEM, user, images, from });
+  const { text, stats } = await callModel({ model: modelOf(t["resolve.model"]), system: RESOLVE_SYSTEM, user, images, from }, undefined, undefined, parent);
   const { refs, dropped } = parseReply(text, scene);
   const ids = [...new Set(refs.flatMap((r) => r.ids))];
   return { ...p, ids, refs, via: "model", prompt: { system: RESOLVE_SYSTEM, user, images: images.length }, reply: text, stats, features: { ...p.features, refs: refs.length, droppedIds: dropped } };

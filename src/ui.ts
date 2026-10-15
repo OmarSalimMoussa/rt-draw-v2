@@ -2,6 +2,7 @@
 // stage that stacks the canvas <svg> under an ink <svg> with the same viewBox.
 import "./ui.css";
 import { mountCallsView } from "./callsView.ts";
+import { mountLatencyView } from "./latencyView.ts";
 import { DEFAULTS, type Tuning, diff, knobsOf, patching, tune, tuningId } from "./core/tuning.ts";
 
 export const PLAYGROUNDS = [
@@ -29,6 +30,8 @@ export function shell(current: string, blurb: string) {
   document.body.prepend(header);
   // Every page can make model calls (or will): the drawer shows each one, exactly as sent.
   mountCallsView();
+  // And every traced operation's latency, nested (src/core/trace.ts).
+  mountLatencyView();
 }
 
 export function stage(host: HTMLElement, width = 1280, height = 800, withInk = false) {

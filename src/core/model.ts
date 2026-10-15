@@ -1,6 +1,7 @@
 // Calls a model through the dev server's /api/model (dev/model-plugin.ts):
 // the reply streams in, so ops can be applied while it's still arriving.
 // Model choice is a knob like any other: an index into MODELS.
+import { type TraceContext, mark, span, timed } from "./trace.ts";
 
 export const MODELS = ["haiku", "sonnet", "opus"] as const;
 export type ModelName = (typeof MODELS)[number];
@@ -35,7 +36,30 @@ export const calls: CallRecord[] = [];
 export const CALLS_EVENT = "rt-model-calls";
 const changed = () => window.dispatchEvent(new Event(CALLS_EVENT));
 
-export async function callModel(req: ModelRequest, onText?: (chunk: string, soFar: string) => void, signal?: AbortSignal): Promise<{ text: string; stats: ModelStats }> {
+export async function callModel(req: ModelRequest, onText?: (chunk: string, soFar: string) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ text: string; stats: ModelStats }> {
+  return span(`model call · ${req.from ?? "?"} · ${req.model}`, parent, async (ctx, s) => {
+    const t0 = performance.now();
+    let first = true;
+    const out = await record(req, (chunk, soFar) => {
+      if (first) mark(ctx, "first text");
+      first = false;
+      onText?.(chunk, soFar);
+    }, signal);
+    const st = out.stats;
+    s.setAttributes({ model: st.modelId ?? req.model, inTokens: (st.inTokens ?? 0) + (st.cacheRead ?? 0) + (st.cacheWrite ?? 0), outTokens: st.outTokens ?? 0, cacheRead: st.cacheRead ?? 0, warm: !!st.warm });
+    // The server's phases, measured there (from when it got the request): process, the model's wait, streaming.
+    // Clamped to this call, since the server's clock starts a little after ours.
+    const end = performance.now();
+    const at = (ms?: number) => Math.min(end, t0 + (ms ?? 0));
+    timed(ctx, st.warm ? "Claude process (already waiting)" : "Claude process (started for this call)", t0, at(st.waitMs));
+    if (st.firstMs !== undefined) timed(ctx, "model: time to first text", at(st.waitMs), at(st.firstMs));
+    if (st.firstMs !== undefined) timed(ctx, "model: streaming the reply", at(st.firstMs), at(st.ms), { outTokens: st.outTokens ?? 0 });
+    timed(ctx, "network and server overhead", at(st.ms), end);
+    return out;
+  }, { from: req.from ?? "?", model: req.model, images: req.images?.length ?? 0, chars: req.system.length + req.user.length });
+}
+
+async function record(req: ModelRequest, onText: (chunk: string, soFar: string) => void, signal?: AbortSignal): Promise<{ text: string; stats: ModelStats }> {
   const rec: CallRecord = { n: calls.length + 1, at: new Date().toISOString(), page: location.pathname, req, reply: "", running: true };
   calls.push(rec);
   changed();
@@ -43,7 +67,7 @@ export async function callModel(req: ModelRequest, onText?: (chunk: string, soFa
     const out = await send(req, (chunk, soFar) => {
       rec.reply = soFar;
       changed();
-      onText?.(chunk, soFar);
+      onText(chunk, soFar);
     }, signal, rec);
     rec.stats = out.stats;
     return out;
