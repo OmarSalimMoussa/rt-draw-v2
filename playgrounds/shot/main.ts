@@ -15,7 +15,7 @@ const { canvas, ink } = stage($("#left"), 1280, 800, true);
 const out = document.createElement("div");
 out.className = "card";
 out.style.marginTop = "16px";
-out.innerHTML = `<h2>What the model sees</h2><div class="stat" id="info">Draw something, then press Enter.</div><div style="overflow:auto"><img id="img" alt="" style="display:none;border:1.5px solid var(--line);border-radius:6px"></div>`;
+out.innerHTML = `<h2>What the model sees</h2><div class="row"><span class="stat" id="info">Draw something, then press Enter.</span><a id="full" target="_blank" rel="noopener" style="display:none">Open full size ↗</a></div><div style="overflow:auto"><a id="imgLink" target="_blank" rel="noopener"><img id="img" alt="" style="display:none;border:1.5px solid var(--line);border-radius:6px"></a></div>`;
 $("#left").append(out);
 
 $("#side").innerHTML = `
@@ -31,6 +31,7 @@ let tuning: Tuning = DEFAULTS;
 let scene = runScript(clowns).scene;
 let strokes: Stroke[] = [];
 let last: Shot | undefined;
+let fullUrl: string | undefined;
 const draw = () => render(canvas, scene, { tags: tuning["shot.tagPx"] > 0, grid: tuning["shot.gridCellPx"] || undefined, tuning });
 
 async function take() {
@@ -39,6 +40,11 @@ async function take() {
   const img = $<HTMLImageElement>("#img");
   img.src = shot.dataUrl;
   img.style.display = "block";
+  // A blob link opens in a new tab (Chrome won't open a data: URL there), at the image's real size.
+  if (fullUrl) URL.revokeObjectURL(fullUrl);
+  fullUrl = URL.createObjectURL(shot.blob);
+  for (const a of [$<HTMLAnchorElement>("#full"), $<HTMLAnchorElement>("#imgLink")]) a.href = fullUrl;
+  $("#full").style.display = "inline";
   img.width = shot.width;
   $<HTMLButtonElement>("#save").disabled = false;
   const kb = (shot.bytes / 1024).toFixed(0);
