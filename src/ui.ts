@@ -1,6 +1,7 @@
 // The shell every playground shares: a header with links between them, and a
 // stage that stacks the canvas <svg> under an ink <svg> with the same viewBox.
 import "./ui.css";
+import { mountCallsView } from "./callsView.ts";
 import { DEFAULTS, type Tuning, diff, knobsOf, patching, tune, tuningId } from "./core/tuning.ts";
 
 export const PLAYGROUNDS = [
@@ -26,6 +27,8 @@ export function shell(current: string, blurb: string) {
   header.className = "bar";
   header.innerHTML = `<h1><a href="/" style="color:inherit;text-decoration:none">rt-draw v2</a></h1><nav>${PLAYGROUNDS.map(([p, name]) => `<a href="/playgrounds/${p}/"${p === current ? ' aria-current="page"' : ""}>${name}</a>`).join("")}</nav><p>${blurb}</p>`;
   document.body.prepend(header);
+  // Every page can make model calls (or will): the drawer shows each one, exactly as sent.
+  mountCallsView();
 }
 
 export function stage(host: HTMLElement, width = 1280, height = 800, withInk = false) {
