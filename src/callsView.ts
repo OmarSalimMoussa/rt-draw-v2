@@ -1,8 +1,9 @@
-// The Model calls drawer, on every page: each call made from the page, exactly
+// The model call inspector, shared by every page (a modal, src/modal.ts): each call made from the page, exactly
 // as sent (system prompt, message, images), how it was made (model, thinking,
 // caching, limits), how long it took, and the prompt's structure as a bar of
 // its sections. Calls are recorded by callModel (src/core/model.ts).
 import { CALLS_EVENT, type CallRecord, calls } from "./core/model.ts";
+import { type Modal, openModal } from "./modal.ts";
 
 type Section = { part: "system" | "message" | "image" | "reply"; name: string; text?: string; image?: string; chars: number; tokens: number };
 
@@ -87,59 +88,62 @@ async function detail(c: CallRecord) {
     <div class="row" style="margin-top:8px"><button data-copy="${c.n}">Copy the request as JSON</button></div>`;
 }
 
-/** Mounts the drawer: a button that appears once the page has made a call. */
+let modal: Modal | undefined;
+let selected = 0;
+
+function listHtml() {
+  return [...calls]
+    .reverse()
+    .map((c) => `<button data-n="${c.n}" style="text-align:left;font-size:12px;${c.n === selected ? "background:#fff4e6;" : ""}"><b>${c.n}. ${esc(c.req.from ?? "?")}</b> · ${c.req.model}<br><span class="muted">${c.running ? "running…" : c.error ? "failed" : `${c.stats?.ms ?? "?"} ms`}</span></button>`)
+    .join("");
+}
+
+async function refresh(detailToo: boolean) {
+  if (!modal?.isOpen()) return;
+  modal.body.querySelector("[data-list]")!.innerHTML = listHtml();
+  if (!detailToo) return;
+  const c = calls.find((x) => x.n === selected);
+  (modal.body.querySelector("[data-detail]") as HTMLElement).innerHTML = c ? await detail(c) : '<p class="muted">No calls yet on this page.</p>';
+}
+
+/** Opens the inspector on call n (the latest when omitted). Any page can call this, e.g. from a "inspect" link. */
+export function openCallInspector(n?: number) {
+  selected = n ?? calls.at(-1)?.n ?? 0;
+  if (!modal?.isOpen()) {
+    modal = openModal("Model calls");
+    modal.body.style.cssText += ";display:grid;grid-template-columns:220px 1fr";
+    modal.body.innerHTML = `<div data-list style="border-right:1px solid var(--line);overflow:auto;padding:10px;display:grid;gap:4px;align-content:start"></div><div data-detail style="overflow:auto;padding:12px 18px"></div>`;
+    modal.body.addEventListener("click", (e) => {
+      const el = (e.target as HTMLElement).closest("button");
+      if (el?.dataset.n) {
+        selected = Number(el.dataset.n);
+        void refresh(true);
+      } else if (el?.dataset.copy) {
+        const c = calls.find((x) => x.n === Number(el.dataset.copy));
+        if (c) void navigator.clipboard?.writeText(JSON.stringify({ model: c.stats?.modelId ?? c.req.model, settings: c.stats?.settings, system: c.req.system, images: c.req.images, user: c.req.user }, null, 1));
+      }
+    });
+  }
+  void refresh(true);
+}
+
+/** The page's "Model calls (n)" button, bottom right, shown once the page has made a call. */
 export function mountCallsView() {
   const btn = document.createElement("button");
   btn.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:20;display:none;box-shadow:2px 3px 0 #0002";
-  const panel = document.createElement("div");
-  panel.style.cssText = "position:fixed;top:0;right:0;bottom:0;width:min(760px,100vw);z-index:30;background:var(--paper);border-left:1.5px solid var(--ink);box-shadow:-4px 0 0 #0001;display:none;grid-template-columns:200px 1fr;overflow:hidden";
-  panel.innerHTML = `<div style="border-right:1px solid var(--line);overflow:auto;padding:10px"><div class="row" style="justify-content:space-between"><h2 style="font:20px Excalifont,cursive;margin:0">Model calls</h2><button data-close>✕</button></div><div data-list style="display:grid;gap:4px;margin-top:8px"></div></div><div data-detail style="overflow:auto;padding:12px 16px"></div>`;
-  document.body.append(btn, panel);
-  let open = false;
-  let selected = 0;
-
-  const list = () => {
+  document.body.append(btn);
+  btn.addEventListener("click", () => openCallInspector());
+  const label = () => {
     btn.style.display = calls.length ? "block" : "none";
     btn.textContent = `Model calls (${calls.length})${calls.some((c) => c.running) ? " …" : ""}`;
-    if (!open) return;
-    panel.querySelector("[data-list]")!.innerHTML = [...calls]
-      .reverse()
-      .map((c) => `<button data-n="${c.n}" style="text-align:left;font-size:12px;${c.n === selected ? "background:#fff4e6;" : ""}"><b>${c.n}. ${esc(c.req.from ?? "?")}</b> · ${c.req.model}<br><span class="muted">${c.running ? "running…" : c.error ? "failed" : `${c.stats?.ms ?? "?"} ms`}</span></button>`)
-      .join("");
   };
-  const show = async () => {
-    const c = calls.find((x) => x.n === selected);
-    (panel.querySelector("[data-detail]") as HTMLElement).innerHTML = c ? await detail(c) : '<p class="muted">Pick a call.</p>';
-  };
-
-  btn.addEventListener("click", () => {
-    open = true;
-    panel.style.display = "grid";
-    selected ||= calls.at(-1)?.n ?? 0;
-    list();
-    void show();
-  });
-  panel.addEventListener("click", (e) => {
-    const el = (e.target as HTMLElement).closest("button");
-    if (!el) return;
-    if (el.dataset.close !== undefined) {
-      open = false;
-      panel.style.display = "none";
-    } else if (el.dataset.n) {
-      selected = Number(el.dataset.n);
-      list();
-      void show();
-    } else if (el.dataset.copy) {
-      const c = calls.find((x) => x.n === Number(el.dataset.copy));
-      if (c) void navigator.clipboard?.writeText(JSON.stringify({ model: c.stats?.modelId ?? c.req.model, settings: c.stats?.settings, system: c.req.system, images: c.req.images, user: c.req.user }, null, 1));
-    }
-  });
   // Live: the list as calls start and end; the open call's detail when it ends (not on every streamed chunk).
   let wasRunning = new Set<number>();
   window.addEventListener(CALLS_EVENT, () => {
-    list();
+    label();
     const running = new Set(calls.filter((c) => c.running).map((c) => c.n));
-    if (open && wasRunning.has(selected) && !running.has(selected)) void show();
+    void refresh(wasRunning.has(selected) && !running.has(selected));
     wasRunning = running;
   });
+  label();
 }
