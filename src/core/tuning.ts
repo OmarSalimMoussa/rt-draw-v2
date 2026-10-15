@@ -6,8 +6,10 @@
 //
 // Prefer a purpose-built model (Scribe for word times, a vision model for
 // shapes) over our own rules. A knob that adjusts such a model's output is a
-// patch: it names the model and its neutral value, and "patches off" sets every
-// patch to neutral at once, so we can always check the model alone is not better.
+// patch: it names the model and its neutral value. Each model has one switch,
+// patches.<model>, OFF by default: the model as it comes is the baseline, and a
+// patch is only turned on once it's shown to beat that. Read a patch knob with
+// patchValue(), which gives the neutral value (or undefined: don't send) when off.
 
 export type Knob = {
   /** "part.name", e.g. "arrow.coneMaxDeg". */
@@ -107,8 +109,8 @@ export const KNOBS: Knob[] = [
   K("render.textPadPx", 16, 0, 40, 1, "text keeps at least this far from a shape's edge", "px"),
   K("render.lineHeight", 1.25, 1, 2, 0.05, "line height as a multiple of text size"),
 
-  // The switch for all patches at once (set through patchesOff, not by hand).
-  K("patches.off", 0, 0, 1, 1, "1: every patch on a purpose-built model is neutral or not sent"),
+  // One switch per patched model: 0 (default) uses the model as it comes, 1 applies our patches on it.
+  K("patches.scribe", 0, 0, 1, 1, "1: apply our patches (⚙) on Scribe's output; 0: Scribe as it comes"),
 ];
 
 export type Tuning = Readonly<Record<string, number>>;
@@ -136,11 +138,15 @@ export function tuningId(t: Tuning): string {
 /** Only the knobs that differ from the defaults: what to save, share or paste back. */
 export const diff = (t: Tuning) => Object.fromEntries(Object.keys(t).filter((k) => t[k] !== DEFAULTS[k]).map((k) => [k, t[k]]));
 
-/** Every patch on a purpose-built model set to neutral: the model alone, to compare against. */
-export function patchesOff(t: Tuning = DEFAULTS): Tuning {
-  const neutral = Object.fromEntries(KNOBS.filter((k) => k.patches && k.neutral !== undefined).map((k) => [k.key, k.neutral!]));
-  return tune({ ...neutral, "patches.off": 1 }, t);
-}
+/** Whether our patches on this model are on. */
+export const patching = (t: Tuning, model: string) => t[`patches.${model}`] === 1;
 
-/** Whether a patch knob should be applied (or sent) at all under this tuning. */
-export const patching = (t: Tuning) => !t["patches.off"];
+/**
+ * A knob's value as it should be used: for a patch whose model's patches are
+ * off, its neutral value, or undefined when it shouldn't be sent at all.
+ */
+export function patchValue(t: Tuning, key: string): number | undefined {
+  const k = KNOBS.find((x) => x.key === key);
+  if (!k) throw new Error(`unknown knob "${key}"`);
+  return !k.patches || patching(t, k.patches) ? t[key] : k.neutral;
+}

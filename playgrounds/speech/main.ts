@@ -1,7 +1,7 @@
 // Speech playground: talk, and each word lands on the waveform at the time you
 // said it. Click a word to hear its slice; check the times by ear and by eye.
 import { Mic, ScribeEngine, type SpeechEvents, type Utterance, scribeWord } from "../../src/core/speech.ts";
-import { DEFAULTS, type Tuning, patching, tuningId } from "../../src/core/tuning.ts";
+import { DEFAULTS, type Tuning, patchValue, patching, tuningId } from "../../src/core/tuning.ts";
 import { $, download, shell, tuningPanel } from "../../src/ui.ts";
 
 shell("speech", "Talk and watch your words land on the waveform at the moment you said them. Click a word to hear just that slice. Words and times come from ElevenLabs Scribe, which costs a little per minute of listening.");
@@ -103,13 +103,13 @@ function draw() {
     .map((u) => `<tr><td>${u.text}</td><td>${u.words.length}</td><td>${Math.round(u.finalAt - u.t1)} ms</td></tr>`)
     .join("");
   const waits = utterances.map((u) => u.finalAt - u.t1).sort((a, b) => a - b);
-  $("#stat").textContent = `${listening ? "Listening" : "Not listening"} · ${(mic.ms / 1000).toFixed(1)} s recorded · ${words.length} words${waits.length ? ` · median wait ${Math.round(waits[Math.floor(waits.length / 2)])} ms` : ""} · ${patching(tuning) ? tuningId(tuning) : "patches off: Scribe as it comes"}`;
+  $("#stat").textContent = `${listening ? "Listening" : "Not listening"} · ${(mic.ms / 1000).toFixed(1)} s recorded · ${words.length} words${waits.length ? ` · median wait ${Math.round(waits[Math.floor(waits.length / 2)])} ms` : ""} · ${patching(tuning, "scribe") ? `Scribe patched · ${tuningId(tuning)}` : "Scribe as it comes"}`;
 }
 
 $("#words").addEventListener("click", (e) => {
   const i = (e.target as HTMLElement).dataset.i;
   const w = i !== undefined && utterances.flatMap((u) => u.words)[Number(i)];
-  if (w) mic.play(w.t0 - live()["speech.playBeforeMs"], w.t1 + live()["speech.playAfterMs"]);
+  if (w) mic.play(w.t0 - (patchValue(tuning, "speech.playBeforeMs") ?? 0), w.t1 + (patchValue(tuning, "speech.playAfterMs") ?? 0));
 });
 $("#words").addEventListener("mouseover", (e) => {
   const i = (e.target as HTMLElement).dataset.i;

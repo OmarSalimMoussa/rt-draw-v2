@@ -2,13 +2,16 @@
 // so a word can be matched to the stroke drawn while it was said. ElevenLabs
 // Scribe gives every word its own time (paid per minute); the mic is recorded
 // alongside, for the waveform and to play a word back.
-import { type Tuning, patching } from "./tuning.ts";
+import { type Tuning, patchValue } from "./tuning.ts";
 
 /** A word and when it was said, in ms on the page clock. */
 export type Word = { word: string; t0: number; t1: number; /** Scribe's own start and end, in seconds of audio. */ raw?: [number, number] };
 
-/** Scribe's seconds-into-the-recording → page-clock word times, under speech.shiftMs. */
-export const scribeWord = (word: string, start: number, end: number, mic: Mic, t: Tuning): Word => ({ word, t0: Math.round(mic.wall(start) + t["speech.shiftMs"]), t1: Math.round(mic.wall(end) + t["speech.shiftMs"]), raw: [start, end] });
+/** Scribe's seconds-into-the-recording → page-clock word times, moved by speech.shiftMs when Scribe's patches are on. */
+export function scribeWord(word: string, start: number, end: number, mic: Mic, t: Tuning): Word {
+  const shift = patchValue(t, "speech.shiftMs") ?? 0;
+  return { word, t0: Math.round(mic.wall(start) + shift), t1: Math.round(mic.wall(end) + shift), raw: [start, end] };
+}
 
 /** One finished utterance: its words, when speech ended, and when its final text arrived. */
 export type Utterance = {
@@ -171,8 +174,9 @@ export class ScribeEngine {
       commit_strategy: "vad",
       include_timestamps: "true",
     });
-    // A patch: with patches off Scribe uses its own end-of-speech silence.
-    if (patching(this.tuning())) params.set("vad_silence_threshold_secs", String(this.tuning()["speech.vadSilenceMs"] / 1000));
+    // A patch: with Scribe's patches off (the default) it uses its own end-of-speech silence.
+    const silence = patchValue(this.tuning(), "speech.vadSilenceMs");
+    if (silence !== undefined) params.set("vad_silence_threshold_secs", String(silence / 1000));
     const ws = new WebSocket(`${auth.url}?${params}`);
     this.ws = ws;
     const early: string[] = [];
