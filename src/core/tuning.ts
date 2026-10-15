@@ -103,6 +103,42 @@ export const KNOBS: Knob[] = [
   K("tidy.gapTolPx", 10, 0, 40, 1, "gaps between siblings this close become equal", "px"),
   K("tidy.maxMovePx", 24, 0, 80, 1, "never move a shape further than this", "px"),
 
+  // Model choice knobs are an index: 0 haiku, 1 sonnet, 2 opus (src/core/model.ts).
+
+  // Describe: the detailed id map, one description per shape from its crop.
+  K("describe.model", 0, 0, 2, 1, "model that writes descriptions (0 haiku, 1 sonnet, 2 opus)"),
+  K("describe.cropPadPx", 16, 0, 80, 2, "context kept around a shape in its crop", "px"),
+  K("describe.cropMaxPx", 384, 128, 1024, 32, "a crop's longer side is scaled to at most this", "px"),
+  K("describe.minWords", 6, 1, 30, 1, "a description must have at least this many words"),
+  K("describe.maxWords", 30, 6, 80, 1, "and at most this many"),
+  K("describe.batch", 1, 0, 1, 1, "1: all shapes in one call (crops numbered); 0: one call per shape"),
+
+  // Resolve: "this headline" + ink → shape ids.
+  K("resolve.model", 0, 0, 2, 1, "model that resolves references (0 haiku, 1 sonnet, 2 opus)"),
+  K("resolve.maxCandidates", 8, 1, 30, 1, "shapes offered to the model: the ink's hits first, then the rest by word overlap"),
+  K("resolve.inkFirst", 1, 0, 1, 1, "1: a shape the ink clearly points at wins without asking the model"),
+  K("resolve.sendScreenshot", 0, 0, 1, 1, "1: also send the model screenshot"),
+
+  // Draw: one send → ops.
+  K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
+  K("draw.sendScreenshot", 1, 0, 1, 1, "1: send the screenshot with numbered ink"),
+  K("draw.sendIdMap", 1, 0, 1, 1, "1: send every shape's id and description"),
+  K("draw.sendOps", 0, 0, 1, 1, "1: also send the scene as op lines (its exact boxes)"),
+  K("draw.gridCellPx", 0, 0, 160, 10, "grid on the screenshot, so the model can name cells (0: none)", "px"),
+
+  // Picture: a doodle inside a shape.
+  K("picture.model", 1, 0, 2, 1, "model that draws pictures (0 haiku, 1 sonnet, 2 opus)"),
+  K("picture.maxPaths", 24, 4, 80, 1, "a doodle may use at most this many paths"),
+  K("picture.colors", 4, 1, 10, 1, "and at most this many colors"),
+  K("picture.roughness", 1.4, 0, 3, 0.1, "wobble applied to the doodle's paths"),
+
+  // Router: fast lane (small model, no picture) vs full lane.
+  K("router.fastMaxWords", 12, 1, 40, 1, "a send this short can take the fast lane"),
+  K("router.fastMaxMarks", 1, 0, 5, 1, "with at most this many marks"),
+  K("router.sketchIsFull", 1, 0, 1, 1, "1: any sketch mark goes to the full lane"),
+  K("router.fastModel", 0, 0, 2, 1, "the fast lane's model (0 haiku, 1 sonnet, 2 opus)"),
+  K("router.fullModel", 1, 0, 2, 1, "the full lane's model"),
+
   // Render: the doodle look.
   K("render.roughness", 1.2, 0, 3, 0.1, "how wobbly outlines are"),
   K("render.strokeWidth", 1.6, 0.5, 4, 0.1, "outline width", "px"),

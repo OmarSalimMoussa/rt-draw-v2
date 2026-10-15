@@ -7,7 +7,7 @@
 </head>
 <body>
   <main class="home">
-    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. None of these pages call a model; only Speech calls a paid service (Scribe), and only when you press Start.</p>
+    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. Pages 1-10 call no model (Speech and Ink ↔ words call Scribe, paid, only when you press Talk or Start). Pages 11-15 call Claude on your subscription, only when you press their run button.</p>
     <a class="card" href="/playgrounds/render/"><h2>1. Renderer</h2><span>A scene of layered shapes drawn in the doodle style: text inside shapes, picture placeholders, fade, z order, groups, optional grid and id tags.</span></a>
     <a class="card" href="/playgrounds/ops/"><h2>2. Ops stream</h2><span>Op lines streamed in token-sized chunks and applied the moment each line completes. Prose, unknown ids and cut-off lines show up as errors.</span></a>
     <a class="card" href="/playgrounds/ink/"><h2>3. Ink</h2><span>Draw with the pen: smooth strokes with a time on every point, ready to be matched to your words.</span></a>
@@ -18,6 +18,11 @@
     <a class="card" href="/playgrounds/shot/"><h2>8. Model screenshot</h2><span>The picture the model would get at Enter: the canvas with numbered ink, id tags and an optional grid, timed and sized.</span></a>
     <a class="card" href="/playgrounds/coords/"><h2>9. Coordinates</h2><span>Click or drag a place and see how each scheme would name it (pixels, grid cells, relative to a shape), and whether it reads back to the same place.</span></a>
     <a class="card" href="/playgrounds/tidy/"><h2>10. Tidy pass</h2><span>A messy scene snapped, aligned and evened out; before and after, with every move listed.</span></a>
+    <a class="card" href="/playgrounds/describe/"><h2>11. Shape descriptions</h2><span>Each shape's crop sent to a small vision model for the detailed id map; compare with the descriptions the ops wrote.</span></a>
+    <a class="card" href="/playgrounds/resolve/"><h2>12. Reference resolver</h2><span>"this headline" plus your ink → the shape ids it means. Hand-written cases, scored.</span></a>
+    <a class="card" href="/playgrounds/draw/"><h2>13. Drawing model</h2><span>One send (words, ink, screenshot, id map) → ops streamed back and applied as they arrive.</span></a>
+    <a class="card" href="/playgrounds/picture/"><h2>14. Picture model</h2><span>A doodle drawn inside a shape from a few words, side by side for several subjects, timed.</span></a>
+    <a class="card" href="/playgrounds/router/"><h2>15. Router</h2><span>Which lane each send takes (fast or full), by rules first, over labeled sends.</span></a>
   </main>
   <script type="module">
     import { shell } from "/src/ui.ts";

@@ -9,11 +9,13 @@
     "tune": "node scripts/tune.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.299",
     "perfect-freehand": "^1.2.3",
     "rbush": "^4.0.1",
     "roughjs": "^4.6.6"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "@types/rbush": "^4.0.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
