@@ -72,7 +72,8 @@ async function detail(c: CallRecord) {
     ${row("called from", `${c.req.from ?? "?"} · ${c.page} · ${new Date(c.at).toLocaleTimeString()}`)}
     ${row("status", c.running ? "running…" : c.error ? `failed: ${c.error}` : "done")}
     ${row("latency", s ? `first text ${s.firstMs ?? "-"} ms · total ${s.ms} ms` : "")}
-    ${row("tokens", s ? `${s.inTokens ?? "?"} in (uncached) · ${s.outTokens ?? "?"} out` : "")}
+    ${row("process", s?.waitMs !== undefined ? `${s.warm ? "already waiting" : "started for this call"} · ready after ${s.waitMs} ms (the model's own time to first text: ${s.firstMs !== undefined ? s.firstMs - s.waitMs : "-"} ms)` : "")}
+    ${row("tokens", s ? `${(s.inTokens ?? 0) + (s.cacheRead ?? 0) + (s.cacheWrite ?? 0)} in (${s.inTokens ?? "?"} uncached) · ${s.outTokens ?? "?"} out` : "")}
     ${row("cache", s ? `read ${s.cacheRead ?? 0} · written ${s.cacheWrite ?? 0} tokens` : "")}
     ${Object.entries(settings).map(([k, v]) => row(k, v)).join("")}
   </table>`;

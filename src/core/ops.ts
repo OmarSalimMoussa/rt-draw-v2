@@ -112,6 +112,9 @@ export class OpStream {
 const colIndex = (letters: string) => [...letters.toUpperCase()].reduce((n, c) => n * 26 + (c.charCodeAt(0) - 64), 0) - 1;
 export const colName = (i: number): string => (i < 26 ? String.fromCharCode(65 + i) : colName(Math.floor(i / 26) - 1) + String.fromCharCode(65 + (i % 26)));
 
+/** Exactly a box: four numbers ("x y w h") or a cell range ("C2-J7"). */
+export const looksLikeBox = (s: string) => /^\s*-?\d+(\.\d+)?(\s+-?\d+(\.\d+)?){3}\s*$/.test(s) || /^\s*[A-Za-z]+\d+\s*-\s*[A-Za-z]+\d+\s*$/.test(s);
+
 export function parseBox(s: string, cell = DEFAULT_CELL): Box {
   const cells = /^([A-Za-z]+)(\d+)\s*-\s*([A-Za-z]+)(\d+)$/.exec(s.trim());
   if (cells) {
@@ -169,9 +172,10 @@ export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
   switch (op.name) {
     case "shape": {
       const rest = pos.slice(1);
-      const descArg = rest.find((a) => a.quoted);
+      // A box written in quotes ("35 550 130 130") is still the box: no description looks like one.
+      const descArg = rest.find((a) => a.quoted && !looksLikeBox(a.value));
       const kindArg = rest.find((a) => !a.quoted && KINDS.includes(a.value as Kind));
-      const boxArg = rest.find((a) => !a.quoted && a !== kindArg);
+      const boxArg = rest.find((a) => a !== kindArg && a !== descArg && (!a.quoted || looksLikeBox(a.value)));
       const existing = scene.get(id);
       if (!existing) {
         if (!boxArg) throw new Error(`new shape "${id}" needs a box`);

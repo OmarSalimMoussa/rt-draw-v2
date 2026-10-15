@@ -23,7 +23,8 @@ layer(id, front | back | above:other | below:other)
 move(id, box)      remove(id)      group(id, [a, b, ...])
 
 kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right).
-box: "x y w h" in canvas pixels{CELL}.
+box: x y w h in canvas pixels{CELL}, written bare, never in quotes. Quotes are only for descriptions and words.
+Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
 style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).
 Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
 A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
@@ -80,7 +81,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
   const cell = t["draw.gridCellPx"];
   const system = SYSTEM.replace("{W}", String(scene.width))
     .replace("{H}", String(scene.height))
-    .replace("{CELL}", cell > 0 ? `, or grid cells like "C2-J7" as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "");
+    .replace("{CELL}", cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "");
 
   const parts = [`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`];
   const idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];

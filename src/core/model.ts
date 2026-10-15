@@ -17,6 +17,10 @@ export type ModelStats = {
   outTokens?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Time to a Claude process that's up (most of a slow first text when it had to start one). */
+  waitMs?: number;
+  /** Whether a process was already started and waiting. */
+  warm?: boolean;
   /** How the call was made: transport, thinking, caching, limits (dev/model-plugin.ts). */
   settings?: Record<string, string | number>;
   error?: string;
