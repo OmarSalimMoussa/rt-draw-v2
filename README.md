@@ -1,0 +1,25 @@
+# rt-draw v2
+
+A doodle-style canvas the model can see: free-form shapes in layers, a small
+line-based op language, and your voice and ink linked to what's on screen.
+Design notes: the Claude Doc "rt-draw: a canvas the model can see".
+
+v2 is built from small parts, each tested alone in a playground before
+anything is assembled. The five here need no model calls.
+
+| Playground | Part | Core file |
+| --- | --- | --- |
+| `/playgrounds/render/` | renderer: layered shapes, text inside shapes, picture placeholders, fade, grid, id tags | `src/core/render.ts`, `src/core/scene.ts` |
+| `/playgrounds/ops/` | op parser and stream: applies each op as its line completes | `src/core/ops.ts` |
+| `/playgrounds/ink/` | ink capture with a time on every point | `src/core/ink.ts` |
+| `/playgrounds/hittest/` | which shapes a stroke touches, encloses, starts and ends on | `src/core/hittest.ts` |
+| `/playgrounds/marks/` | strokes grouped into marks, read as pointing or sketch | `src/core/marks.ts` |
+
+```
+npm install
+npm run dev        # http://localhost:5173
+npm run typecheck
+```
+
+Borrowed: rough.js (MIT) for the hand-drawn look, perfect-freehand (MIT) for
+strokes, rbush (MIT) for the spatial index, Excalifont (OFL, see `src/fonts`).

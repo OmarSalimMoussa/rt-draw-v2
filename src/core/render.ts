@@ -1,0 +1,177 @@
+// Draws a scene into an <svg> in the doodle style: rough outlines, Excalifont,
+// shapes painted back to front. A shape's picture is a placeholder until the
+// picture model exists.
+import rough from "roughjs";
+import type { Options } from "roughjs/bin/core";
+import { colName } from "./ops.ts";
+import type { Scene, Shape } from "./scene.ts";
+
+export const FONT = "Excalifont, 'Comic Sans MS', cursive";
+const NS = "http://www.w3.org/2000/svg";
+const INK = "#1e1e1e";
+
+export type RenderOptions = {
+  /** Draw a labeled grid with cells this big (what the model would see). */
+  grid?: number;
+  /** Show each shape's id in a small tag. */
+  tags?: boolean;
+  /** Ids to outline, e.g. what a mark hit. */
+  highlight?: Map<string, string>;
+};
+
+const el = <K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string, string | number> = {}) => {
+  const e = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+  return e;
+};
+
+/** A stable seed per id, so a shape keeps its wobble across redraws. */
+const seedOf = (id: string) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 2 ** 31 || 1;
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+function wrap(words: string, size: number, weight: string, width: number): string[] {
+  measureCtx ??= document.createElement("canvas").getContext("2d")!;
+  measureCtx.font = `${weight} ${size}px ${FONT}`;
+  const lines: string[] = [];
+  for (const para of words.split("\n")) {
+    let line = "";
+    for (const word of para.split(/\s+/)) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && measureCtx.measureText(next).width > width) {
+        lines.push(line);
+        line = word;
+      } else line = next;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+function roundedPath(x: number, y: number, w: number, h: number, r: number) {
+  r = Math.min(r, w / 2, h / 2);
+  return `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w} ${y + r}V${y + h - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x} ${y + h - r}V${y + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+}
+
+/** The shape's outline as a plain path, for clipping its insides. */
+function outline(s: Shape) {
+  const { x, y, w, h } = s.box;
+  if (s.kind === "circle") return `M${x + w / 2} ${y}A${w / 2} ${h / 2} 0 1 1 ${x + w / 2} ${y + h}A${w / 2} ${h / 2} 0 1 1 ${x + w / 2} ${y}Z`;
+  if (s.kind === "round") return roundedPath(x, y, w, h, 18);
+  if (s.kind === "pill") return roundedPath(x, y, w, h, h / 2);
+  return `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
+}
+
+function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shape): SVGGElement {
+  const g = el("g", { "data-id": s.id });
+  const { x, y, w, h } = s.box;
+  const st = s.style;
+  if (st.opacity !== undefined) g.setAttribute("opacity", String(st.opacity));
+  const opts: Options = {
+    seed: seedOf(s.id),
+    roughness: st.roughness ?? 1.2,
+    stroke: st.stroke === "transparent" ? "none" : (st.stroke ?? INK),
+    strokeWidth: st.strokeWidth ?? 1.6,
+    fill: st.fill && st.fill !== "transparent" ? st.fill : undefined,
+    fillStyle: st.fillStyle ?? "solid",
+  };
+  let body: SVGGElement;
+  if (s.kind === "circle") body = rc.ellipse(x + w / 2, y + h / 2, w, h, opts);
+  else if (s.kind === "round" || s.kind === "pill") body = rc.path(outline(s), opts);
+  else if (s.kind === "line" || s.kind === "arrow") {
+    body = rc.line(x, y, x + w, y + h, opts);
+    if (s.kind === "arrow") {
+      const a = Math.atan2(h, w);
+      const head = (t: number) => rc.line(x + w, y + h, x + w - 16 * Math.cos(a + t), y + h - 16 * Math.sin(a + t), opts);
+      body.append(head(0.45), head(-0.45));
+    }
+  } else body = rc.rectangle(x, y, w, h, opts);
+  g.append(body);
+
+  const clipId = `clip-${s.id}`;
+  const clip = el("clipPath", { id: clipId });
+  clip.append(el("path", { d: outline(s) }));
+  svg.querySelector("defs")!.append(clip);
+
+  if (s.drawing) {
+    // Placeholder picture: hatched, with what it will show. Fade dims it, not the box.
+    const pic = el("g", { "clip-path": `url(#${clipId})` });
+    if (st.fade) pic.setAttribute("style", `opacity:${1 - st.fade * 0.7};filter:saturate(${1 - st.fade})`);
+    const ph = rc.rectangle(x + w * 0.1, y + h * 0.1, w * 0.8, h * 0.8, { seed: seedOf(s.id) + 1, roughness: 2, stroke: "#868e96", strokeWidth: 1, fill: "#adb5bd", fillStyle: "cross-hatch", hachureGap: 10 });
+    const label = el("text", { x: x + w / 2, y: y + h - Math.max(14, h * 0.12), "text-anchor": "middle", "font-family": FONT, "font-size": Math.max(11, Math.min(16, w / 14)), fill: "#495057" });
+    label.textContent = `🖼 ${s.drawing}`;
+    pic.append(ph);
+    // Small shapes get the hatch only; the subject is in the shape's tag and data.
+    if (w >= 90 && h >= 60) pic.append(label);
+    g.append(pic);
+  }
+
+  if (s.text?.words) {
+    const t = s.text;
+    const size = t.size ?? 20;
+    const weight = t.weight === "bold" ? "700" : "400";
+    const pad = Math.min(16, w * 0.06);
+    const lines = wrap(t.words, size, weight, w - pad * 2);
+    const lh = size * 1.25;
+    const top = y + h / 2 - (lines.length * lh) / 2 + size * 0.9;
+    const anchor = t.align === "left" ? "start" : t.align === "right" ? "end" : "middle";
+    const tx = t.align === "left" ? x + pad : t.align === "right" ? x + w - pad : x + w / 2;
+    const text = el("text", { "font-family": FONT, "font-size": size, "font-weight": weight, fill: t.color ?? INK, "text-anchor": anchor, "clip-path": `url(#${clipId})`, style: "white-space:pre" });
+    lines.forEach((ln, i) => {
+      const span = el("tspan", { x: tx, y: top + i * lh });
+      span.textContent = ln;
+      text.append(span);
+    });
+    g.append(text);
+  }
+  return g;
+}
+
+function drawGrid(svg: SVGSVGElement, scene: Scene, cell: number) {
+  const g = el("g", { "pointer-events": "none" });
+  for (let c = 0, x = 0; x <= scene.width; c++, x += cell) {
+    g.append(el("line", { x1: x, y1: 0, x2: x, y2: scene.height, stroke: "#4dabf7", "stroke-opacity": 0.25 }));
+    if (x < scene.width) {
+      const t = el("text", { x: x + cell / 2, y: 11, "text-anchor": "middle", "font-size": 10, "font-family": "monospace", fill: "#1971c2" });
+      t.textContent = colName(c);
+      g.append(t);
+    }
+  }
+  for (let r = 1, y = 0; y <= scene.height; r++, y += cell) {
+    g.append(el("line", { x1: 0, y1: y, x2: scene.width, y2: y, stroke: "#4dabf7", "stroke-opacity": 0.25 }));
+    if (y < scene.height) {
+      const t = el("text", { x: 3, y: y + cell / 2 + 4, "font-size": 10, "font-family": "monospace", fill: "#1971c2" });
+      t.textContent = String(r);
+      g.append(t);
+    }
+  }
+  svg.append(g);
+}
+
+function drawTag(svg: SVGSVGElement, s: Shape, color = "#e8590c") {
+  const label = s.id;
+  const w = label.length * 7 + 10;
+  const g = el("g", { "pointer-events": "none" });
+  g.append(el("rect", { x: s.box.x + 2, y: s.box.y + 2, width: w, height: 16, rx: 3, fill: color }));
+  const t = el("text", { x: s.box.x + 7, y: s.box.y + 14, "font-size": 11, "font-family": "monospace", fill: "#fff" });
+  t.textContent = label;
+  g.append(t);
+  svg.append(g);
+}
+
+/** Redraws the whole scene. Returns how long it took, in ms. */
+export function render(svg: SVGSVGElement, scene: Scene, opts: RenderOptions = {}): number {
+  const t0 = performance.now();
+  svg.replaceChildren(el("defs"));
+  svg.setAttribute("viewBox", `0 0 ${scene.width} ${scene.height}`);
+  svg.append(el("rect", { x: 0, y: 0, width: scene.width, height: scene.height, fill: "#ffffff" }));
+  const rc = rough.svg(svg);
+  for (const s of scene.stacked()) svg.append(drawShape(rc, svg, s));
+  if (opts.grid) drawGrid(svg, scene, opts.grid);
+  for (const [id, color] of opts.highlight ?? []) {
+    const s = scene.get(id);
+    if (!s) continue;
+    svg.append(el("path", { d: outline(s), fill: color, "fill-opacity": 0.12, stroke: color, "stroke-width": 3, "stroke-dasharray": "6 4", "pointer-events": "none" }));
+  }
+  if (opts.tags) for (const s of scene.stacked()) drawTag(svg, s, opts.highlight?.get(s.id));
+  return performance.now() - t0;
+}
