@@ -7,12 +7,17 @@
 </head>
 <body>
   <main class="home">
-    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. None of these pages call a model.</p>
+    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. None of these pages call a model; only Speech calls a paid service, and only when you press its button.</p>
     <a class="card" href="/playgrounds/render/"><h2>1. Renderer</h2><span>A scene of layered shapes drawn in the doodle style: text inside shapes, picture placeholders, fade, z order, groups, optional grid and id tags.</span></a>
     <a class="card" href="/playgrounds/ops/"><h2>2. Ops stream</h2><span>Op lines streamed in token-sized chunks and applied the moment each line completes. Prose, unknown ids and cut-off lines show up as errors.</span></a>
     <a class="card" href="/playgrounds/ink/"><h2>3. Ink</h2><span>Draw with the pen: smooth strokes with a time on every point, ready to be matched to your words.</span></a>
     <a class="card" href="/playgrounds/hittest/"><h2>4. Hit-test</h2><span>Draw over a page and see which shapes each stroke touches, encloses, starts on and ends on.</span></a>
     <a class="card" href="/playgrounds/marks/"><h2>5. Marks</h2><span>Strokes grouped into marks and read as pointing (loop, arrow, tap, line, scribble) or sketch. Each mark is also checked for being an arrow, with its tip and tail. Correct the readings, save the set, rerun it after changing the rules.</span></a>
+    <a class="card" href="/playgrounds/speech/"><h2>6. Speech</h2><span>Talk and get words, each with a time, over the waveform. ElevenLabs Scribe (word times, paid per minute) or the browser's free recognizer (times estimated).</span></a>
+    <a class="card" href="/playgrounds/link/"><h2>7. Ink ↔ words</h2><span>Draw while you talk (or type) and see [ink n] land at the word you were saying.</span></a>
+    <a class="card" href="/playgrounds/shot/"><h2>8. Model screenshot</h2><span>The picture the model would get at Enter: the canvas with numbered ink, id tags and an optional grid, timed and sized.</span></a>
+    <a class="card" href="/playgrounds/coords/"><h2>9. Coordinates</h2><span>Click or drag a place and see how each scheme would name it (pixels, grid cells, relative to a shape), and whether it reads back to the same place.</span></a>
+    <a class="card" href="/playgrounds/tidy/"><h2>10. Tidy pass</h2><span>A messy scene snapped, aligned and evened out; before and after, with every move listed.</span></a>
   </main>
   <script type="module">
     import { shell } from "/src/ui.ts";

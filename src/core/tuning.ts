@@ -60,6 +60,33 @@ export const KNOBS: Knob[] = [
   K("ops.minDescriptionWords", 6, 1, 30, 1, "a new shape's description needs at least this many words"),
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
 
+  // Speech: turning the mic into timed words (speech playground; ElevenLabs Scribe, or the browser's free recognizer).
+  K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms"),
+  K("speech.onsetLeadMs", 300, 0, 1000, 50, "words start this long before the first partial arrives (browser recognizer, no word times)", "ms"),
+
+  // Link: putting [ink n] markers at the word being said.
+  K("link.leadMs", 400, 0, 2000, 50, "a mark can link to a word said up to this long after the pen went down", "ms"),
+  K("link.lagMs", 1500, 0, 5000, 100, "or a word said up to this long before it", "ms"),
+  K("link.preferDeictic", 1, 0, 1, 1, "prefer pointing words (this, that, here, there, these) inside the window"),
+
+  // Shot: the picture the model gets at Enter.
+  K("shot.scale", 0.75, 0.25, 2, 0.05, "screenshot size as a share of canvas pixels"),
+  K("shot.inkNumberPx", 22, 10, 48, 1, "size of the [n] number next to each mark", "px"),
+  K("shot.tagPx", 11, 0, 24, 1, "size of the id tags on shapes (0 hides them)", "px"),
+  K("shot.gridCellPx", 0, 0, 160, 10, "grid drawn on the screenshot (0 for none)", "px"),
+  K("shot.jpegQuality", 0.8, 0.3, 1, 0.05, "JPEG quality (1 sends PNG)"),
+
+  // Coords: how the model names a place.
+  K("coords.cellPx", 40, 10, 160, 5, "grid cell size when places are named by cells", "px"),
+  K("coords.roundPx", 10, 1, 50, 1, "pixel coordinates are rounded to this", "px"),
+  K("coords.nearPx", 80, 10, 300, 10, "a place is described relative to a shape this close to it", "px"),
+
+  // Tidy: snap, align and even out a scene after the model writes it.
+  K("tidy.snapPx", 10, 0, 40, 1, "last step: snap positions and sizes to a grid this fine (0: off)", "px"),
+  K("tidy.alignTolPx", 8, 0, 30, 1, "edges or centers this close become aligned, and sizes this close become equal", "px"),
+  K("tidy.gapTolPx", 10, 0, 40, 1, "gaps between siblings this close become equal", "px"),
+  K("tidy.maxMovePx", 24, 0, 80, 1, "never move a shape further than this", "px"),
+
   // Render: the doodle look.
   K("render.roughness", 1.2, 0, 3, 0.1, "how wobbly outlines are"),
   K("render.strokeWidth", 1.6, 0.5, 4, 0.1, "outline width", "px"),
