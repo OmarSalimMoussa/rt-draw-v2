@@ -270,8 +270,13 @@ export class ScribeEngine implements SpeechEngine {
     ws.onopen = () => early.splice(0).forEach((m) => ws.send(m));
     ws.onmessage = (m) => typeof m.data === "string" && this.onMessage(JSON.parse(m.data) as ScribeMessage);
     ws.onclose = (e) => !this.stopped && this.events.onError(`Scribe disconnected (${e.code}${e.reason ? `: ${e.reason}` : ""})`);
+    const toMsg = (pcm: ArrayBuffer) => JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: base64(pcm), commit: false, sample_rate: SAMPLE_RATE });
+    // Scribe's word times count from the first audio it gets, so it must get the recording from
+    // sample 0: what the mic took while the token was fetched goes first. Skipping it made every
+    // word land that much too early.
+    for (const c of this.mic.chunks) early.push(toMsg(c.slice().buffer));
     this.mic.onChunk = (pcm) => {
-      const msg = JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: base64(pcm), commit: false, sample_rate: SAMPLE_RATE });
+      const msg = toMsg(pcm);
       if (ws.readyState === WebSocket.OPEN) ws.send(msg);
       else if (ws.readyState === WebSocket.CONNECTING) early.push(msg);
     };
