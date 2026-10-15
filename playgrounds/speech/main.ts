@@ -154,16 +154,17 @@ async function start() {
   timer = window.setInterval(draw, 100);
 }
 
-function stop() {
-  engine?.stop();
-  mic.stop();
+async function stop() {
   listening = false;
+  $("#go").textContent = "Finishing…";
+  await engine?.stop();
+  mic.stop();
   clearInterval(timer);
   $("#go").textContent = "Start talking";
   draw();
 }
 
-$("#go").addEventListener("click", () => (listening ? stop() : void start()));
+$("#go").addEventListener("click", () => void (listening ? stop() : start()));
 $("#save").addEventListener("click", () =>
   download("words.json", JSON.stringify({ tuningId: tuningId(tuning), micStartedAt: mic.startedAt, utterances: utterances.map(({ raw: _, ...u }) => u) }, null, 1)),
 );

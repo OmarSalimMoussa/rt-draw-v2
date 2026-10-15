@@ -32,7 +32,8 @@ export type SpeechEvents = {
 
 export interface SpeechEngine {
   start(): Promise<void>;
-  stop(): void;
+  /** Resolves once the last words are in (Scribe finishes the utterance you were in). */
+  stop(): void | Promise<void>;
 }
 
 /**
@@ -237,6 +238,9 @@ export class BrowserEngine implements SpeechEngine {
 
 // ---- Scribe engine: ElevenLabs realtime, word times measured by the service.
 
+/** How long Stop waits for Scribe to finish the last utterance. */
+const FLUSH_WAIT_MS = 3000;
+
 type ScribeWord = { text: string; start?: number; end?: number; type: string };
 type ScribeMessage = { message_type: string; text?: string; words?: ScribeWord[]; error?: string };
 
@@ -286,10 +290,24 @@ export class ScribeEngine implements SpeechEngine {
     };
   }
 
-  stop() {
+  /** Called when a timestamped commit arrives, while stop() waits for the last one. */
+  private flushed?: () => void;
+
+  async stop() {
     this.stopped = true;
     this.mic.onChunk = undefined;
-    this.ws?.close();
+    const ws = this.ws;
+    // Words only come with a commit, and VAD commits only after a silence. Without this, whatever
+    // you said since the last pause (all of it, under Scribe's longer default silence) was lost.
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: "", commit: true, sample_rate: SAMPLE_RATE }));
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, FLUSH_WAIT_MS);
+        this.flushed = () => (clearTimeout(timer), done());
+      });
+      this.flushed = undefined;
+    }
+    ws?.close();
   }
 
   private onMessage(msg: ScribeMessage) {
@@ -297,13 +315,14 @@ export class ScribeEngine implements SpeechEngine {
     // The plain commit is ignored: the timestamped one follows it with the same text.
     if (msg.message_type === "committed_transcript_with_timestamps") {
       const text = msg.text?.trim();
-      if (!text) return;
+      if (!text) return this.flushed?.();
       const timed = (msg.words ?? []).filter((w) => w.type === "word" && w.start !== undefined);
       const words: Word[] = timed.map((w) => scribeWord(w.text, w.start!, w.end ?? w.start!, this.mic, this.tuning()));
       const now = performance.now();
       const t0 = words[0]?.t0 ?? now;
       const t1 = words.at(-1)?.t1 ?? now;
       this.events.onFinal({ text, words, engine: "scribe", t0, t1, finalAt: now, features: { spanMs: t1 - t0, words: words.length } });
+      this.flushed?.();
       return;
     }
     if (msg.error) this.events.onError(`Scribe ${msg.message_type}: ${msg.error}`);
