@@ -5,7 +5,7 @@ line-based op language, and your voice and ink linked to what's on screen.
 Design notes: the Claude Doc "rt-draw: a canvas the model can see".
 
 v2 is built from small parts, each tested alone in a playground before
-anything is assembled. The five here need no model calls.
+anything is assembled. None of them call a model.
 
 | Playground | Part | Core file |
 | --- | --- | --- |
@@ -14,6 +14,7 @@ anything is assembled. The five here need no model calls.
 | `/playgrounds/ink/` | ink capture with a time on every point | `src/core/ink.ts` |
 | `/playgrounds/hittest/` | which shapes a stroke touches, encloses, starts and ends on | `src/core/hittest.ts` |
 | `/playgrounds/marks/` | strokes grouped into marks, read as pointing or sketch | `src/core/marks.ts` |
+| `/playgrounds/arrow/` | arrow or not, with tip and tail, from the ink's geometry | `src/core/arrow.ts` |
 
 ```
 npm install
