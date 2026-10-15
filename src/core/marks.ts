@@ -1,8 +1,8 @@
 // Strokes drawn close together in time and space form one mark. A mark either
 // points at what's on the canvas (a loop, an arrow, a tap, an underline) or is
 // a sketch: "make something shaped like this, here".
-import { readArrow } from "./arrow.ts";
-import { type HitIndex, holds } from "./hittest.ts";
+import { type ArrowReading, readArrow } from "./arrow.ts";
+import type { HitIndex } from "./hittest.ts";
 import { type Pt, type Stroke, pathLength } from "./ink.ts";
 import type { Box } from "./scene.ts";
 
@@ -24,6 +24,8 @@ export type Reading = {
   to?: string | { x: number; y: number };
   /** Sketches: the shape it was drawn inside, if any. */
   inside?: string;
+  /** Every mark is checked for being an arrow, whatever else it is; the tip says where it points. */
+  arrow: ArrowReading;
   why: string;
 };
 
@@ -56,6 +58,11 @@ export function groupStrokes(strokes: Stroke[], t: Tuning = TUNING): Mark[] {
 }
 
 export function readMark(mark: Mark, hits: HitIndex, t: Tuning = TUNING): Reading {
+  const arrow = readArrow(mark.strokes.map((s) => s.points));
+  return { ...readKind(mark, hits, arrow, t), arrow };
+}
+
+function readKind(mark: Mark, hits: HitIndex, arrow: ArrowReading, t: Tuning): Omit<Reading, "arrow"> {
   // The longest stroke carries the gesture; short extra strokes are arrowheads or ticks.
   const main = [...mark.strokes].sort((a, b) => pathLength(b.points) - pathLength(a.points))[0];
   const pts = main.points;
@@ -72,7 +79,6 @@ export function readMark(mark: Mark, hits: HitIndex, t: Tuning = TUNING): Readin
   }
 
   // A drawn arrow, whatever it starts and ends on: the tip says where it points.
-  const arrow = readArrow(mark.strokes.map((s) => s.points));
   if (arrow.arrow && arrow.tip && arrow.tail) {
     const from = hits.top(arrow.tail[0], arrow.tail[1]);
     const toId = hits.top(arrow.tip[0], arrow.tip[1]);
@@ -87,19 +93,9 @@ export function readMark(mark: Mark, hits: HitIndex, t: Tuning = TUNING): Readin
     return { kind: "sketch", how: "sketch", targets: [], inside, why: inside ? `closed shape drawn inside ${inside}, around nothing` : "closed shape in empty space" };
   }
 
+  // Arrows come only from the arrow check above (a drawn head); a straight stroke without one is a line.
   const straight = span / len >= t.straightRatio;
   if (straight) {
-    const from = hits.top(start[0], start[1]);
-    const toId = hits.top(end[0], end[1]);
-    const extras = mark.strokes.length > 1;
-    // An arrow: starts on something and goes somewhere else, or has a head drawn at its end.
-    // Going from a card onto the text inside it is an underline, not an arrow.
-    const a = from && hits.scene.get(from);
-    const b = toId && hits.scene.get(toId);
-    const nested = !!(a && b && (holds(a, b) || holds(b, a)));
-    if ((from && toId !== from && !nested) || (extras && (from || toId))) {
-      return { kind: "pointing", how: "arrow", targets: [from, toId].filter((x): x is string => !!x), from, to: toId ?? { x: end[0], y: end[1] }, why: `arrow from ${from ?? "empty space"} to ${toId ?? "empty space"}` };
-    }
     if (touched.length) return { kind: "pointing", how: "line", targets: touched.slice(0, 1), why: `straight line over ${touched[0]}` };
     return { kind: "sketch", how: "sketch", targets: [], inside: hits.container(mark.box), why: "straight line in empty space" };
   }

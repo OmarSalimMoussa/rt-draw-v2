@@ -13,8 +13,7 @@ anything is assembled. None of them call a model.
 | `/playgrounds/ops/` | op parser and stream: applies each op as its line completes | `src/core/ops.ts` |
 | `/playgrounds/ink/` | ink capture with a time on every point | `src/core/ink.ts` |
 | `/playgrounds/hittest/` | which shapes a stroke touches, encloses, starts and ends on | `src/core/hittest.ts` |
-| `/playgrounds/marks/` | strokes grouped into marks, read as pointing or sketch | `src/core/marks.ts` |
-| `/playgrounds/arrow/` | arrow or not, with tip and tail, from the ink's geometry | `src/core/arrow.ts` |
+| `/playgrounds/marks/` | strokes grouped into marks, read as pointing or sketch; each also checked for being an arrow (tip and tail) | `src/core/marks.ts`, `src/core/arrow.ts` |
 
 ```
 npm install

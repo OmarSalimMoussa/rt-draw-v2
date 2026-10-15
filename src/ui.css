@@ -46,3 +46,4 @@ table.marks td, table.marks th { text-align: left; padding: 4px 6px; border-bott
 .home { max-width: 860px; margin: 0 auto; padding: 24px 20px; display: grid; gap: 14px; }
 .home a.card { text-decoration: none; color: inherit; }
 .home a.card:hover { background: #fff4e6; }
+table.marks td select { display: block; margin-bottom: 4px; max-width: 160px; }
