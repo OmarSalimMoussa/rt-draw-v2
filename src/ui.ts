@@ -1,7 +1,7 @@
 // The shell every playground shares: a header with links between them, and a
 // stage that stacks the canvas <svg> under an ink <svg> with the same viewBox.
 import "./ui.css";
-import { DEFAULTS, type Tuning, diff, knobsOf, tune, tuningId } from "./core/tuning.ts";
+import { DEFAULTS, type Tuning, diff, knobsOf, patchesOff, tune, tuningId } from "./core/tuning.ts";
 
 export const PLAYGROUNDS = [
   ["render", "Renderer"],
@@ -60,41 +60,65 @@ export const fontsReady = () => document.fonts.load("20px Excalifont").then(() =
  * what saved sets and logs record) and copies the changed knobs to paste back.
  */
 export function tuningPanel(host: HTMLElement, parts: string[], onChange: (t: Tuning) => void) {
-  let t: Tuning = DEFAULTS;
+  /** The knobs as set; with patches off, the patch knobs read neutral but these values come back. */
+  let base: Tuning = DEFAULTS;
+  let off = false;
+  const live = () => (off ? patchesOff(base) : base);
+  const patchKnobs = parts.flatMap(knobsOf).filter((k) => k.patches);
+  const models = [...new Set(patchKnobs.map((k) => k.patches))].join(", ");
   const card = document.createElement("div");
   card.className = "card knobs";
-  card.innerHTML = `<h2>Knobs</h2>${parts
+  card.innerHTML = `<h2>Knobs</h2>${patchKnobs.length ? `<div class="row"><button data-act="patches" aria-pressed="false" title="Sets every knob that adjusts ${models} to neutral, so you hear or see the model alone">Patches off</button><span class="muted">${models} as it comes</span></div>` : ""}${parts
     .map((part, i) => `<details${i ? "" : " open"}><summary>${part}</summary>${knobsOf(part)
-      .map((k) => `<label title="${k.key}: ${k.doc}"><span>${k.doc}${k.unit ? ` (${k.unit})` : ""}</span><input type="range" data-key="${k.key}" min="${k.min}" max="${k.max}" step="${k.step}" value="${k.value}"><span class="stat" data-v="${k.key}">${k.value}</span></label>`)
+      .map((k) => `<label title="${k.key}: ${k.doc}${k.patches ? ` (patches ${k.patches})` : ""}"><span>${k.patches ? "⚙ " : ""}${k.doc}${k.unit ? ` (${k.unit})` : ""}</span><input type="range" data-key="${k.key}" min="${k.min}" max="${k.max}" step="${k.step}" value="${k.value}"><span class="stat" data-v="${k.key}">${k.value}</span></label>`)
       .join("")}</details>`)
     .join("")}<div class="row"><button data-act="reset">Defaults</button><button data-act="copy">Copy changes</button><span class="stat" data-id></span></div>`;
   host.append(card);
   const show = () => {
+    const t = live();
     for (const input of card.querySelectorAll<HTMLInputElement>("input[data-key]")) {
-      input.value = String(t[input.dataset.key!]);
-      card.querySelector(`[data-v="${input.dataset.key}"]`)!.textContent = String(t[input.dataset.key!]);
+      const k = input.dataset.key!;
+      const isPatch = patchKnobs.some((p) => p.key === k);
+      input.disabled = off && isPatch;
+      input.value = String(t[k]);
+      // A patch with no neutral value isn't sent at all: the model's own default applies.
+      const unsent = off && isPatch && patchKnobs.find((p) => p.key === k)!.neutral === undefined;
+      card.querySelector(`[data-v="${k}"]`)!.textContent = unsent ? "model" : String(t[k]);
+    }
+    const btn = card.querySelector<HTMLButtonElement>('[data-act="patches"]');
+    if (btn) {
+      btn.setAttribute("aria-pressed", String(off));
+      btn.classList.toggle("primary", off);
     }
     const changed = Object.keys(diff(t)).length;
-    card.querySelector("[data-id]")!.textContent = changed ? `${tuningId(t)} · ${changed} changed` : "defaults";
+    card.querySelector("[data-id]")!.textContent = off ? `patches off · ${tuningId(t)}` : changed ? `${tuningId(t)} · ${changed} changed` : "defaults";
   };
-  const set = (next: Tuning) => {
-    t = next;
+  const set = () => {
     show();
-    onChange(t);
+    onChange(live());
   };
   card.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
-    if (input.dataset.key) set(tune({ [input.dataset.key]: Number(input.value) }, t));
+    if (!input.dataset.key) return;
+    base = tune({ [input.dataset.key]: Number(input.value) }, base);
+    set();
   });
   card.addEventListener("click", (e) => {
     const act = (e.target as HTMLElement).dataset.act;
-    if (act === "reset") set(DEFAULTS);
-    if (act === "copy") navigator.clipboard?.writeText(JSON.stringify(diff(t), null, 1));
+    if (act === "reset") [base, off] = [DEFAULTS, false];
+    else if (act === "patches") off = !off;
+    else if (act === "copy") return void navigator.clipboard?.writeText(JSON.stringify(diff(live()), null, 1));
+    else return;
+    set();
   });
   show();
   return {
-    get: () => t,
-    /** Load a saved tuning (only known knobs; the rest stay default). */
-    load: (saved: Record<string, number>) => set(tune(Object.fromEntries(Object.entries(saved).filter(([k]) => k in DEFAULTS)))),
+    get: live,
+    /** Load a saved tuning (only known knobs; the rest stay default). A saved "patches off" turns them off here too. */
+    load: (saved: Record<string, number>) => {
+      base = tune(Object.fromEntries(Object.entries(saved).filter(([k]) => k in DEFAULTS && k !== "patches.off")));
+      off = saved["patches.off"] === 1;
+      set();
+    },
   };
 }

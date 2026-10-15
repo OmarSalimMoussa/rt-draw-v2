@@ -3,6 +3,11 @@
 // decision records the tuning version it used, and labeled sets from the
 // playgrounds, people's sessions and evals can be replayed under any tuning to
 // pick better values (scripts/tune.ts). Nothing that decides may hide a literal.
+//
+// Prefer a purpose-built model (Scribe for word times, a vision model for
+// shapes) over our own rules. A knob that adjusts such a model's output is a
+// patch: it names the model and its neutral value, and "patches off" sets every
+// patch to neutral at once, so we can always check the model alone is not better.
 
 export type Knob = {
   /** "part.name", e.g. "arrow.coneMaxDeg". */
@@ -14,9 +19,15 @@ export type Knob = {
   /** What it does, in a sentence someone tuning it can act on. */
   doc: string;
   unit?: string;
+  /** Set on knobs that adjust a purpose-built model's output: which model it patches. */
+  patches?: string;
+  /** The value that leaves that model's output alone. Unset: the knob isn't sent, so the model's own default applies. */
+  neutral?: number;
 };
 
 const K = (key: string, value: number, min: number, max: number, step: number, doc: string, unit?: string): Knob => ({ key, value, min, max, step, doc, unit });
+/** A patch on a purpose-built model's output (see the top of this file). */
+const patch = (model: string, k: Knob, neutral?: number): Knob => ({ ...k, patches: model, neutral });
 
 export const KNOBS: Knob[] = [
   // Ink: how strokes are drawn and when a stroke is a dot.
@@ -61,11 +72,11 @@ export const KNOBS: Knob[] = [
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
 
   // Speech: turning the mic into timed words (speech playground; ElevenLabs Scribe, or the browser's free recognizer).
-  K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms"),
+  patch("scribe", K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms")),
   K("speech.onsetLeadMs", 300, 0, 1000, 50, "words start this long before the first partial arrives (browser recognizer, no word times)", "ms"),
-  K("speech.shiftMs", 0, -500, 500, 10, "moves Scribe's word times later (+) or earlier (-), for a constant offset", "ms"),
-  K("speech.playBeforeMs", 80, 0, 500, 10, "playing a word starts this much before it", "ms"),
-  K("speech.playAfterMs", 200, 0, 800, 10, "and runs this much past its end (Scribe's ends are tight)", "ms"),
+  patch("scribe", K("speech.shiftMs", 0, -500, 500, 10, "moves Scribe's word times later (+) or earlier (-), for a constant offset", "ms"), 0),
+  patch("scribe", K("speech.playBeforeMs", 80, 0, 500, 10, "playing a word starts this much before it", "ms"), 0),
+  patch("scribe", K("speech.playAfterMs", 200, 0, 800, 10, "and runs this much past its end (Scribe's ends are tight)", "ms"), 0),
 
   // Link: putting [ink n] markers at the word being said.
   K("link.leadMs", 400, 0, 2000, 50, "a mark can link to a word said up to this long after the pen went down", "ms"),
@@ -96,6 +107,9 @@ export const KNOBS: Knob[] = [
   K("render.fadeOpacity", 0.7, 0, 1, 0.05, "at fade 1, a picture loses this much opacity"),
   K("render.textPadPx", 16, 0, 40, 1, "text keeps at least this far from a shape's edge", "px"),
   K("render.lineHeight", 1.25, 1, 2, 0.05, "line height as a multiple of text size"),
+
+  // The switch for all patches at once (set through patchesOff, not by hand).
+  K("patches.off", 0, 0, 1, 1, "1: every patch on a purpose-built model is neutral or not sent"),
 ];
 
 export type Tuning = Readonly<Record<string, number>>;
@@ -122,3 +136,12 @@ export function tuningId(t: Tuning): string {
 
 /** Only the knobs that differ from the defaults: what to save, share or paste back. */
 export const diff = (t: Tuning) => Object.fromEntries(Object.keys(t).filter((k) => t[k] !== DEFAULTS[k]).map((k) => [k, t[k]]));
+
+/** Every patch on a purpose-built model set to neutral: the model alone, to compare against. */
+export function patchesOff(t: Tuning = DEFAULTS): Tuning {
+  const neutral = Object.fromEntries(KNOBS.filter((k) => k.patches && k.neutral !== undefined).map((k) => [k.key, k.neutral!]));
+  return tune({ ...neutral, "patches.off": 1 }, t);
+}
+
+/** Whether a patch knob should be applied (or sent) at all under this tuning. */
+export const patching = (t: Tuning) => !t["patches.off"];

@@ -3,7 +3,7 @@
 // the browser's free recognizer (no word times, so they're estimated) and
 // ElevenLabs Scribe (real word times, paid per minute). The mic is recorded
 // alongside, for the waveform and to play a word back.
-import { DEFAULTS, type Tuning } from "./tuning.ts";
+import { DEFAULTS, type Tuning, patching } from "./tuning.ts";
 
 /** A word and when it was said, in ms on the page clock. `estimated`: spread over the utterance, not measured. */
 export type Word = { word: string; t0: number; t1: number; estimated?: boolean; /** Scribe's own start and end, in seconds of audio. */ raw?: [number, number] };
@@ -264,9 +264,10 @@ export class ScribeEngine implements SpeechEngine {
       audio_format: "pcm_16000",
       // Without VAD commits a mic session never produces a committed transcript.
       commit_strategy: "vad",
-      vad_silence_threshold_secs: String(this.tuning()["speech.vadSilenceMs"] / 1000),
       include_timestamps: "true",
     });
+    // A patch: with patches off Scribe uses its own end-of-speech silence.
+    if (patching(this.tuning())) params.set("vad_silence_threshold_secs", String(this.tuning()["speech.vadSilenceMs"] / 1000));
     const ws = new WebSocket(`${auth.url}?${params}`);
     this.ws = ws;
     const early: string[] = [];
