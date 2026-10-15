@@ -95,9 +95,13 @@ export async function takeShot(scene: Scene, strokes: Stroke[], t: Tuning = DEFA
   if (opts.inkNumbers !== false) {
     const px = t["shot.inkNumberPx"];
     for (const m of marks) {
-      // Top right of the mark, kept on the canvas; a white halo keeps it readable over anything.
-      const x = Math.min(scene.width - px * 2, m.box.x + m.box.w + 4);
-      const y = Math.max(px, m.box.y + px * 0.4);
+      // Beside the mark's own ink, not its box's corner (far from a loop or a diagonal): the ink
+      // point furthest up and right, nudged out by shot.inkNumberGapPx. Kept on the canvas; a white
+      // halo keeps it readable over anything.
+      const gap = t["shot.inkNumberGapPx"];
+      const [ax, ay] = m.strokes.flatMap((s) => s.points).reduce((best, p) => (p[0] - p[1] > best[0] - best[1] ? p : best));
+      const x = Math.max(0, Math.min(scene.width - px * 2, ax + gap));
+      const y = Math.max(px, Math.min(scene.height - 2, ay - gap));
       const n = el("text", { x, y, "font-size": px, "font-family": FONT, fill: color, stroke: "#fff", "stroke-width": px / 6, "paint-order": "stroke", "font-weight": 700 });
       n.textContent = `[${m.n}]`;
       svg.append(n);
