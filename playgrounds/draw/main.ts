@@ -111,7 +111,7 @@ async function send() {
 
 function showPrompt(p: Prompt) {
   const f = p.features;
-  $("#anatomy").textContent = `system ${p.system.length} chars · user ${p.user.length} chars · ~${Math.round(f.chars / 4)} text tokens · ${f.screenshot ? `screenshot ${p.shot!.width}×${p.shot!.height}, ${Math.round(p.shot!.bytes / 1024)} KB, ~${f.imageTokens} tokens` : "no screenshot"} · ${f.idMap} ids · ${f.ops} op lines · ${f.marks} marks`;
+  $("#anatomy").textContent = `system ${p.system.length} chars · user ${p.user.length} chars · ~${Math.round(f.chars / 4)} text tokens · ${f.screenshot ? `screenshot ${p.shot!.width}×${p.shot!.height}, ${Math.round(p.shot!.bytes / 1024)} KB, ~${f.imageTokens} tokens` : "no screenshot"} · ${f.idMap} ids · ${f.ops} op lines · ${f.marks} marks (${f.marksSent ? "described" : "not described"}) · references: ${f.refs === "off" ? "off" : `${f.refs === "ink" ? "from the ink" : "resolver call"}, ${f.resolveMs} ms before the drawing call`}`;
   $("#sys").textContent = p.system;
   $("#usr").textContent = p.user;
   const img = $<HTMLImageElement>("#shotImg");

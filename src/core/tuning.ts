@@ -127,6 +127,8 @@ export const KNOBS: Knob[] = [
   K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
   B("draw.sendScreenshot", 1, "send screenshot", "on: send the screenshot with numbered ink"),
   B("draw.sendIdMap", 1, "send id map", "on: send every shape's id and description"),
+  B("draw.sendMarks", 1, "send marks", "on: tell the model what each [ink n] is, read from its geometry (loop, tap, arrow from → to with its tip, line, sketch) and which shapes it touches; free"),
+  B("draw.sendRefs", 1, "send references", "on: resolve the references first (the Resolver: \"this toy\" → toy-l1) and send the answers; one extra model call unless the ink settles it"),
   B("draw.sendOps", 0, "send scene as ops", "on: also send the scene as op lines (its exact boxes)"),
   K("draw.gridCellPx", 0, 0, 160, 10, "grid on the screenshot, so the model can name cells (0: none)", "px"),
 

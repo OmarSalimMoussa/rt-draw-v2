@@ -4,7 +4,9 @@
 // show exactly what was sent; run records when each op landed.
 import type { Stroke } from "./ink.ts";
 import { type Word, linkInk } from "./link.ts";
-import { groupStrokes } from "./marks.ts";
+import { HitIndex } from "./hittest.ts";
+import { type Mark, type Reading, groupStrokes, readMark } from "./marks.ts";
+import { type Resolution, resolve } from "./resolve.ts";
 import { type ModelStats, callModel, modelOf } from "./model.ts";
 import { OpStream, type Parsed, applyOp } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
@@ -39,7 +41,9 @@ export type Prompt = {
   shot?: Shot;
   /** The transcript with its [ink n] markers. */
   transcript: string;
-  features: { chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number };
+  /** The resolver's answers, when they were sent. */
+  refs?: Resolution;
+  features: { marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number };
 };
 
 /** The scene as op lines: its exact boxes and styles, for when the model should see numbers. */
@@ -74,6 +78,31 @@ export function typedTranscript(text: string, marks: number): string {
   return out.join(" ");
 }
 
+/** One line per mark: what its geometry says it is and what it touches. */
+export function describeMark(n: number, r: Reading): string {
+  const at = (p?: [number, number]) => (p ? ` (${Math.round(p[0])} ${Math.round(p[1])})` : "");
+  if (r.how === "arrow") {
+    const to = typeof r.to === "string" ? r.to : r.to ? `empty space${at([r.to.x, r.to.y])}` : "?";
+    return `[ink ${n}] arrow from ${r.from ?? "empty space"}${at(r.arrow.tail)} to ${to}, tip at${at(r.arrow.tip)}`;
+  }
+  if (r.kind === "sketch") return `[ink ${n}] a sketch: draw something shaped like this here${r.inside ? `, inside ${r.inside}` : ""}`;
+  const what = { loop: "loop around", tap: "tap on", line: "line under", scribble: "scribble over" }[r.how as "loop"] ?? r.how;
+  return `[ink ${n}] ${what} ${r.targets.join(", ") || "nothing"}`;
+}
+
+/** Typed words get times so the resolver can match them to marks: the n-th pointing word lands on mark n. */
+export function typedWords(text: string, marks: Mark[]): Word[] {
+  const pointing = /^(this|that|here|there|these|those|it)\b/i;
+  let n = 0;
+  let at = marks[0]?.t0 ?? 0;
+  return text.trim().split(/\s+/).filter(Boolean).map((word) => {
+    if (n < marks.length && pointing.test(word)) at = marks[n++].t0;
+    const w = { word, t0: at, t1: at + 1 };
+    at += 1;
+    return w;
+  });
+}
+
 /** What the model gets for this send. Words are spoken (with times) or typed (a string). */
 export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS): Promise<Prompt> {
   const marks = groupStrokes(strokes, t);
@@ -93,6 +122,20 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     shot = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
     parts.push(`The screenshot is the canvas at ${Math.round(shot.width)}×${Math.round(shot.height)} (scaled ${t["shot.scale"]}); boxes are always in canvas pixels.`);
   }
+  // What the ink is, read from its geometry: free, and the screenshot only shows it as pixels.
+  const hits = new HitIndex(scene);
+  const readings = marks.map((m) => readMark(m, hits, t));
+  if (t["draw.sendMarks"] && marks.length) parts.push(`Marks (what each [ink n] is, read from its geometry):\n${readings.map((r, i) => describeMark(i + 1, r)).join("\n")}`);
+  // Which shapes the words and ink mean, from the resolver: one more model call unless the ink settles it.
+  let refs: Resolution | undefined;
+  const r0 = performance.now();
+  if (t["draw.sendRefs"] && (marks.length || (typeof words === "string" ? words.trim() : words.length))) {
+    const said = typeof words === "string" ? typedWords(words, marks) : words;
+    refs = await resolve(said, strokes, marks, scene, hits, t, "draw-refs");
+    const lines = refs.refs.map((x) => `"${x.phrase}" → ${x.ids.join(", ") || "nothing on the canvas"}`);
+    if (lines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${lines.join("\n")}`);
+  }
+  const resolveMs = Math.round(performance.now() - r0);
   parts.push(`Request: ${transcript || "(no words)"}`);
   const user = parts.join("\n\n");
   const imageTokens = shot ? Math.round((shot.width * shot.height) / 750) : 0;
@@ -102,7 +145,8 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     images: shot ? [shot.dataUrl] : [],
     shot,
     transcript,
-    features: { chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: shot ? 1 : 0, grid: cell },
+    refs,
+    features: { marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: shot ? 1 : 0, grid: cell },
   };
 }
 
