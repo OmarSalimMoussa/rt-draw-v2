@@ -64,9 +64,47 @@ function rows() {
     .join("");
 }
 
+// Hover an id tag on the canvas to read that shape's descriptions there, instead of in the table.
+const tip = document.createElement("div");
+tip.style.cssText = "position:fixed;z-index:10;max-width:340px;padding:8px 10px;background:#fff;border:1.5px solid var(--ink);border-radius:8px;box-shadow:2px 3px 0 #0002;font:13px/1.45 system-ui,sans-serif;pointer-events:none;display:none";
+document.body.append(tip);
+
+/** Invisible boxes over the id tags (render's tags ignore the mouse), carrying the shape's id. */
+function tagTargets() {
+  for (const s of scene.stacked()) {
+    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    // Same place and size as render's tag.
+    for (const [k, v] of Object.entries({ x: s.box.x + 2, y: s.box.y + 2, width: s.id.length * 7 + 10, height: 16, fill: "transparent", "data-tag": s.id, style: "cursor:help" })) r.setAttribute(k, String(v));
+    canvas.append(r);
+  }
+}
+
+function showTip(id: string, x: number, y: number) {
+  const s = scene.get(id);
+  if (!s) return;
+  const r = run?.results.find((x) => x.id === id);
+  const said = r ? check(id, r.text || undefined, tuning) : undefined;
+  const model = said?.text ? `<div style="font:16px/1.35 Excalifont, cursive">${esc(said.text)}</div><div class="${said.ok ? "muted" : "bad"} stat">${said.words} words${said.ok ? "" : ` · ${esc(said.why)}`}</div>` : `<div class="muted">${run ? "no description came back" : "not described yet: press Describe all"}</div>`;
+  tip.innerHTML = `<b>${esc(id)}</b>${model}<div class="muted" style="margin-top:6px;border-top:1px solid var(--line);padding-top:4px">the ops said: ${esc(s.description)}</div>`;
+  tip.style.display = "block";
+  // Beside the pointer, kept on screen.
+  const w = tip.offsetWidth;
+  const h = tip.offsetHeight;
+  tip.style.left = `${Math.min(window.innerWidth - w - 8, x + 14)}px`;
+  tip.style.top = `${Math.min(window.innerHeight - h - 8, y + 14)}px`;
+}
+
+canvas.addEventListener("mousemove", (e) => {
+  const id = (e.target as Element).getAttribute?.("data-tag");
+  if (id) showTip(id, e.clientX, e.clientY);
+  else tip.style.display = "none";
+});
+canvas.addEventListener("mouseleave", () => (tip.style.display = "none"));
+
 /** Crops are free (no model): shown as soon as the scene or a crop knob changes. */
 async function recrop() {
   render(canvas, scene, { tags: true, tuning });
+  tagTargets();
   crops = (await cropShapes(scene, tuning)).crops;
   rows();
   button();
