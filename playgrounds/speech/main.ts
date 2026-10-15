@@ -1,6 +1,6 @@
 // Speech playground: talk, and each word lands on the waveform at the time you
 // said it. Click a word to hear its slice; check the times by ear and by eye.
-import { BrowserEngine, Mic, ScribeEngine, type SpeechEngine, type SpeechEvents, type Utterance, browserSpeechAvailable, estimateWords } from "../../src/core/speech.ts";
+import { BrowserEngine, Mic, ScribeEngine, type SpeechEngine, type SpeechEvents, type Utterance, browserSpeechAvailable, estimateWords, scribeWord } from "../../src/core/speech.ts";
 import { DEFAULTS, type Tuning, tuningId } from "../../src/core/tuning.ts";
 import { $, download, shell, tuningPanel } from "../../src/ui.ts";
 
@@ -39,8 +39,8 @@ $("#side").innerHTML = `
 let tuning: Tuning = DEFAULTS;
 tuningPanel($("#side"), ["speech"], (t) => {
   tuning = t;
-  // Estimated words are re-spread under the new knobs; measured ones don't change.
-  utterances = utterances.map((u) => (u.raw ? { ...u, ...reestimate(u) } : u));
+  // Estimated words are re-spread, and measured ones re-shifted, under the new knobs.
+  utterances = utterances.map((u) => (u.raw ? { ...u, ...reestimate(u) } : { ...u, words: u.words.map((w) => (w.raw ? scribeWord(w.word, w.raw[0], w.raw[1], mic, tuning) : w)) }));
   draw();
 });
 
@@ -106,7 +106,7 @@ function draw() {
       if (row < 0) row = rowEnds.indexOf(Math.min(...rowEnds));
       rowEnds[row] = right + 2;
       const top = LANE_H + 6 + row * 28;
-      return `<span data-i="${i}" title="${w.t0}-${w.t1} ms${w.estimated ? " (estimated)" : ""}" style="position:absolute;left:${left}px;top:${top}px;min-width:${wide}px;padding:1px 4px;border:1.5px ${w.estimated ? "dashed" : "solid"} #e03131;border-radius:6px;background:#fff;font:15px Excalifont, cursive;white-space:nowrap;cursor:pointer">${w.word}</span>`;
+      return `<span data-i="${i}" title="${w.t1 - w.t0} ms${w.raw ? ` · Scribe ${w.raw[0].toFixed(2)}-${w.raw[1].toFixed(2)} s` : ""}${w.estimated ? " (estimated)" : ""}" style="position:absolute;left:${left}px;top:${top}px;min-width:${wide}px;padding:1px 4px;border:1.5px ${w.estimated ? "dashed" : "solid"} #e03131;border-radius:6px;background:#fff;font:15px Excalifont, cursive;white-space:nowrap;cursor:pointer">${w.word}</span>`;
     })
     .join("");
 
@@ -120,7 +120,7 @@ function draw() {
 $("#words").addEventListener("click", (e) => {
   const i = (e.target as HTMLElement).dataset.i;
   const w = i !== undefined && utterances.flatMap((u) => u.words)[Number(i)];
-  if (w) mic.play(w.t0, w.t1);
+  if (w) mic.play(w.t0 - tuning["speech.playBeforeMs"], w.t1 + tuning["speech.playAfterMs"]);
 });
 $("#words").addEventListener("mouseover", (e) => {
   const i = (e.target as HTMLElement).dataset.i;

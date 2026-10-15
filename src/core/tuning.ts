@@ -63,6 +63,9 @@ export const KNOBS: Knob[] = [
   // Speech: turning the mic into timed words (speech playground; ElevenLabs Scribe, or the browser's free recognizer).
   K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms"),
   K("speech.onsetLeadMs", 300, 0, 1000, 50, "words start this long before the first partial arrives (browser recognizer, no word times)", "ms"),
+  K("speech.shiftMs", 0, -500, 500, 10, "moves Scribe's word times later (+) or earlier (-), for a constant offset", "ms"),
+  K("speech.playBeforeMs", 80, 0, 500, 10, "playing a word starts this much before it", "ms"),
+  K("speech.playAfterMs", 200, 0, 800, 10, "and runs this much past its end (Scribe's ends are tight)", "ms"),
 
   // Link: putting [ink n] markers at the word being said.
   K("link.leadMs", 400, 0, 2000, 50, "a mark can link to a word said up to this long after the pen went down", "ms"),

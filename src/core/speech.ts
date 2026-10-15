@@ -6,7 +6,10 @@
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 /** A word and when it was said, in ms on the page clock. `estimated`: spread over the utterance, not measured. */
-export type Word = { word: string; t0: number; t1: number; estimated?: boolean };
+export type Word = { word: string; t0: number; t1: number; estimated?: boolean; /** Scribe's own start and end, in seconds of audio. */ raw?: [number, number] };
+
+/** Scribe's seconds-into-the-recording → page-clock word times, under speech.shiftMs. */
+export const scribeWord = (word: string, start: number, end: number, mic: Mic, t: Tuning): Word => ({ word, t0: Math.round(mic.wall(start) + t["speech.shiftMs"]), t1: Math.round(mic.wall(end) + t["speech.shiftMs"]), raw: [start, end] });
 
 /** One finished utterance: its words, when speech ended, and when its final text arrived. */
 export type Utterance = {
@@ -295,7 +298,7 @@ export class ScribeEngine implements SpeechEngine {
       const text = msg.text?.trim();
       if (!text) return;
       const timed = (msg.words ?? []).filter((w) => w.type === "word" && w.start !== undefined);
-      const words: Word[] = timed.map((w) => ({ word: w.text, t0: Math.round(this.mic.wall(w.start!)), t1: Math.round(this.mic.wall(w.end ?? w.start!)) }));
+      const words: Word[] = timed.map((w) => scribeWord(w.text, w.start!, w.end ?? w.start!, this.mic, this.tuning()));
       const now = performance.now();
       const t0 = words[0]?.t0 ?? now;
       const t1 = words.at(-1)?.t1 ?? now;
