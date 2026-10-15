@@ -2,7 +2,8 @@
 import { type Stroke, attachInk, isDot, pathLength, strokePath } from "../../src/core/ink.ts";
 import { Scene } from "../../src/core/scene.ts";
 import { render } from "../../src/core/render.ts";
-import { $, download, shell, stage } from "../../src/ui.ts";
+import { DEFAULTS, type Tuning } from "../../src/core/tuning.ts";
+import { $, download, shell, stage, tuningPanel } from "../../src/ui.ts";
 
 shell("ink", "Draw anything. Each stroke records its points with a time in ms, so later it can be matched to the word you were saying. Replay redraws them at their real pace.");
 const { canvas, ink } = stage($("#left"), 1280, 800, true);
@@ -18,12 +19,27 @@ $("#side").innerHTML = `
 
 let strokes: Stroke[] = [];
 const epoch = performance.now();
+let tuning: Tuning = DEFAULTS;
+/** Redraws finished strokes with the current pen knobs (the live stroke uses the defaults). */
+const redraw = () => {
+  ink!.replaceChildren(...strokes.map((s) => {
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", strokePath(s.points, tuning["ink.size"], tuning));
+    p.setAttribute("fill", "#e03131");
+    return p;
+  }));
+  list();
+};
+tuningPanel($("#side"), ["ink"], (t) => {
+  tuning = t;
+  redraw();
+});
 
 function list() {
   $("#rows").innerHTML = strokes
     .map((s) => {
       const dur = Math.max(1, s.t1 - s.t0);
-      return `<tr><td>${s.id}</td><td>${(s.t0 / 1000).toFixed(2)} s</td><td>${isDot(s.points) ? `dot, held ${s.t1 - s.t0} ms` : `${Math.round(pathLength(s.points))} px / ${dur} ms`}</td><td>${s.points.length}</td><td>${isDot(s.points) ? "-" : Math.round((s.points.length / dur) * 1000)}</td></tr>`;
+      return `<tr><td>${s.id}</td><td>${(s.t0 / 1000).toFixed(2)} s</td><td>${isDot(s.points, tuning) ? `dot, held ${s.t1 - s.t0} ms` : `${Math.round(pathLength(s.points))} px / ${dur} ms`}</td><td>${s.points.length}</td><td>${isDot(s.points, tuning) ? "-" : Math.round((s.points.length / dur) * 1000)}</td></tr>`;
     })
     .join("");
   const gaps = strokes.slice(1).map((s, i) => s.t0 - strokes[i].t1);
@@ -32,7 +48,8 @@ function list() {
 
 attachInk(ink!, (s) => {
   strokes.push(s);
-  list();
+  if (tuning === DEFAULTS) list();
+  else redraw();
 }, { epoch });
 
 $("#clear").addEventListener("click", () => {
@@ -55,7 +72,7 @@ $("#replay").addEventListener("click", () => {
     const now = performance.now() - start + first;
     strokes.forEach((s, i) => {
       const pts = s.points.filter((p) => p[2] <= now);
-      paths[i].setAttribute("d", strokePath(pts));
+      paths[i].setAttribute("d", strokePath(pts, tuning["ink.size"], tuning));
     });
     if (now < (strokes.at(-1)?.t1 ?? 0)) requestAnimationFrame(tick);
   };

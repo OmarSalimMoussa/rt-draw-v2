@@ -11,19 +11,20 @@
 // A box is pixels "x y w h" or grid cells "C2-J7" (columns A, B, ... rows 1, 2, ...).
 // Style args are key:value (fill:#fde, stroke:none, opacity:0.6, size:xl, color:white).
 import { type Box, KINDS, type Kind, Scene, type Style, type TextStyle } from "./scene.ts";
+import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 export type Arg = { key?: string; value: string; quoted: boolean; list?: string[] };
 export type Op = { name: string; args: Arg[]; line: string };
 export type Parsed = { ok: true; op: Op } | { ok: false; line: string; error: string } | { ok: "skip" };
 
 export const NAMES = ["shape", "text", "drawing", "layer", "move", "group", "remove"];
-export const DEFAULT_CELL = 40;
-/** A description shorter than this says too little to find the shape by later. */
-export const MIN_DESCRIPTION_WORDS = 6;
+export const DEFAULT_CELL = DEFAULTS["ops.cellPx"];
 
-function checkDescription(d: string) {
+/** A description shorter than ops.minDescriptionWords says too little to find the shape by later. */
+function checkDescription(d: string, t: Tuning) {
   const words = d.trim().split(/\s+/).filter(Boolean).length;
-  if (words < MIN_DESCRIPTION_WORDS) throw new Error(`description too short (${words} words, need ${MIN_DESCRIPTION_WORDS}+): say what it is and what it's for`);
+  const min = t["ops.minDescriptionWords"];
+  if (words < min) throw new Error(`description too short (${words} words, need ${min}+): say what it is and what it's for`);
   return d.trim();
 }
 
@@ -160,7 +161,8 @@ const need = (scene: Scene, id: string) => {
 };
 
 /** Applies one op. Throws with a short reason when it can't. */
-export function applyOp(scene: Scene, op: Op, cell = DEFAULT_CELL) {
+export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
+  const cell = t["ops.cellPx"];
   const pos = op.args.filter((a) => !a.key);
   const id = pos[0]?.value;
   if (!id) throw new Error("missing id");
@@ -174,12 +176,12 @@ export function applyOp(scene: Scene, op: Op, cell = DEFAULT_CELL) {
       if (!existing) {
         if (!boxArg) throw new Error(`new shape "${id}" needs a box`);
         if (!descArg) throw new Error(`new shape "${id}" needs a "description" of what it is and what it's for`);
-        const shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: checkDescription(descArg.value), style: {} };
+        const shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: checkDescription(descArg.value, t), style: {} };
         styleFrom(op.args, shape.style);
         scene.add(shape);
       } else {
         // Check everything before changing anything, so a rejected line leaves the shape as it was.
-        const description = descArg ? checkDescription(descArg.value) : undefined;
+        const description = descArg ? checkDescription(descArg.value, t) : undefined;
         const box = boxArg ? parseBox(boxArg.value, cell) : undefined;
         if (kindArg) existing.kind = kindArg.value as Kind;
         if (box) existing.box = box;
@@ -231,7 +233,7 @@ export function applyOp(scene: Scene, op: Op, cell = DEFAULT_CELL) {
 }
 
 /** Runs a whole script; returns the scene and any lines that failed. */
-export function runScript(script: string, scene = new Scene(), cell = DEFAULT_CELL) {
+export function runScript(script: string, scene = new Scene(), t: Tuning = DEFAULTS) {
   const errors: { line: string; error: string }[] = [];
   const s = new OpStream();
   for (const p of [...s.push(script), ...s.end()]) {
@@ -239,7 +241,7 @@ export function runScript(script: string, scene = new Scene(), cell = DEFAULT_CE
     if (!p.ok) errors.push({ line: p.line, error: p.error });
     else {
       try {
-        applyOp(scene, p.op, cell);
+        applyOp(scene, p.op, t);
       } catch (e) {
         errors.push({ line: p.op.line, error: (e as Error).message });
       }

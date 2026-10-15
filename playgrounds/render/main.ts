@@ -1,9 +1,10 @@
 // Renderer playground: edit a scene as ops and see it drawn.
 import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import grid from "../../src/fixtures/grid.ops.txt?raw";
-import { DEFAULT_CELL, runScript } from "../../src/core/ops.ts";
+import { runScript } from "../../src/core/ops.ts";
+import { DEFAULTS, type Tuning } from "../../src/core/tuning.ts";
 import { render } from "../../src/core/render.ts";
-import { $, fontsReady, shell, stage } from "../../src/ui.ts";
+import { $, fontsReady, shell, stage, tuningPanel } from "../../src/ui.ts";
 
 shell("render", "A scene is just layered shapes. Edit the ops and the canvas redraws; click a shape to see what it is.");
 const fixtures: Record<string, string> = { "Clowns.com (pixels)": clowns, "Settings screen (grid cells)": grid };
@@ -15,7 +16,7 @@ $("#side").innerHTML = `
     <div class="row"><select id="fixture">${Object.keys(fixtures).map((k) => `<option>${k}</option>`).join("")}</select></div>
     <textarea id="src" rows="18" spellcheck="false"></textarea>
     <div class="row">
-      <label><input type="checkbox" id="grid"> grid (${DEFAULT_CELL} px cells)</label>
+      <label><input type="checkbox" id="grid"> grid (<span id="cellv"></span> px cells)</label>
       <label><input type="checkbox" id="tags"> id tags</label>
       <button id="redraw">Redraw (new wobble check)</button>
     </div>
@@ -28,11 +29,17 @@ $("#side").innerHTML = `
 const src = $<HTMLTextAreaElement>("#src");
 const fixture = $<HTMLSelectElement>("#fixture");
 let current = runScript("").scene;
+let tuning: Tuning = DEFAULTS;
+tuningPanel($("#side"), ["render", "ops"], (t) => {
+  tuning = t;
+  draw();
+});
 
 function draw() {
-  const { scene, errors } = runScript(src.value);
+  const { scene, errors } = runScript(src.value, undefined, tuning);
+  $("#cellv").textContent = String(tuning["ops.cellPx"]);
   current = scene;
-  const ms = render(canvas, scene, { grid: $<HTMLInputElement>("#grid").checked ? DEFAULT_CELL : undefined, tags: $<HTMLInputElement>("#tags").checked });
+  const ms = render(canvas, scene, { grid: $<HTMLInputElement>("#grid").checked ? tuning["ops.cellPx"] : undefined, tags: $<HTMLInputElement>("#tags").checked, tuning });
   $("#stat").textContent = `${scene.shapes.size} shapes · ${scene.groups.size} groups · drawn in ${ms.toFixed(1)} ms`;
   $("#errors").textContent = errors.map((e) => `✗ ${e.line}\n   ${e.error}`).join("\n");
   const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");

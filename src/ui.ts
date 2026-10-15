@@ -1,6 +1,7 @@
 // The shell every playground shares: a header with links between them, and a
 // stage that stacks the canvas <svg> under an ink <svg> with the same viewBox.
 import "./ui.css";
+import { DEFAULTS, type Tuning, diff, knobsOf, tune, tuningId } from "./core/tuning.ts";
 
 export const PLAYGROUNDS = [
   ["render", "Renderer"],
@@ -47,3 +48,48 @@ export function download(name: string, text: string) {
 
 /** Waits for Excalifont, so text is measured with the right widths. */
 export const fontsReady = () => document.fonts.load("20px Excalifont").then(() => undefined);
+
+/**
+ * Sliders for every knob of the given parts, built from the registry, so any
+ * playground can tune the parts it shows. Says which tuning is live (its id is
+ * what saved sets and logs record) and copies the changed knobs to paste back.
+ */
+export function tuningPanel(host: HTMLElement, parts: string[], onChange: (t: Tuning) => void) {
+  let t: Tuning = DEFAULTS;
+  const card = document.createElement("div");
+  card.className = "card knobs";
+  card.innerHTML = `<h2>Knobs</h2>${parts
+    .map((part, i) => `<details${i ? "" : " open"}><summary>${part}</summary>${knobsOf(part)
+      .map((k) => `<label title="${k.key}: ${k.doc}"><span>${k.doc}${k.unit ? ` (${k.unit})` : ""}</span><input type="range" data-key="${k.key}" min="${k.min}" max="${k.max}" step="${k.step}" value="${k.value}"><span class="stat" data-v="${k.key}">${k.value}</span></label>`)
+      .join("")}</details>`)
+    .join("")}<div class="row"><button data-act="reset">Defaults</button><button data-act="copy">Copy changes</button><span class="stat" data-id></span></div>`;
+  host.append(card);
+  const show = () => {
+    for (const input of card.querySelectorAll<HTMLInputElement>("input[data-key]")) {
+      input.value = String(t[input.dataset.key!]);
+      card.querySelector(`[data-v="${input.dataset.key}"]`)!.textContent = String(t[input.dataset.key!]);
+    }
+    const changed = Object.keys(diff(t)).length;
+    card.querySelector("[data-id]")!.textContent = changed ? `${tuningId(t)} · ${changed} changed` : "defaults";
+  };
+  const set = (next: Tuning) => {
+    t = next;
+    show();
+    onChange(t);
+  };
+  card.addEventListener("input", (e) => {
+    const input = e.target as HTMLInputElement;
+    if (input.dataset.key) set(tune({ [input.dataset.key]: Number(input.value) }, t));
+  });
+  card.addEventListener("click", (e) => {
+    const act = (e.target as HTMLElement).dataset.act;
+    if (act === "reset") set(DEFAULTS);
+    if (act === "copy") navigator.clipboard?.writeText(JSON.stringify(diff(t), null, 1));
+  });
+  show();
+  return {
+    get: () => t,
+    /** Load a saved tuning (only known knobs; the rest stay default). */
+    load: (saved: Record<string, number>) => set(tune(Object.fromEntries(Object.entries(saved).filter(([k]) => k in DEFAULTS)))),
+  };
+}

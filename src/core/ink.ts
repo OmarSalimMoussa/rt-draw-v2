@@ -1,6 +1,7 @@
 // Your pen: smooth strokes over the canvas, each point with its time, so a
 // stroke can later be matched to the word you were saying.
 import { getStroke } from "perfect-freehand";
+import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 /** x, y in canvas units; t in ms since the session started. */
 export type Pt = [x: number, y: number, t: number];
@@ -8,16 +9,16 @@ export type Pt = [x: number, y: number, t: number];
 export type Stroke = { id: number; points: Pt[]; t0: number; t1: number };
 
 /** A click or a tiny wiggle: drawn as a filled dot, since it usually points at something. */
-export const isDot = (points: Pt[]) => points.length > 0 && pathLength(points) < 3;
+export const isDot = (points: Pt[], t: Tuning = DEFAULTS) => points.length > 0 && pathLength(points) < t["ink.dotMaxPx"];
 
-export function strokePath(points: Pt[], size = 5): string {
+export function strokePath(points: Pt[], size = DEFAULTS["ink.size"], t: Tuning = DEFAULTS): string {
   if (!points.length) return "";
-  if (isDot(points)) {
+  if (isDot(points, t)) {
     const [x, y] = points[0];
-    const r = size * 1.1;
+    const r = size * t["ink.dotRadius"];
     return `M${x - r} ${y}a${r} ${r} 0 1 0 ${r * 2} 0a${r} ${r} 0 1 0 ${-r * 2} 0Z`;
   }
-  const outline = getStroke(points.map(([x, y]) => [x, y]), { size, thinning: 0.5, smoothing: 0.5, streamline: 0.4 });
+  const outline = getStroke(points.map(([x, y]) => [x, y]), { size, thinning: t["ink.thinning"], smoothing: t["ink.smoothing"], streamline: t["ink.streamline"] });
   if (!outline.length) return "";
   const d = outline.reduce((acc: (string | number)[], [x0, y0], i, arr) => {
     const [x1, y1] = arr[(i + 1) % arr.length];

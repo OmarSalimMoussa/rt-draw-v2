@@ -47,3 +47,7 @@ table.marks td, table.marks th { text-align: left; padding: 4px 6px; border-bott
 .home a.card { text-decoration: none; color: inherit; }
 .home a.card:hover { background: #fff4e6; }
 table.marks td select { display: block; margin-bottom: 4px; max-width: 160px; }
+.knobs details { border-top: 1px solid var(--line); padding-top: 6px; }
+.knobs summary { font: 17px Excalifont, cursive; cursor: pointer; }
+.knobs label { display: grid; grid-template-columns: 1fr 110px 44px; gap: 6px; font-size: 12px; margin: 4px 0; }
+.knobs label input { width: 100%; }

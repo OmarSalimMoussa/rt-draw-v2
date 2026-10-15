@@ -6,6 +6,7 @@
 // covers a head drawn as separate strokes, as one V stroke, or in the same
 // stroke as the shaft (out to the tip and back along the barbs).
 import { type Pt, pathLength } from "./ink.ts";
+import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 export type ArrowReading = {
   arrow: boolean;
@@ -14,6 +15,8 @@ export type ArrowReading = {
   tip?: [number, number];
   tail?: [number, number];
   why: string;
+  /** The measurements the decision came from, for logs and replays. */
+  features: Record<string, number>;
 };
 
 type P = [number, number];
@@ -46,7 +49,7 @@ export function resample(points: Pt[], step = 5): P[] {
 }
 
 /** Splits a resampled stroke at sharp turns (more than `deg` degrees). */
-function splitAtCorners(pts: P[], deg = 95, k = 2): P[][] {
+function splitAtCorners(pts: P[], deg: number, k = 2): P[][] {
   const cuts: number[] = [];
   for (let i = k; i < pts.length - k; i++) {
     const turn = 180 - angle(sub(pts[i - k], pts[i]), sub(pts[i + k], pts[i]));
@@ -64,40 +67,46 @@ function splitAtCorners(pts: P[], deg = 95, k = 2): P[][] {
 
 const polyLen = (p: P[]) => p.reduce((s, q, i) => (i ? s + dist(q, p[i - 1]) : 0), 0);
 
-export function readArrow(strokes: Pt[][]): ArrowReading {
-  const no = (why: string): ArrowReading => ({ arrow: false, confidence: 0, why });
-  const real = strokes.filter((s) => s.length > 1 && pathLength(s) >= 3);
+export function readArrow(strokes: Pt[][], t: Tuning = DEFAULTS): ArrowReading {
+  const f: Record<string, number> = {};
+  const no = (why: string): ArrowReading => ({ arrow: false, confidence: 0, why, features: f });
+  const real = strokes.filter((s) => s.length > 1 && pathLength(s) >= t["ink.dotMaxPx"]);
   if (!real.length) return no("a dot");
 
   // The shaft: the longest straight-ish piece, whether it's its own stroke or part of one.
-  const pieces = real.flatMap((s, si) => splitAtCorners(resample(s)).map((p) => ({ p, si })));
+  const step = t["arrow.resamplePx"];
+  const pieces = real.flatMap((s, si) => splitAtCorners(resample(s, step), t["arrow.cornerDeg"]).map((p) => ({ p, si })));
   pieces.sort((a, b) => polyLen(b.p) - polyLen(a.p));
   const shaft = pieces[0].p;
   const shaftLen = polyLen(shaft);
   const span = dist(shaft[0], shaft.at(-1)!);
-  if (span < 30) return no("too short for a shaft");
-  if (shaftLen / span > 1.5) return no("no straight or gently curved shaft");
+  f.span = Math.round(span);
+  f.curve = Math.round((shaftLen / (span || 1)) * 100) / 100;
+  f.pieces = pieces.length;
+  if (span < t["arrow.minShaftPx"]) return no("too short for a shaft");
+  if (shaftLen / span > t["arrow.maxCurve"]) return no("no straight or gently curved shaft");
 
   // Everything that isn't the shaft could be a head.
   const rest = pieces.slice(1).flatMap((x) => x.p);
   if (!rest.length) return no("a plain line: no head at either end");
 
-  const radius = Math.max(15, Math.min(80, span * 0.45));
+  const radius = Math.max(t["arrow.headRadiusMinPx"], Math.min(t["arrow.headRadiusMaxPx"], span * t["arrow.headRadiusFrac"]));
   const endScore = (end: P, inward: P) => {
     const back = sub(inward, end);
     const near = rest.filter((q) => {
       const d = dist(q, end);
-      return d > 5 && d < radius;
+      return d > step && d < radius;
     });
+    const nearFrac = near.length / rest.length;
     // Most of the non-shaft ink must be the head: a star or a zigzag has plenty of ink far from either end.
-    if (near.length < 2 || near.length < rest.length * 0.6) return { score: 0, sides: 0, frac: 0 };
+    if (near.length < 2 || nearFrac < t["arrow.headInkFrac"]) return { score: 0, sides: 0, frac: 0, nearFrac };
     let left = 0;
     let right = 0;
     let inCone = 0;
     for (const q of near) {
       const v = sub(q, end);
       const a = angle(v, back);
-      if (a > 3 && a < 80) {
+      if (a > t["arrow.coneMinDeg"] && a < t["arrow.coneMaxDeg"]) {
         inCone++;
         if (cross(back, v) > 0) left++;
         else right++;
@@ -106,14 +115,15 @@ export function readArrow(strokes: Pt[][]): ArrowReading {
     const frac = inCone / near.length;
     const sides = (left >= 2 ? 1 : 0) + (right >= 2 ? 1 : 0);
     // Head ink that mostly sweeps backwards; more is better, both sides is best.
-    const score = frac < 0.55 ? 0 : sides === 2 ? 0.95 * Math.min(1, frac + 0.2) : sides === 1 ? 0.65 * Math.min(1, frac + 0.2) : 0;
-    return { score, sides, frac };
+    const base = sides === 2 ? t["arrow.twoSided"] : sides === 1 ? t["arrow.oneSided"] : 0;
+    const score = frac < t["arrow.coneFrac"] ? 0 : base * Math.min(1, frac + 0.2);
+    return { score, sides, frac, nearFrac };
   };
 
   const a = shaft[0];
   const b = shaft.at(-1)!;
-  // A point about 20 px in from each end gives the shaft's direction right there, even on a curve.
-  const inStep = Math.max(1, Math.min(shaft.length - 1, Math.round(20 / 5)));
+  // A point a little in from each end gives the shaft's direction right there, even on a curve.
+  const inStep = Math.max(1, Math.min(shaft.length - 1, Math.round(t["arrow.tangentPx"] / step)));
   const inA = shaft[inStep];
   const inB = shaft[shaft.length - 1 - inStep];
   // Heads on curved arrows follow either the curve's last stretch or the line back to the other
@@ -123,6 +133,10 @@ export function readArrow(strokes: Pt[][]): ArrowReading {
   const atA = better(endScore(a, inA), endScore(a, mid));
   const atB = better(endScore(b, inB), endScore(b, mid));
   const [best, tip, tail] = atB.score >= atA.score ? [atB, b, a] : [atA, a, b];
-  if (best.score < 0.5) return no(`ink near the ends doesn't sweep back like a head (${Math.round(Math.max(atA.frac, atB.frac) * 100)}% of it does)`);
-  return { arrow: true, confidence: Math.round(best.score * 100) / 100, tip, tail, why: best.sides === 2 ? "shaft with a two-sided head" : "shaft with a one-sided head" };
+  f.headInk = Math.round(best.nearFrac * 100) / 100;
+  f.cone = Math.round(best.frac * 100) / 100;
+  f.sides = best.sides;
+  f.score = Math.round(best.score * 100) / 100;
+  if (best.score < t["arrow.threshold"]) return no(`ink near the ends doesn't sweep back like a head (${Math.round(Math.max(atA.frac, atB.frac) * 100)}% of it does)`);
+  return { arrow: true, confidence: f.score, tip, tail, why: best.sides === 2 ? "shaft with a two-sided head" : "shaft with a one-sided head", features: f };
 }

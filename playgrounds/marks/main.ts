@@ -3,10 +3,12 @@
 import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import { HitIndex } from "../../src/core/hittest.ts";
 import { type Stroke, attachInk, strokePath } from "../../src/core/ink.ts";
-import { type Mark, type Reading, TUNING, type Tuning, groupStrokes, readMark } from "../../src/core/marks.ts";
+import { type Example, type LabeledSet, makeSet } from "../../src/core/labels.ts";
+import { type Mark, type Reading, groupStrokes, kindLabel, markKey, readMark } from "../../src/core/marks.ts";
+import { DEFAULTS, type Tuning, tune, tuningId } from "../../src/core/tuning.ts";
 import { runScript } from "../../src/core/ops.ts";
 import { render } from "../../src/core/render.ts";
-import { $, download, fontsReady, shell, stage } from "../../src/ui.ts";
+import { $, download, fontsReady, shell, stage, tuningPanel } from "../../src/ui.ts";
 
 shell("marks", "Draw loops, arrows, taps, underlines and little sketches over the page. Each mark gets a number and a reading. Fix any wrong reading in the table, save the set, then tune the rules and watch the score.");
 const { canvas, ink } = stage($("#left"), 1280, 800, true);
@@ -16,32 +18,23 @@ const INK = "#e03131";
 const LABELS = ["pointing:loop", "pointing:arrow", "pointing:tap", "pointing:line", "pointing:scribble", "sketch"];
 const COLORS: Record<string, string> = { pointing: "#1971c2", sketch: "#c2255c" };
 
-const knobs: [keyof Tuning, string, number, number, number][] = [
-  ["gapMs", "same mark if within (ms)", 100, 2000, 50],
-  ["nearPx", "and within (px)", 0, 200, 5],
-  ["closeRatio", "closed if end gap < length ×", 0.05, 0.5, 0.01],
-  ["straightRatio", "straight if span / length ≥", 0.6, 0.99, 0.01],
-];
-
 $("#side").innerHTML = `
   <div class="card">
-    <h2>Rules</h2>
-    ${knobs.map(([k, label, min, max, step]) => `<label>${label} <input type="range" id="k-${k}" min="${min}" max="${max}" step="${step}" value="${TUNING[k]}"> <span class="stat" id="v-${k}">${TUNING[k]}</span></label>`).join("")}
+    <h2>Score</h2>
     <div class="row"><button id="clear">Clear</button><button id="save">Save set</button><label class="row"><span>Load set</span><input type="file" id="load" accept=".json"></label></div>
     <div class="stat" id="score"></div>
   </div>
   <div class="card"><h2>Marks</h2><table class="marks"><thead><tr><th>#</th><th>reading</th><th>you say</th></tr></thead><tbody id="rows"></tbody></table></div>`;
 
 let strokes: Stroke[] = [];
-/** Your corrections, by mark number. Survive regrouping only while the grouping stays the same. */
-let labels = new Map<number, string>();
-/** Your arrow / not-arrow corrections, by mark number. */
-let arrowLabels = new Map<number, "arrow" | "not">();
+/** Your corrections, by mark (its stroke ids), so they survive regrouping as long as that mark does. */
+let labels = new Map<string, string>();
+/** Your arrow / not-arrow corrections, by mark. */
+let arrowLabels = new Map<string, "arrow" | "not">();
 const arrowOf = (r: Reading) => (r.arrow.arrow ? "arrow" : "not");
 let index: HitIndex;
-const tuning: Tuning = { ...TUNING };
-
-const labelOf = (r: Reading) => (r.kind === "sketch" ? "sketch" : `pointing:${r.how}`);
+let tuning: Tuning = DEFAULTS;
+const labelOf = kindLabel;
 
 /** A mark's own crop, the way a sketch would be sent to the model. */
 function crop(m: Mark) {
@@ -90,7 +83,7 @@ function update() {
     .map((m, i) => {
       const r = readings[i];
       const got = labelOf(r);
-      const want = labels.get(m.n);
+      const want = labels.get(markKey(m));
       if (want) {
         judged++;
         if (want === got) right++;
@@ -98,14 +91,14 @@ function update() {
       const tick = (w: string | undefined, g: string) => (w ? (w === g ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>') : "");
       const mark = tick(want, got);
       const isArrow = arrowOf(r);
-      const wantArrow = arrowLabels.get(m.n);
+      const wantArrow = arrowLabels.get(markKey(m));
       if (wantArrow) {
         arrowJudged++;
         if (wantArrow === isArrow) arrowRight++;
       }
       const arrowLine = `<div>arrow? <b style="color:${r.arrow.arrow ? "#2b8a3e" : "#868e96"}">${r.arrow.arrow ? `yes ${r.arrow.confidence}` : "no"}</b> ${tick(wantArrow, isArrow)} <span class="muted">${r.arrow.why}</span></div>`;
       const extra = r.kind === "sketch" ? `<div>${crop(m)}</div>` : `<div class="muted">${r.targets.map((id) => `→ <b>${id}</b>: ${index.scene.get(id)?.description ?? ""}`).join("<br>") || "→ -"}</div>`;
-      return `<tr><td>${m.n}</td><td><b style="color:${COLORS[r.kind]}">${got}</b> ${mark}<div class="muted">${r.why}</div>${arrowLine}${extra}</td><td><select data-n="${m.n}" data-field="kind"><option value="">(looks right)</option>${LABELS.map((l) => `<option${l === want ? " selected" : ""}>${l}</option>`).join("")}</select><select data-n="${m.n}" data-field="arrow"><option value="">arrow? (looks right)</option><option value="arrow"${wantArrow === "arrow" ? " selected" : ""}>is an arrow</option><option value="not"${wantArrow === "not" ? " selected" : ""}>not an arrow</option></select></td></tr>`;
+      return `<tr><td>${m.n}</td><td><b style="color:${COLORS[r.kind]}">${got}</b> ${mark}<div class="muted">${r.why}</div>${arrowLine}${extra}</td><td><select data-n="${markKey(m)}" data-field="kind"><option value="">(looks right)</option>${LABELS.map((l) => `<option${l === want ? " selected" : ""}>${l}</option>`).join("")}</select><select data-n="${markKey(m)}" data-field="arrow"><option value="">arrow? (looks right)</option><option value="arrow"${wantArrow === "arrow" ? " selected" : ""}>is an arrow</option><option value="not"${wantArrow === "not" ? " selected" : ""}>not an arrow</option></select></td></tr>`;
     })
     .join("");
   const scores = [judged && `readings ${right} / ${judged} right`, arrowJudged && `arrow? ${arrowRight} / ${arrowJudged} right`].filter(Boolean);
@@ -114,7 +107,7 @@ function update() {
 
 $("#rows").addEventListener("change", (e) => {
   const sel = e.target as HTMLSelectElement;
-  const n = Number(sel.dataset.n);
+  const n = sel.dataset.n!;
   if (sel.dataset.field === "arrow") {
     if (sel.value) arrowLabels.set(n, sel.value as "arrow" | "not");
     else arrowLabels.delete(n);
@@ -123,13 +116,10 @@ $("#rows").addEventListener("change", (e) => {
   update();
 });
 
-for (const [k] of knobs) {
-  $(`#k-${k}`).addEventListener("input", (e) => {
-    tuning[k] = Number((e.target as HTMLInputElement).value);
-    $(`#v-${k}`).textContent = String(tuning[k]);
-    update();
-  });
-}
+const knobs = tuningPanel($("#side"), ["marks", "arrow", "hit"], (t) => {
+  tuning = t;
+  update();
+});
 
 const epoch = performance.now();
 attachInk(ink!, (s) => {
@@ -145,22 +135,52 @@ $("#clear").addEventListener("click", () => {
   update();
 });
 
+/** Every mark as two labeled examples (its kind, and arrow or not): your correction, or the reading you accepted. */
+function examples(): Example[] {
+  return groupStrokes(strokes, tuning).flatMap((m) => {
+    const r = readMark(m, index, tuning);
+    const key = markKey(m);
+    const kind = labels.get(key);
+    const arrow = arrowLabels.get(key);
+    return [
+      { decision: "marks.kind", strokes: m.strokes, predicted: labelOf(r), features: r.features, label: kind ?? labelOf(r), corrected: !!kind },
+      { decision: "marks.arrow", strokes: m.strokes, predicted: arrowOf(r), features: r.arrow.features, label: arrow ?? arrowOf(r), corrected: !!arrow },
+    ];
+  });
+}
+
 $("#save").addEventListener("click", () => {
-  // Labels are saved for every mark: your correction, or the reading you accepted.
-  const marks = groupStrokes(strokes, tuning);
-  const readings = marks.map((m) => readMark(m, index, tuning));
-  const all = Object.fromEntries(marks.map((m, i) => [m.n, labels.get(m.n) ?? labelOf(readings[i])]));
-  const arrows = Object.fromEntries(marks.map((m, i) => [m.n, arrowLabels.get(m.n) ?? arrowOf(readings[i])]));
-  download("marks-set.json", JSON.stringify({ scene: "clowns", tuning, strokes, labels: all, arrows }, null, 1));
+  download(`marks-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.json`, JSON.stringify(makeSet("playground", "clowns", tuning, tuningId(tuning), examples()), null, 1));
 });
+
+/** Old saves: strokes plus labels by mark number under the knobs of the time. */
+type OldSet = { strokes: Stroke[]; labels: Record<string, string>; arrows?: Record<string, "arrow" | "not">; tuning?: Record<string, number> };
 
 $<HTMLInputElement>("#load").addEventListener("change", async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
-  const set = JSON.parse(await file.text()) as { strokes: Stroke[]; labels: Record<string, string>; arrows?: Record<string, "arrow" | "not"> };
-  strokes = set.strokes;
-  labels = new Map(Object.entries(set.labels).map(([n, l]) => [Number(n), l]));
-  arrowLabels = new Map(Object.entries(set.arrows ?? {}).map(([n, l]) => [Number(n), l]));
+  const set = JSON.parse(await file.text()) as LabeledSet | OldSet;
+  labels = new Map();
+  arrowLabels = new Map();
+  if ("v" in set) {
+    knobs.load(set.tuning);
+    const seen = new Map<number, Stroke>();
+    for (const ex of set.examples) {
+      for (const s of ex.strokes) seen.set(s.id, s);
+      const key = ex.strokes.map((s) => s.id).join(",");
+      if (ex.decision === "marks.kind") labels.set(key, ex.label);
+      if (ex.decision === "marks.arrow") arrowLabels.set(key, ex.label as "arrow" | "not");
+    }
+    strokes = [...seen.values()].sort((a, b) => a.t0 - b.t0);
+  } else {
+    strokes = set.strokes;
+    const old = set.tuning ?? {};
+    const was = tune({ "marks.gapMs": old.gapMs ?? DEFAULTS["marks.gapMs"], "marks.nearPx": old.nearPx ?? DEFAULTS["marks.nearPx"] });
+    for (const m of groupStrokes(strokes, was)) {
+      if (set.labels[m.n]) labels.set(markKey(m), set.labels[m.n]);
+      if (set.arrows?.[m.n]) arrowLabels.set(markKey(m), set.arrows[m.n]);
+    }
+  }
   ink!.replaceChildren();
   for (const s of strokes) {
     const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
