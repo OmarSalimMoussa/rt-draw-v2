@@ -1,5 +1,5 @@
 // Ink playground: draw, and check every stroke carries usable times.
-import { type Stroke, attachInk, pathLength, strokePath } from "../../src/core/ink.ts";
+import { type Stroke, attachInk, isDot, pathLength, strokePath } from "../../src/core/ink.ts";
 import { Scene } from "../../src/core/scene.ts";
 import { render } from "../../src/core/render.ts";
 import { $, download, shell, stage } from "../../src/ui.ts";
@@ -23,7 +23,7 @@ function list() {
   $("#rows").innerHTML = strokes
     .map((s) => {
       const dur = Math.max(1, s.t1 - s.t0);
-      return `<tr><td>${s.id}</td><td>${(s.t0 / 1000).toFixed(2)} s</td><td>${Math.round(pathLength(s.points))} px / ${dur} ms</td><td>${s.points.length}</td><td>${Math.round((s.points.length / dur) * 1000)}</td></tr>`;
+      return `<tr><td>${s.id}</td><td>${(s.t0 / 1000).toFixed(2)} s</td><td>${isDot(s.points) ? `dot, held ${s.t1 - s.t0} ms` : `${Math.round(pathLength(s.points))} px / ${dur} ms`}</td><td>${s.points.length}</td><td>${isDot(s.points) ? "-" : Math.round((s.points.length / dur) * 1000)}</td></tr>`;
     })
     .join("");
   const gaps = strokes.slice(1).map((s, i) => s.t0 - strokes[i].t1);
@@ -55,7 +55,7 @@ $("#replay").addEventListener("click", () => {
     const now = performance.now() - start + first;
     strokes.forEach((s, i) => {
       const pts = s.points.filter((p) => p[2] <= now);
-      paths[i].setAttribute("d", pts.length > 1 ? strokePath(pts) : "");
+      paths[i].setAttribute("d", strokePath(pts));
     });
     if (now < (strokes.at(-1)?.t1 ?? 0)) requestAnimationFrame(tick);
   };
