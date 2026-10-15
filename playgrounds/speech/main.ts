@@ -1,10 +1,10 @@
 // Speech playground: talk, and each word lands on the waveform at the time you
 // said it. Click a word to hear its slice; check the times by ear and by eye.
-import { BrowserEngine, Mic, ScribeEngine, type SpeechEngine, type SpeechEvents, type Utterance, browserSpeechAvailable, estimateWords, scribeWord } from "../../src/core/speech.ts";
+import { Mic, ScribeEngine, type SpeechEvents, type Utterance, scribeWord } from "../../src/core/speech.ts";
 import { DEFAULTS, type Tuning, patching, tuningId } from "../../src/core/tuning.ts";
 import { $, download, shell, tuningPanel } from "../../src/ui.ts";
 
-shell("speech", "Talk and watch your words land on the waveform at the moment you said them. Click a word to hear just that slice. The browser recognizer is free but guesses word times (dashed); Scribe measures them and costs a little per minute.");
+shell("speech", "Talk and watch your words land on the waveform at the moment you said them. Click a word to hear just that slice. Words and times come from ElevenLabs Scribe, which costs a little per minute of listening.");
 
 /** Waveform scale: pixels per second of audio. */
 const PX_PER_S = 120;
@@ -22,15 +22,11 @@ $("#left").innerHTML = `
     </div>
     <div class="muted" id="interim" style="font:20px Excalifont, cursive;min-height:30px"></div>
   </div>
-  <div class="card"><h2>Utterances</h2><table class="marks"><thead><tr><th>said</th><th>engine</th><th>words</th><th>wait after you stopped</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  <div class="card"><h2>Utterances</h2><table class="marks"><thead><tr><th>said</th><th>words</th><th>wait after you stopped</th></tr></thead><tbody id="rows"></tbody></table></div>`;
 
 $("#side").innerHTML = `
   <div class="card">
     <h2>Listen</h2>
-    <label>engine <select id="engine">
-      <option value="browser">Browser (free, times estimated)</option>
-      <option value="scribe">Scribe (word times, paid)</option>
-    </select></label>
     <div class="row"><button class="primary" id="go">Start talking</button><button id="save">Save words</button></div>
     <div class="stat" id="stat">Not listening.</div>
     <pre class="log bad" id="errors"></pre>
@@ -38,36 +34,24 @@ $("#side").innerHTML = `
 
 let tuning: Tuning = DEFAULTS;
 const live = () => tuning;
-const reshift = () => {
-  utterances = utterances.map((u) => (u.raw ? u : { ...u, words: u.words.map((w) => (w.raw ? scribeWord(w.word, w.raw[0], w.raw[1], mic, live()) : w)) }));
-  draw();
-};
 tuningPanel($("#side"), ["speech"], (t) => {
   tuning = t;
-  // Estimated words are re-spread, and measured ones re-shifted, under the new knobs.
-  utterances = utterances.map((u) => (u.raw ? { ...u, ...reestimate(u) } : u));
-  reshift();
+  // Words are re-placed from Scribe's own times under the new knobs.
+  utterances = utterances.map((u) => ({ ...u, words: u.words.map((w) => (w.raw ? scribeWord(w.word, w.raw[0], w.raw[1], mic, live()) : w)) }));
+  draw();
 });
 
-type Row = Utterance & { raw?: { firstAt: number } };
-let utterances: Row[] = [];
+let utterances: Utterance[] = [];
 const mic = new Mic();
-let engine: SpeechEngine | undefined;
+let engine: ScribeEngine | undefined;
 let listening = false;
 let timer = 0;
-
-function reestimate(u: Row): Partial<Row> {
-  const est = estimateWords(u.text, u.raw!.firstAt, u.t1, tuning);
-  return { words: est.words, t0: est.t0, features: est.features };
-}
 
 const events: SpeechEvents = {
   onInterim: (text) => ($("#interim").textContent = text),
   onFinal: (u) => {
     $("#interim").textContent = "";
-    // The browser engine spreads words from (first partial − onset lead); keep the first partial to re-spread under new knobs.
-    const raw = u.engine === "browser" ? { firstAt: u.t0 + tuning["speech.onsetLeadMs"] } : undefined;
-    utterances.push({ ...u, raw });
+    utterances.push(u);
     draw();
   },
   onError: (e) => ($("#errors").textContent += `${e}\n`),
@@ -111,12 +95,12 @@ function draw() {
       if (row < 0) row = rowEnds.indexOf(Math.min(...rowEnds));
       rowEnds[row] = right + 2;
       const top = LANE_H + 6 + row * 28;
-      return `<span data-i="${i}" title="${w.t1 - w.t0} ms${w.raw ? ` · Scribe ${w.raw[0].toFixed(2)}-${w.raw[1].toFixed(2)} s` : ""}${w.estimated ? " (estimated)" : ""}" style="position:absolute;left:${left}px;top:${top}px;min-width:${wide}px;padding:1px 4px;border:1.5px ${w.estimated ? "dashed" : "solid"} #e03131;border-radius:6px;background:#fff;font:15px Excalifont, cursive;white-space:nowrap;cursor:pointer">${w.word}</span>`;
+      return `<span data-i="${i}" title="${w.t1 - w.t0} ms${w.raw ? ` · Scribe ${w.raw[0].toFixed(2)}-${w.raw[1].toFixed(2)} s` : ""}" style="position:absolute;left:${left}px;top:${top}px;min-width:${wide}px;padding:1px 4px;border:1.5px solid #e03131;border-radius:6px;background:#fff;font:15px Excalifont, cursive;white-space:nowrap;cursor:pointer">${w.word}</span>`;
     })
     .join("");
 
   $("#rows").innerHTML = utterances
-    .map((u) => `<tr><td>${u.text}</td><td>${u.engine}</td><td>${u.words.length}${u.words[0]?.estimated ? " (est.)" : ""}</td><td>${Math.round(u.finalAt - u.t1)} ms</td></tr>`)
+    .map((u) => `<tr><td>${u.text}</td><td>${u.words.length}</td><td>${Math.round(u.finalAt - u.t1)} ms</td></tr>`)
     .join("");
   const waits = utterances.map((u) => u.finalAt - u.t1).sort((a, b) => a - b);
   $("#stat").textContent = `${listening ? "Listening" : "Not listening"} · ${(mic.ms / 1000).toFixed(1)} s recorded · ${words.length} words${waits.length ? ` · median wait ${Math.round(waits[Math.floor(waits.length / 2)])} ms` : ""} · ${patching(tuning) ? tuningId(tuning) : "patches off: Scribe as it comes"}`;
@@ -139,11 +123,9 @@ $("#words").addEventListener("mouseleave", () => ($("#hover").style.display = "n
 async function start() {
   $("#errors").textContent = "";
   utterances = [];
-  const which = $<HTMLSelectElement>("#engine").value;
-  if (which === "browser" && !browserSpeechAvailable()) return events.onError("this browser has no speech recognizer: use Chrome, or Scribe");
   try {
     await mic.start();
-    engine = which === "scribe" ? new ScribeEngine(events, mic, live) : new BrowserEngine(events, () => tuning);
+    engine = new ScribeEngine(events, mic, live);
     await engine.start();
   } catch (err) {
     events.onError(err instanceof Error ? err.message : String(err));
@@ -166,6 +148,6 @@ async function stop() {
 
 $("#go").addEventListener("click", () => void (listening ? stop() : start()));
 $("#save").addEventListener("click", () =>
-  download("words.json", JSON.stringify({ tuningId: tuningId(tuning), micStartedAt: mic.startedAt, utterances: utterances.map(({ raw: _, ...u }) => u) }, null, 1)),
+  download("words.json", JSON.stringify({ tuningId: tuningId(tuning), micStartedAt: mic.startedAt, utterances: utterances }, null, 1)),
 );
 draw();

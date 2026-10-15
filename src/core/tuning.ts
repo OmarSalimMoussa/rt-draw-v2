@@ -71,9 +71,8 @@ export const KNOBS: Knob[] = [
   K("ops.minDescriptionWords", 6, 1, 30, 1, "a new shape's description needs at least this many words"),
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
 
-  // Speech: turning the mic into timed words (speech playground; ElevenLabs Scribe, or the browser's free recognizer).
+  // Speech: turning the mic into timed words (ElevenLabs Scribe).
   patch("scribe", K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms")),
-  K("speech.onsetLeadMs", 300, 0, 1000, 50, "words start this long before the first partial arrives (browser recognizer, no word times)", "ms"),
   patch("scribe", K("speech.shiftMs", 0, -500, 500, 10, "moves Scribe's word times later (+) or earlier (-), for a constant offset", "ms"), 0),
   patch("scribe", K("speech.playBeforeMs", 80, 0, 500, 10, "playing a word starts this much before it", "ms"), 0),
   patch("scribe", K("speech.playAfterMs", 200, 0, 800, 10, "and runs this much past its end (Scribe's ends are tight)", "ms"), 0),

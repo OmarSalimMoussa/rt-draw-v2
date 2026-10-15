@@ -1,12 +1,11 @@
 // Your voice as timed words, on the same clock as the ink (performance.now()),
-// so a word can be matched to the stroke drawn while it was said. Two engines:
-// the browser's free recognizer (no word times, so they're estimated) and
-// ElevenLabs Scribe (real word times, paid per minute). The mic is recorded
+// so a word can be matched to the stroke drawn while it was said. ElevenLabs
+// Scribe gives every word its own time (paid per minute); the mic is recorded
 // alongside, for the waveform and to play a word back.
-import { DEFAULTS, type Tuning, patching } from "./tuning.ts";
+import { type Tuning, patching } from "./tuning.ts";
 
-/** A word and when it was said, in ms on the page clock. `estimated`: spread over the utterance, not measured. */
-export type Word = { word: string; t0: number; t1: number; estimated?: boolean; /** Scribe's own start and end, in seconds of audio. */ raw?: [number, number] };
+/** A word and when it was said, in ms on the page clock. */
+export type Word = { word: string; t0: number; t1: number; /** Scribe's own start and end, in seconds of audio. */ raw?: [number, number] };
 
 /** Scribe's seconds-into-the-recording → page-clock word times, under speech.shiftMs. */
 export const scribeWord = (word: string, start: number, end: number, mic: Mic, t: Tuning): Word => ({ word, t0: Math.round(mic.wall(start) + t["speech.shiftMs"]), t1: Math.round(mic.wall(end) + t["speech.shiftMs"]), raw: [start, end] });
@@ -15,7 +14,6 @@ export const scribeWord = (word: string, start: number, end: number, mic: Mic, t
 export type Utterance = {
   text: string;
   words: Word[];
-  engine: "browser" | "scribe";
   /** Speech start and end (ms, page clock). */
   t0: number;
   t1: number;
@@ -29,34 +27,6 @@ export type SpeechEvents = {
   onFinal: (u: Utterance) => void;
   onError: (error: string) => void;
 };
-
-export interface SpeechEngine {
-  start(): Promise<void>;
-  /** Resolves once the last words are in (Scribe finishes the utterance you were in). */
-  stop(): void | Promise<void>;
-}
-
-/**
- * Words with no times of their own, spread over the utterance by length: each
- * word gets a share of the span proportional to its letters (plus one for the
- * gap after it). Starts speech.onsetLeadMs before the first partial arrived.
- */
-export function estimateWords(text: string, firstPartialAt: number, endAt: number, t: Tuning = DEFAULTS): { words: Word[]; t0: number; features: Record<string, number> } {
-  const parts = text.trim().split(/\s+/).filter(Boolean);
-  const t0 = firstPartialAt - t["speech.onsetLeadMs"];
-  const span = Math.max(1, endAt - t0);
-  const weight = parts.map((w) => w.length + 1);
-  const total = weight.reduce((a, b) => a + b, 0) || 1;
-  let at = t0;
-  const words = parts.map((word, i) => {
-    const d = (span * weight[i]) / total;
-    // The word takes its letters' share; the extra one is the gap after it.
-    const w = { word, t0: Math.round(at), t1: Math.round(at + (d * word.length) / weight[i]), estimated: true };
-    at += d;
-    return w;
-  });
-  return { words, t0, features: { spanMs: Math.round(span), words: parts.length, msPerLetter: Math.round(span / total) } };
-}
 
 // ---- Mic: 16 kHz 16-bit mono, kept for the waveform and playback, streamed to Scribe when it's on.
 
@@ -167,75 +137,6 @@ export class Mic {
   }
 }
 
-// ---- Browser engine: free, interim text as you talk, no word times.
-
-type Recognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-};
-
-export const browserSpeechAvailable = () => "SpeechRecognition" in window || "webkitSpeechRecognition" in window;
-
-export class BrowserEngine implements SpeechEngine {
-  private rec?: Recognition;
-  private stopped = false;
-  /** When the current utterance's first partial arrived, and when its text last changed (≈ end of speech). */
-  private firstAt?: number;
-  private lastChangeAt = 0;
-  private lastText = "";
-  constructor(private events: SpeechEvents, private tuning: () => Tuning) {}
-
-  async start() {
-    const w = window as unknown as Record<string, new () => Recognition>;
-    const Rec = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!Rec) throw new Error("this browser has no speech recognizer");
-    this.stopped = false;
-    const rec = new Rec();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "en-US";
-    rec.onresult = (e) => {
-      const now = performance.now();
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        const text = r[0].transcript.trim();
-        if (!text) continue;
-        this.firstAt ??= now;
-        if (text !== this.lastText) {
-          this.lastText = text;
-          this.lastChangeAt = now;
-        }
-        if (!r.isFinal) {
-          this.events.onInterim(text);
-          continue;
-        }
-        // Speech ended about when the text last changed before this final.
-        const end = Math.min(this.lastChangeAt, now);
-        const est = estimateWords(text, this.firstAt, end, this.tuning());
-        this.events.onFinal({ text, words: est.words, engine: "browser", t0: est.t0, t1: end, finalAt: now, features: est.features });
-        this.firstAt = undefined;
-        this.lastText = "";
-      }
-    };
-    rec.onerror = (e) => e.error !== "no-speech" && e.error !== "aborted" && this.events.onError(`browser recognizer: ${e.error}`);
-    // Chrome ends sessions on its own after a while; keep listening until stopped.
-    rec.onend = () => !this.stopped && rec.start();
-    rec.start();
-    this.rec = rec;
-  }
-
-  stop() {
-    this.stopped = true;
-    this.rec?.stop();
-  }
-}
-
 // ---- Scribe engine: ElevenLabs realtime, word times measured by the service.
 
 /** How long Stop waits for Scribe to finish the last utterance. */
@@ -251,7 +152,7 @@ function base64(buf: ArrayBuffer) {
   return btoa(s);
 }
 
-export class ScribeEngine implements SpeechEngine {
+export class ScribeEngine {
   private ws?: WebSocket;
   private stopped = false;
   constructor(private events: SpeechEvents, private mic: Mic, private tuning: () => Tuning) {}
@@ -321,7 +222,7 @@ export class ScribeEngine implements SpeechEngine {
       const now = performance.now();
       const t0 = words[0]?.t0 ?? now;
       const t1 = words.at(-1)?.t1 ?? now;
-      this.events.onFinal({ text, words, engine: "scribe", t0, t1, finalAt: now, features: { spanMs: t1 - t0, words: words.length } });
+      this.events.onFinal({ text, words, t0, t1, finalAt: now, features: { spanMs: t1 - t0, words: words.length } });
       this.flushed?.();
       return;
     }

@@ -79,7 +79,7 @@ function update() {
       const w = words[l.word];
       const reading = readings[i] ? `<div class="muted">${kindLabel(readings[i])}${readings[i].targets.length ? ` → ${readings[i].targets.join(", ")}` : ""}</div>` : "";
       const options = words.map((x, j) => `<option value="${j}"${j === (want ?? -2) ? " selected" : ""}>${j}: ${esc(x.word)}</option>`).join("");
-      return `<tr><td><b>${l.n}</b>${reading}</td><td>${w ? `<b>"${esc(w.word)}"</b> ${l.offsetMs > 0 ? "+" : ""}${l.offsetMs} ms${w.estimated ? " (time estimated)" : ""}` : "-"} ${tick}<div class="muted">${esc(l.why)}</div><div class="muted stat">${esc(String(l.features.considered || "no candidates"))}</div></td><td><select data-key="${markKey(m)}"><option value="">(looks right)</option>${options}</select></td></tr>`;
+      return `<tr><td><b>${l.n}</b>${reading}</td><td>${w ? `<b>"${esc(w.word)}"</b> ${l.offsetMs > 0 ? "+" : ""}${l.offsetMs} ms` : "-"} ${tick}<div class="muted">${esc(l.why)}</div><div class="muted stat">${esc(String(l.features.considered || "no candidates"))}</div></td><td><select data-key="${markKey(m)}"><option value="">(looks right)</option>${options}</select></td></tr>`;
     })
     .join("");
   $("#stat").textContent = `${words.length} words · ${marks.length} marks from ${strokes.length} strokes${judged ? ` · links ${right} / ${judged} right` : ""}`;

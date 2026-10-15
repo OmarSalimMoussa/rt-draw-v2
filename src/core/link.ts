@@ -4,7 +4,7 @@ import type { Mark } from "./marks.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 /** A spoken (or typed) word and when it was said; matches src/core/speech.ts. */
-export type Word = { word: string; t0: number; t1: number; estimated?: boolean };
+export type Word = { word: string; t0: number; t1: number };
 
 export type Link = {
   /** The mark's number. */
@@ -48,7 +48,6 @@ export function linkInk(words: Word[], marks: Mark[], t: Tuning = DEFAULTS): { t
       candidates: inWindow.length,
       deictic: deictic.length,
       considered: inWindow.map((c) => `${words[c.i].word}@${Math.round(c.d)}`).join(" "),
-      estimated: words[pick.i].estimated ? 1 : 0,
     };
     return { n: m.n, word: pick.i, offsetMs: Math.round(pick.d), why, features };
   });
