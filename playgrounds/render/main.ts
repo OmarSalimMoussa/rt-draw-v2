@@ -22,7 +22,8 @@ $("#side").innerHTML = `
     <div class="stat" id="stat"></div>
     <pre class="log bad" id="errors"></pre>
   </div>
-  <div class="card"><h2>Clicked shape</h2><pre class="log" id="picked">Click a shape on the canvas.</pre></div>`;
+  <div class="card"><h2>Clicked shape</h2><pre class="log" id="picked">Click a shape on the canvas.</pre></div>
+  <div class="card"><h2>Id map</h2><table class="marks"><tbody id="idmap"></tbody></table></div>`;
 
 const src = $<HTMLTextAreaElement>("#src");
 const fixture = $<HTMLSelectElement>("#fixture");
@@ -34,6 +35,8 @@ function draw() {
   const ms = render(canvas, scene, { grid: $<HTMLInputElement>("#grid").checked ? DEFAULT_CELL : undefined, tags: $<HTMLInputElement>("#tags").checked });
   $("#stat").textContent = `${scene.shapes.size} shapes · ${scene.groups.size} groups · drawn in ${ms.toFixed(1)} ms`;
   $("#errors").textContent = errors.map((e) => `✗ ${e.line}\n   ${e.error}`).join("\n");
+  const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  $("#idmap").innerHTML = scene.stacked().map((sh) => `<tr><th>${esc(sh.id)}</th><td>${esc(sh.description)}</td></tr>`).join("");
 }
 
 let timer = 0;

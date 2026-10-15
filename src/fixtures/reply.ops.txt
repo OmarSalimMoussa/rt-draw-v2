@@ -1,12 +1,14 @@
-shape(hero-photo, round, 240 100 800 300)
+shape(hero-photo, round, 240 100 800 300, "big rounded photo of the owner: a smiling Black man dressed as a clown, top of the main column, faded so the headline pops")
 drawing(hero-photo, "smiling Black man dressed as a clown", fade:0.5)
-shape(hero-title, rect, 280 140 720 120, stroke:none)
+shape(hero-title, rect, 280 140 720 120, "the main headline in large white letters, centered over the hero photo", stroke:none)
 text(hero-title, "Honk Honk! Big Laughs Start Here", color:white, size:xl, align:center)
 layer(hero-title, above:hero-photo)
 Sure! I made the photo shorter so the title fits.
 shape(story, round, 300 380 680 240, fill:#3b2f63)
+shape(story, round, 300 380 680 240, "purple story card", fill:#3b2f63)
+shape(story, round, 300 380 680 240, "dark purple My Story card overlapping the bottom of the hero photo", fill:#3b2f63)
 text(nope, "this id does not exist")
-shape(story-title, rect, 340 400 600 60, stroke:none)
+shape(story-title, rect, 340 400 600 60, "the heading My story in white, centered at the top of the story card", stroke:none)
 text(story-title, "My story", size:l, color:white)
 move(hero-photo, 240 90 800 300)
 shape(cut-off, round, 300 640 680 8

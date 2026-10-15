@@ -29,6 +29,12 @@ export type Shape = {
   id: string;
   kind: Kind;
   box: Box;
+  /**
+   * What this shape is and what it's for, in full: "round photo of the owner, a smiling Black
+   * man dressed as a clown, top of the main column; the headline sits over it". Required:
+   * it's how words like "the photo of me" find this shape.
+   */
+  description: string;
   style: Style;
   text?: TextStyle;
   /** What the picture inside shows; drawn later by the picture model. */

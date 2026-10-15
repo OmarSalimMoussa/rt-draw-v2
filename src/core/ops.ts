@@ -1,5 +1,7 @@
 // The model's language: one op per line, each a visible change.
-//   shape(id, kind?, box?, style...)   add, or change only what's given
+//   shape(id, kind?, box?, "description", style...)
+//                                      add, or change only what's given; a new shape
+//                                      needs a full description (what it is, what it's for)
 //   text(id, "words", style...)        the text inside a shape
 //   drawing(id, "what it shows")       a picture inside a shape
 //   layer(id, front | back | above:other | below:other)
@@ -16,19 +18,29 @@ export type Parsed = { ok: true; op: Op } | { ok: false; line: string; error: st
 
 export const NAMES = ["shape", "text", "drawing", "layer", "move", "group", "remove"];
 export const DEFAULT_CELL = 40;
+/** A description shorter than this says too little to find the shape by later. */
+export const MIN_DESCRIPTION_WORDS = 6;
+
+function checkDescription(d: string) {
+  const words = d.trim().split(/\s+/).filter(Boolean).length;
+  if (words < MIN_DESCRIPTION_WORDS) throw new Error(`description too short (${words} words, need ${MIN_DESCRIPTION_WORDS}+): say what it is and what it's for`);
+  return d.trim();
+}
 
 /** Splits "a, \"b, c\", [d, e], key:val" at top-level commas. */
 function splitArgs(s: string): Arg[] {
   const args: Arg[] = [];
   let cur = "";
   let quoted = false;
+  let key: string | undefined;
   let inQuote = false;
   let depth = 0;
   const flush = () => {
-    const raw = quoted ? cur : cur.trim();
-    if (raw || quoted) args.push(toArg(raw, quoted));
+    if (quoted) args.push({ key, value: cur, quoted: true });
+    else if (cur.trim()) args.push(toArg(cur.trim()));
     cur = "";
     quoted = false;
+    key = undefined;
   };
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
@@ -39,9 +51,10 @@ function splitArgs(s: string): Arg[] {
     } else if (c === '"') {
       inQuote = true;
       quoted = true;
-      // A quoted arg may follow a key: text(id, color:"#fff") keeps its key.
-      if (cur.trim().endsWith(":")) cur = cur.trim();
-      else cur = "";
+      // A quoted arg may follow a key (color:"#fff"); colons inside the quotes are just words.
+      const k = /^([a-zA-Z][\w-]*):$/.exec(cur.trim());
+      key = k?.[1];
+      cur = "";
     } else if (c === "[") {
       depth++;
       cur += c;
@@ -56,14 +69,12 @@ function splitArgs(s: string): Arg[] {
   return args;
 }
 
-function toArg(raw: string, quoted: boolean): Arg {
-  if (!quoted && raw.startsWith("[") && raw.endsWith("]"))
-    return { value: raw, quoted, list: raw.slice(1, -1).split(",").map((x) => x.trim()).filter(Boolean) };
+/** An unquoted arg: a [list], key:value, or a bare value (an id, a kind, a box, a color). */
+function toArg(raw: string): Arg {
+  if (raw.startsWith("[") && raw.endsWith("]")) return { value: raw, quoted: false, list: raw.slice(1, -1).split(",").map((x) => x.trim()).filter(Boolean) };
   const m = /^([a-zA-Z][\w-]*):(.*)$/s.exec(raw);
-  // A colon inside a box or a color never starts a key, but "above:hero" does.
-  if (m && !quoted) return { key: m[1], value: m[2].trim(), quoted: false };
-  if (m && quoted) return { key: m[1], value: m[2], quoted: true };
-  return { value: raw, quoted };
+  if (m) return { key: m[1], value: m[2].trim(), quoted: false };
+  return { value: raw, quoted: false };
 }
 
 export function parseLine(raw: string): Parsed {
@@ -156,17 +167,23 @@ export function applyOp(scene: Scene, op: Op, cell = DEFAULT_CELL) {
   switch (op.name) {
     case "shape": {
       const rest = pos.slice(1);
-      const kindArg = rest.find((a) => KINDS.includes(a.value as Kind));
-      const boxArg = rest.find((a) => a !== kindArg);
+      const descArg = rest.find((a) => a.quoted);
+      const kindArg = rest.find((a) => !a.quoted && KINDS.includes(a.value as Kind));
+      const boxArg = rest.find((a) => !a.quoted && a !== kindArg);
       const existing = scene.get(id);
       if (!existing) {
         if (!boxArg) throw new Error(`new shape "${id}" needs a box`);
-        const shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), style: {} };
+        if (!descArg) throw new Error(`new shape "${id}" needs a "description" of what it is and what it's for`);
+        const shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: checkDescription(descArg.value), style: {} };
         styleFrom(op.args, shape.style);
         scene.add(shape);
       } else {
+        // Check everything before changing anything, so a rejected line leaves the shape as it was.
+        const description = descArg ? checkDescription(descArg.value) : undefined;
+        const box = boxArg ? parseBox(boxArg.value, cell) : undefined;
         if (kindArg) existing.kind = kindArg.value as Kind;
-        if (boxArg) existing.box = parseBox(boxArg.value, cell);
+        if (box) existing.box = box;
+        if (description) existing.description = description;
         styleFrom(op.args, existing.style);
       }
       return;

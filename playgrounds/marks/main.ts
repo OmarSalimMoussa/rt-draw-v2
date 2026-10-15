@@ -78,7 +78,7 @@ function update() {
         if (want === got) right++;
       }
       const mark = want ? (want === got ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>') : "";
-      const extra = r.kind === "sketch" ? `<div>${crop(m)}</div>` : `<div class="muted">→ ${r.targets.join(", ") || "-"}</div>`;
+      const extra = r.kind === "sketch" ? `<div>${crop(m)}</div>` : `<div class="muted">${r.targets.map((id) => `→ <b>${id}</b>: ${index.scene.get(id)?.description ?? ""}`).join("<br>") || "→ -"}</div>`;
       return `<tr><td>${m.n}</td><td><b style="color:${COLORS[r.kind]}">${got}</b> ${mark}<div class="muted">${r.why}</div>${extra}</td><td><select data-n="${m.n}"><option value="">(looks right)</option>${LABELS.map((l) => `<option${l === want ? " selected" : ""}>${l}</option>`).join("")}</select></td></tr>`;
     })
     .join("");
