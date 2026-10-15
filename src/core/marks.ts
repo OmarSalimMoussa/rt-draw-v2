@@ -1,6 +1,7 @@
 // Strokes drawn close together in time and space form one mark. A mark either
 // points at what's on the canvas (a loop, an arrow, a tap, an underline) or is
 // a sketch: "make something shaped like this, here".
+import { readArrow } from "./arrow.ts";
 import { type HitIndex, holds } from "./hittest.ts";
 import { type Pt, type Stroke, pathLength } from "./ink.ts";
 import type { Box } from "./scene.ts";
@@ -68,6 +69,14 @@ export function readMark(mark: Mark, hits: HitIndex, t: Tuning = TUNING): Readin
   if (len < t.tapPx && mark.strokes.length === 1) {
     const top = hits.top(start[0], start[1]);
     return top ? { kind: "pointing", how: "tap", targets: [top], why: "short tap on a shape" } : { kind: "sketch", how: "sketch", targets: [], why: "a dot in empty space" };
+  }
+
+  // A drawn arrow, whatever it starts and ends on: the tip says where it points.
+  const arrow = readArrow(mark.strokes.map((s) => s.points));
+  if (arrow.arrow && arrow.tip && arrow.tail) {
+    const from = hits.top(arrow.tail[0], arrow.tail[1]);
+    const toId = hits.top(arrow.tip[0], arrow.tip[1]);
+    return { kind: "pointing", how: "arrow", targets: [from, toId].filter((x): x is string => !!x), from, to: toId ?? { x: arrow.tip[0], y: arrow.tip[1] }, why: `arrow (${arrow.confidence}) from ${from ?? "empty space"} to ${toId ?? "empty space"}` };
   }
 
   const closed = len > 60 && span < len * t.closeRatio;

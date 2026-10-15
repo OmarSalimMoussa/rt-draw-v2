@@ -7,16 +7,17 @@
 </head>
 <body>
   <main class="home">
-    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. None of these pages call a model.</p>
+    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. Only the Arrow page calls a model: TypeSafe's Jev, a fraction of a cent per hundred marks, with a switch to turn it off.</p>
     <a class="card" href="/playgrounds/render/"><h2>1. Renderer</h2><span>A scene of layered shapes drawn in the doodle style: text inside shapes, picture placeholders, fade, z order, groups, optional grid and id tags.</span></a>
     <a class="card" href="/playgrounds/ops/"><h2>2. Ops stream</h2><span>Op lines streamed in token-sized chunks and applied the moment each line completes. Prose, unknown ids and cut-off lines show up as errors.</span></a>
     <a class="card" href="/playgrounds/ink/"><h2>3. Ink</h2><span>Draw with the pen: smooth strokes with a time on every point, ready to be matched to your words.</span></a>
     <a class="card" href="/playgrounds/hittest/"><h2>4. Hit-test</h2><span>Draw over a page and see which shapes each stroke touches, encloses, starts on and ends on.</span></a>
     <a class="card" href="/playgrounds/marks/"><h2>5. Marks</h2><span>Strokes grouped into marks and read as pointing (loop, arrow, tap, line, scribble) or sketch. Correct the readings, save the set, rerun it after changing the rules.</span></a>
+    <a class="card" href="/playgrounds/arrow/"><h2>6. Arrow or not</h2><span>Draw marks; a local geometry check says arrow or not and finds the tip in under a millisecond, and TypeSafe's Jev answers the same question from the points as text. Label them and compare.</span></a>
   </main>
   <script type="module">
     import { shell } from "/src/ui.ts";
-    shell("", "Playgrounds for the five building blocks that need no model calls.");
+    shell("", "Playgrounds for the building blocks, each tested alone. Only the Arrow page calls a model (Jev).");
   </script>
 </body>
 </html>

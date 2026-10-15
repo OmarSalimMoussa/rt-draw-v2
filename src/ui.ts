@@ -8,6 +8,7 @@ export const PLAYGROUNDS = [
   ["ink", "Ink"],
   ["hittest", "Hit-test"],
   ["marks", "Marks"],
+  ["arrow", "Arrow?"],
 ] as const;
 
 export function shell(current: string, blurb: string) {
