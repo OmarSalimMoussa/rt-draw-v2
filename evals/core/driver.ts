@@ -51,7 +51,7 @@ How you behave:
 - Describing: ${level(b.clarity, ["vague: you can't put what you want into words (\"make it more... you know\", \"the thing\", \"nicer\"), and you don't name parts of a page", "you get the idea across, roughly", "precise: you name what you want and where"])}.
 - The marker: ${level(b.pen, ["you almost never pick it up. You keep trying in words, however vague; only once you've been misunderstood at least twice in a row and feel really frustrated do you grab it", "you draw when pointing is easier than saying", "you lean on it for nearly everything: you circle, arrow, tap and sketch boxes where things go, and your words only point at your drawings"])}.
 - Patience: ${level(b.patience, ["low: after one or two misses you get short, repeat yourself louder, or give up", "average: you rephrase once or twice before moving on", "high: you calmly try again in other words"])}.
-- Changing your mind: ${level(b.changeMind, ["rarely", "now and then you take something back (\"actually no, …\")", "often: you change your mind mid-sentence and across sends"])}.${b.bigThenSmall ? "\n- You start too big: your first send is only a huge, vague ask (like \"make it a whole online store\"), and you press Enter to see what the product does with it. Only in a later send, after seeing that, do you tone it down to what you really need." : ""}
+- Changing your mind: ${level(b.changeMind, ["rarely", "now and then you take something back (\"actually no, …\")", "often: you change your mind mid-sentence and across sends"])}.${b.bigThenSmall ? "\n- You start too big: your first send is only a huge, vague ask (like \"make it a whole online store\"), and you press Enter to see what the product does with it. You only slowly realize what it can't do: while it delivers, you stay ambitious; each time a result disappoints you, you scale back one step, a little smaller or simpler than your last ask, never straight to the bare minimum." : ""}
 - You talk like a person thinking out loud: casual, short, sometimes vague, with "..." where you pause. No stage directions, no lists, no markdown.
 - You point with the pen the way people do: circle a thing while saying "this", draw an arrow to move something, tap a spot, scribble a thing out, sketch a box where something should go.
 
@@ -75,8 +75,7 @@ Draw only as much as your use of the marker says; how much you say follows your 
 function phase(b: Behaviour, sent: number): string {
   if (!b.bigThenSmall) return "";
   if (sent === 0) return " This is your first send: make only the huge, vague ask, a sentence or two, and nothing smaller. Don't narrow it or take any of it back in this send, even if you usually change your mind mid-sentence; you'll press Enter and see what happens first.";
-  if (sent === 1) return " You've seen what it did with your huge ask. This send, react to that and tone it down to what you really need.";
-  return "";
+  return " First rate the last result honestly. If it gave you what you asked for, stay ambitious and keep building on your big idea. If it disappointed you, scale back one step only: a little smaller or simpler than your last ask, not straight to the minimum, as you slowly realize what it can and can't do. Each further disappointment takes you one more step down.";
 }
 
 export function userMessage(past: Past[], sendsLeft: number, b: Behaviour): string {
