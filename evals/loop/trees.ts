@@ -3,7 +3,8 @@
 // them, so both arms measure with the same bridge and clock whatever the candidate
 // changed, plus the harness clone's node_modules as hard links (~0.1 s; v1 copied
 // 676 MB per tree). Trees are keyed by what the product is made of, not by sha, so a
-// commit that only moved evals/ or dev/ reuses its parent's tree.
+// commit that only moved evals/ or dev/ reuses its parent's tree, and by the harness's
+// evals/, so a re-pin (init --refresh, e.g. after the fixture bake) never serves an old one.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
@@ -18,9 +19,11 @@ export class LockfileDiffers extends Error {}
 
 const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-/** sha256 of the product's files at a commit, read from git's own blob ids (no checkout). */
+const harness = new Map<string, string>();
+/** sha256 of the product's files at a commit, read from git's own blob ids (no checkout), and of the harness's evals/ (once a process). */
 export function contentHash(sha: string, repo = paths().repo): string {
-  return createHash("sha256").update(git(repo, "ls-tree", "-r", sha, "--", ...PRODUCT_PATHS)).digest("hex");
+  if (!harness.has(repo)) harness.set(repo, evalsHash(repo));
+  return createHash("sha256").update(git(repo, "ls-tree", "-r", sha, "--", ...PRODUCT_PATHS)).update(harness.get(repo)!).digest("hex");
 }
 
 /** $RT_EVAL_HOME/trees/<contentHash> for a commit (or branch), built once: the commit without its evals/, the harness's evals/, linked node_modules. */

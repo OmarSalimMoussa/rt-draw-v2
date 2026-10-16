@@ -15,7 +15,8 @@
 // --script <file>: a JSON array of assistant turns [{content: [blocks], stop_reason?, usage?}],
 //   text and tool_use blocks; a request's turn is the number of assistant messages it carries.
 // --latency <jsonl>: replays the logged model time (firstMs − waitMs to first text, the rest
-//   spread over the chunks) of the log's lines in turn.
+//   spread over the chunks) of the log's lines in turn: a --replies role takes its own lines
+//   (those whose `from` is the role), any other request every line.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
@@ -70,11 +71,21 @@ export async function startFakeApi(opts: FakeOpts = {}) {
       replies.set(m[2], { role: m[1], texts: m[3] === "json" ? (JSON.parse(raw) as string[]) : [raw] });
     }
   const script: Turn[] = o.script ? JSON.parse(readFileSync(o.script, "utf8")) : [];
-  const timings: Timed[] = o.latency && existsSync(o.latency)
-    ? readFileSync(o.latency, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.firstMs !== undefined && !r.error)
-        .map((r) => ({ firstMs: r.firstMs - (r.waitMs ?? 0), restMs: r.ms - r.firstMs, chunks: Math.max(1, Math.round((r.outTokens ?? 40) / 20)) }))
-    : [];
-  let timingN = 0;
+  // Each role's own lines (a line's `from`) when the request's role is known, else every line in turn.
+  const timings = new Map<string, Timed[]>([["*", []]]);
+  if (o.latency && existsSync(o.latency))
+    for (const r of readFileSync(o.latency, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.firstMs !== undefined && !r.error)) {
+      const t = { firstMs: r.firstMs - (r.waitMs ?? 0), restMs: r.ms - r.firstMs, chunks: Math.max(1, Math.round((r.outTokens ?? 40) / 20)) };
+      timings.get("*")!.push(t);
+      if (r.from) timings.set(r.from, [...(timings.get(r.from) ?? []), t]);
+    }
+  const timingN = new Map<string, number>();
+  const timingOf = (role?: string) => {
+    const k = role && timings.has(role) ? role : "*";
+    const list = timings.get(k)!, n = timingN.get(k) ?? 0;
+    timingN.set(k, n + 1);
+    return list.length ? list[n % list.length] : undefined;
+  };
   const tokens: string[] = [];
 
   function limitHeaders(auth: string, status = o.status!): Record<string, string> {
@@ -123,7 +134,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
     const promptChars = JSON.stringify(b.system ?? "").length + JSON.stringify(b.messages).length;
     const write = Math.round(promptChars / 4);
     const oneHour = rec.ttls.includes("1h");
-    const timed = timings.length ? timings[timingN++ % timings.length] : undefined;
+    const timed = timingOf(rec.role);
 
     res.writeHead(200, { "content-type": "text/event-stream", ...limitHeaders(auth) });
     const ev = (type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);

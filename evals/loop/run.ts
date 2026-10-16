@@ -23,8 +23,10 @@ import { TUNING } from "../core/scenarios.ts";
 import { loadFixture } from "../fixtures/fixtures.ts";
 import { assemble, checkCalibration } from "../judge/calibrate.ts";
 import { canaryDue, runCanary } from "../judge/canary.ts";
-import { calibrationFile, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
+import { calibrationFile, combined, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
+import { readPacket } from "../judge/packet.ts";
 import { startFakeApi } from "../mock/fake-api.ts";
+import type { Label, PairRef } from "../pages/plugin.ts";
 import * as agents from "../optimizer/agents.ts";
 import { analystDigest, failureDigest, writeLossDigest, writeMissDigest } from "../optimizer/digest.ts";
 import { bankedScenes, cardOwnerReasons, diffOf, g0, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
@@ -37,6 +39,7 @@ import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
 import { DRIVE_VIEW, LOOP, configId } from "./config.ts";
 import { type ScanResult, compareCase, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
+import { closedPort } from "./gateway.ts";
 import { commitHistory, decisionRow, historyAdd, historyRead, historyRows, openHistory, ownerItem, recordDecision, recordMachine, triedIndex } from "./history.ts";
 import { freezeHuman, pageShot } from "./human.ts";
 import { pairedRatio } from "./latency.ts";
@@ -52,14 +55,14 @@ import { entryOrder, seedOf } from "./stats.ts";
 import { fakeApiReplies, stubPictures } from "./stubs.ts";
 import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
-import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Row, SceneJSON, SendOutcome } from "./types.ts";
+import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Judged, Row, SceneJSON, SendOutcome } from "./types.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
 
 const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/README.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   aa --shared --cases n                bench freeze                         human freeze
-  checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2]
+  checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
   status                               remetric <run>                       gc --trees`;
@@ -135,6 +138,8 @@ const championArm = (): ArmSpec => {
   return { sha, tree: treeOf(sha) };
 };
 const initFrom = () => maybe<{ from: string }>(join(paths().home, "init.json"))?.from;
+/** The branch init cloned (the owner's master; eval-build in a rehearsal): sync and init --refresh fetch it. */
+const upstream = () => maybe<{ branch?: string }>(join(paths().home, "init.json"))?.branch ?? "master";
 
 // ---- Tokens, the gateway, the rig
 
@@ -159,6 +164,8 @@ async function withGateway<T>(f: (gw: string) => Promise<T>, zeroCall = false): 
     await g.close();
   }
 }
+/** --mock-api for the agent sessions run here (the gateway sets up its own): nothing gets past the fake API. */
+const agentMock = async () => (o.mockApi ? { baseUrl: o.mockApi, deadProxyPort: await closedPort() } : undefined);
 const slotsHere = () => maybe<Machine>(paths().machine)?.slots ?? 1;
 async function withRig<T>(gw: string, trees: string[], f: (rig: Rig) => Promise<T>, slots = slotsHere()): Promise<T> {
   const rig = await openRig({ trees, gateway: gw, slots, port: o.port });
@@ -226,15 +233,16 @@ async function init() {
     // Re-pins only the harness: the champion takes the owner's master through `sync` alone.
     if (!existsSync(join(p.repo, ".git"))) throw new Error(`no loop clone at ${p.repo}: init --from <repo> first`);
     if (git(p.repo, "status", "--porcelain", "--untracked-files=no")) throw new Error(`${p.repo} has local changes: the harness is pinned, never edited`);
-    git(p.repo, "fetch", "-q", "origin", "master");
+    git(p.repo, "fetch", "-q", "origin", upstream());
     git(p.repo, "merge", "-q", "--ff-only", "FETCH_HEAD");
   } else {
     if (typeof o.f.from !== "string") throw new Error("init --from <the owner's checkout>");
     const from = resolve(o.f.from);
     if (existsSync(p.repo)) throw new Error(`${p.repo} exists: use init --refresh`);
-    execFileSync("git", ["clone", "-q", "--branch", "master", from, p.repo], { stdio: ["ignore", "pipe", "pipe"] });
-    git(p.repo, "branch", "loop/champion", "master");
-    put(join(p.home, "init.json"), { from, at: new Date().toISOString() });
+    const branch = git(from, "rev-parse", "--abbrev-ref", "HEAD");
+    execFileSync("git", ["clone", "-q", "--branch", branch, from, p.repo], { stdio: ["ignore", "pipe", "pipe"] });
+    git(p.repo, "branch", "loop/champion", branch);
+    put(join(p.home, "init.json"), { from, branch, at: new Date().toISOString() });
   }
   modules();
   const tag = pin();
@@ -299,7 +307,8 @@ async function ladderCmd() {
   fakeApiReplies(join(work, "replies"), {
     draw: promptOf("draw", DEFAULTS).system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), "draw-refs": promptOf("resolve", DEFAULTS).system, picture: promptOf("picture", DEFAULTS).system(DEFAULTS),
   });
-  const log = initFrom() && join(initFrom()!, ".data", "model-calls.jsonl");
+  // The owner's logged timings, or --latency's (a rehearsal: evals/mock/dry.ts writes them).
+  const log = str("latency") ?? (initFrom() && join(initFrom()!, ".data", "model-calls.jsonl"));
   const api = await startFakeApi({ replies: join(work, "replies"), latency: log && existsSync(log) ? log : undefined });
   // Its own home: fake calls must not reach the loop's meter or slot state.
   const gw = await spawnGateway({ home: join(work, "gateway"), tokens: fakeTokens(), mockApi: api.url });
@@ -459,7 +468,7 @@ async function bankCmd() {
 async function benchCmd() {
   if (o.pos[1] !== "freeze") throw new Error("bench freeze");
   openHistory();
-  const m = freeze();
+  const m = freeze({ heldout: num("heldout"), tuning: num("tuning") }); // smaller only in a rehearsal
   say(`bench freeze: B1, ${Object.keys(m.files).length} files, hash ${m.hash.slice(0, 12)}`);
 }
 async function humanCmd() {
@@ -489,9 +498,28 @@ async function checkpointCmd() {
   return ck.aa && !ck.aa.pass ? 1 : 0;
 }
 
+/** A rehearsal's labels, only on the fake API: the judge's own verdicts as the owner's, so `calib --check` runs end to end. */
+function fakeLabels() {
+  if (!o.mockApi) throw new Error("calib --fake-labels is for a dry run on the fake API: pass --mock-api");
+  const at = new Date().toISOString();
+  const pairs = JSON.parse(readFileSync(join(dirname(paths().labels), "pairs.json"), "utf8")) as PairRef[];
+  const lines = pairs.flatMap((p, i): Label[] => {
+    const dir = join(caseDir(p.run, p.case), "judge");
+    const [a, b] = (p.question === "craft" ? ["craft.json"] : ["fidelity-1.json", "fidelity-2.json"]).map((f) => maybe<Judged>(join(dir, f)));
+    if (!a) return [];
+    const label = combined(a, b);
+    const pos = readPacket(p.run, p.case).positions;
+    const left = p.swap ? pos.right : pos.left;
+    return [{ id: `fake-${i}`, pair: p.id, packet: `runs/${p.run}/cases/${p.case}/judge/packet.json`, subset: p.subset, question: p.question, side: label === "tie" ? "tie" : label === left ? "left" : "right", label, strength: label === "tie" ? null : "clear", ms: 0, at }];
+  });
+  appendFileSync(paths().labels, lines.map((l) => `${js(l)}\n`).join(""));
+  say(`calib: ${lines.length} fake labels (the judge's own verdicts) in ${paths().labels}; next: rte calib --check`);
+}
+
 /** §4.5: the contrast run and the label pairs, or the labels against the judge. */
 async function calib() {
   openHistory();
+  if (o.f["fake-labels"]) return fakeLabels();
   if (o.f.check) {
     const variant = num("variant") === 2 ? 2 : 1;
     if (variant === 2) needCap("calib --check --variant 2");
@@ -524,7 +552,7 @@ async function calib() {
 async function sync(gw: string, st: State): Promise<"merged" | "nothing" | "paused"> {
   const p = paths();
   openHistory();
-  git(p.repo, "fetch", "-q", "origin", "master");
+  git(p.repo, "fetch", "-q", "origin", upstream());
   const master = git(p.repo, "rev-parse", "FETCH_HEAD");
   const base = championSha();
   if (isAncestor(master, base)) {
@@ -754,7 +782,7 @@ async function build(gw: string, st: State, c: CardState) {
     if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
     if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
       if (c.card.kind === "knob") applyKnobs(wt, c.card.knobs ?? {});
-      else await engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token: await agents.slotToken(tokens(), gw) });
+      else await engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token: await agents.slotToken(tokens(), gw), mockApi: await agentMock() });
       if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     }
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
@@ -837,7 +865,7 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
     ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(),
   });
   const analysis = await engine().analyst(digest, run);
-  const r = await engine().critic({ run: `${st.stamp}-e${st.epoch}-critic`, token: await agents.slotToken(tokens(), gw), analysis, digest, tried: triedIndex(), tree: treeOf(sha) });
+  const r = await engine().critic({ run: `${st.stamp}-e${st.epoch}-critic`, token: await agents.slotToken(tokens(), gw), analysis, digest, tried: triedIndex(), tree: treeOf(sha), mockApi: await agentMock() });
   if (r.dropped.length) say(`critic: dropped ${r.dropped.join("; ")}`);
   return r.cards.slice(0, 3);
 }

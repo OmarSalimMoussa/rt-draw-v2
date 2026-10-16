@@ -327,7 +327,8 @@ function json(res: ServerResponse, status: number, body: unknown) {
 }
 
 /** A local port nothing listens on: every request that isn't to the fake API dies there. */
-async function closedPort(): Promise<number> {
+/** A local port nothing listens on: HTTPS_PROXY there makes any request past the fake API fail at once. */
+export async function closedPort(): Promise<number> {
   const s = netServer();
   await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
   const { port } = s.address() as { port: number };
