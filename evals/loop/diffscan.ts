@@ -66,14 +66,17 @@ const caseClass = (c: Omit<CaseScan, "set">): DecisionClass => (!c.affected ? "N
  */
 export async function scan(rig: Rig, o: Pick<RunSpec, "run" | "arms" | "seed" | "card" | "loadWaitMs" | "faults"> & { cases: string[] }): Promise<ScanResult> {
   const per = new Map<string, CaseScan>();
+  const caseScan = (id: string): CaseScan => ({ ...compareCase(o.run, id), set: json<CaseInfo>(caseFile(id, "case.json", o.run)).set });
   const classify = (id: string) => {
-    const c = { ...compareCase(o.run, id), set: json<CaseInfo>(caseFile(id, "case.json", o.run)).set };
+    const c = caseScan(id);
     per.set(id, c);
     return { affected: c.affected, class: caseClass(c) };
   };
   const { rows } = await runAB(rig, { ...o, kind: "scan", mode: "scan", share: true, classify });
-  const cases = rows.map((r) => per.get(r.case)!);
-  const tuning = cases.filter((c) => c.set === "tuning");
+  // A resumed scan reuses the cases it finished: they're compared from their files.
+  const cases = rows.map((r) => per.get(r.case) ?? caseScan(r.case));
+  // Refresh cases (set fresh) are tuning cases the bank added later.
+  const tuning = cases.filter((c) => c.set === "tuning" || c.set === "fresh");
   let cls: DecisionClass;
   let timed: ScanResult["timed"];
   if (tuning.some((c) => c.scene && !c.svg)) cls = "D";

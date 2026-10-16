@@ -1,0 +1,1056 @@
+// The loop's CLI and its coordinator (spec §7.1, §7.7, §8.1, §11): a script, never an LLM session (v1's Opus
+// coordinator re-read ~375k tokens a request, ~$72). Every step that can call a model goes through one gateway
+// process under a hard --cap, so a loop or retry bug stops at the cap instead of burning a window (v1 burned two
+// in a day). Tokens come only from the tokens file, read here (agents) and by the gateway, never from the
+// environment: a systemd unit doesn't see the caller's variables.
+//   node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts <command> [flags]      (`rte`, evals/README.md)
+// Every command takes --cap n, --tokens <file> (checks; default ~/.config/rt-eval/tokens.env), --dev-token (the
+// dev plugin's own token, only under --cap 60), --mock-api <url> (every Claude process on that fake API, checks),
+// --port n (the first arm server's, default 5300) and --fakes <module> (checks: a canned critic, engineer, judge).
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { arch } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { View } from "../../src/core/board.ts";
+import { SCREEN } from "../../src/core/board.ts";
+import { HitIndex } from "../../src/core/hittest.ts";
+import { promptOf } from "../../src/core/prompts.ts";
+import { plan, prompt } from "../../src/core/resolve.ts";
+import { DEFAULTS } from "../../src/core/tuning.ts";
+import { TUNING } from "../core/scenarios.ts";
+import { loadFixture } from "../fixtures/fixtures.ts";
+import { assemble, checkCalibration } from "../judge/calibrate.ts";
+import { canaryDue, runCanary } from "../judge/canary.ts";
+import { calibrationFile, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
+import { startFakeApi } from "../mock/fake-api.ts";
+import * as agents from "../optimizer/agents.ts";
+import { analystDigest, failureDigest, writeLossDigest, writeMissDigest } from "../optimizer/digest.ts";
+import { bankedScenes, cardOwnerReasons, diffOf, g0, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
+import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, harnessTag, openRig, product, runAB } from "./ab.ts";
+import { bake } from "./bake.ts";
+import { type BankSet, buildBank, refresh } from "./bank.ts";
+import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
+import { type Page, capture } from "./chrome.ts";
+import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
+import { DRIVE_VIEW, LOOP, configId } from "./config.ts";
+import { type ScanResult, compareCase, scan } from "./diffscan.ts";
+import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
+import { commitHistory, decisionRow, historyAdd, historyRead, historyRows, openHistory, ownerItem, recordDecision, recordMachine, triedIndex } from "./history.ts";
+import { freezeHuman, pageShot } from "./human.ts";
+import { pairedRatio } from "./latency.ts";
+import { type Machine, type WaveSend, heartbeat, ladder, onAC, refuseFactorySlice, sampleLoad } from "./load.ts";
+import { type MeterCall, readMeter, rollup } from "./meter.ts";
+import { meterOf, readRows, rowOf } from "./metrics.ts";
+import { paths } from "./paths.ts";
+import { ready } from "./ready.ts";
+import { caseDir, put, runFile, voidCase } from "./record.ts";
+import { remetric } from "./remetric.ts";
+import { BUDGET, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
+import { entryOrder, seedOf } from "./stats.ts";
+import { fakeApiReplies, stubPictures } from "./stubs.ts";
+import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
+import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
+import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Row, SceneJSON, SendOutcome } from "./types.ts";
+import { type Decision, type LoopState, decide } from "./verdict.ts";
+
+const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/README.md)
+  init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
+  smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
+  aa --shared --cases n                bench freeze                         human freeze
+  checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2]
+  sync --cap n                         export <host | /dir>                 decide <branch> --cap n
+  loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
+  status                               remetric <run>                       gc --trees`;
+const CO_AUTHOR = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
+/** R8 and `aa`'s default: 16 cases, the champion against itself in timed replay. */
+const AA_CASES = 16;
+/** The smoke's driver session: 3 sends from the blank start (§11 step 1). */
+const SMOKE_SENDS = 3;
+/** How long U3 waits for the "off" process its second call left waiting. */
+const U3_WARM_MS = 3000;
+/** Sends per slot at each ladder step. */
+const LADDER_ROUNDS = 3;
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+/** "make the nav pink", spoken (the ladder's send and U3's resolver case). */
+const SPOKEN = ([["make", 0, 180], ["the", 200, 300], ["nav", 320, 520], ["pink", 560, 800]] as const).map(([word, t0, t1]) => ({ word, t0, t1 }));
+
+// ---- Flags, logs, git
+
+type Opts = { cmd: string; pos: string[]; f: Record<string, string | true>; cap?: number; tokens?: string; devToken?: true | string; mockApi?: string; port: number };
+let o: Opts = { cmd: "", pos: [], f: {}, port: 5300 };
+const str = (k: string) => (typeof o.f[k] === "string" ? (o.f[k] as string) : undefined);
+const num = (k: string) => (str(k) === undefined ? undefined : Number(str(k)));
+function parse(argv: string[]): Opts {
+  const pos: string[] = [];
+  const f: Record<string, string | true> = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (!argv[i].startsWith("--")) pos.push(argv[i]);
+    else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("--")) f[argv[i].slice(2)] = argv[++i];
+    else f[argv[i].slice(2)] = true;
+  }
+  const cap = typeof f.cap === "string" ? Number(f.cap) : undefined;
+  if (f.cap !== undefined && !(Number.isInteger(cap) && cap! >= 0)) throw new Error(`--cap takes a whole number of calls`);
+  return { cmd: pos[0] ?? "", pos, f, cap, tokens: typeof f.tokens === "string" ? f.tokens : undefined, devToken: f["dev-token"], mockApi: typeof f["mock-api"] === "string" ? f["mock-api"] : undefined, port: Number(f.port ?? 5300) };
+}
+function needCap(what = o.cmd) {
+  if (o.cap === undefined) throw new Error(`${what} makes real model calls: it needs --cap n (the gateway refuses call n+1)`);
+}
+
+/** Every line also goes to $RT_EVAL_HOME/logs/: a closed terminal (launch.sh) loses only the piped copy. */
+function say(line: string) {
+  console.log(line);
+  try {
+    mkdirSync(paths().logs, { recursive: true });
+    appendFileSync(join(paths().logs, `run-${new Date().toISOString().slice(0, 10)}.log`), `${new Date().toISOString()} ${o.cmd}: ${line}\n`);
+  } catch {
+    // no valid home yet (status, a refusal): the terminal has it
+  }
+}
+const msg = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const js = JSON.stringify;
+const maybe = <T>(f: string): T | undefined => (existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : undefined);
+const git = (dir: string, ...a: string[]) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+function tryGit(dir: string, ...a: string[]): string | undefined {
+  try {
+    return git(dir, ...a);
+  } catch {
+    return undefined; // a non-zero exit is the answer
+  }
+}
+/** The loop commits as itself where git has no identity. */
+const ident = (dir: string) => (tryGit(dir, "config", "user.email") ? [] : ["-c", "user.name=rt-eval loop", "-c", "user.email=rt-eval@localhost"]);
+function commitAll(dir: string, message: string): string {
+  git(dir, "add", "-A");
+  git(dir, ...ident(dir), "commit", "-q", "-m", message, "-m", CO_AUTHOR);
+  return git(dir, "rev-parse", "HEAD");
+}
+const isAncestor = (a: string, b: string) => tryGit(paths().repo, "merge-base", "--is-ancestor", a, b) !== undefined;
+const championSha = () => git(paths().repo, "rev-parse", "loop/champion");
+const championArm = (): ArmSpec => {
+  const sha = championSha();
+  return { sha, tree: treeOf(sha) };
+};
+const initFrom = () => maybe<{ from: string }>(join(paths().home, "init.json"))?.from;
+
+// ---- Tokens, the gateway, the rig
+
+let tokenCache: Token[] | undefined;
+/** The loop's tokens in memory (1–3 from the tokens file, or --dev-token's one); never printed or written. */
+const tokens = () => (tokenCache ??= o.devToken ? loadDevToken(o.cap, typeof o.devToken === "string" ? o.devToken : undefined) : loadTokens(o.tokens));
+
+/** Throwaway tokens for a gateway that must make no call: replay and scan only, cap 1, a dead API address. */
+function fakeTokens(): string {
+  const f = join(paths().home, "meter", "zero-call-tokens.env");
+  if (!existsSync(f)) {
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, `${[1, 2, 3].map((n) => `RT_EVAL_TOKEN_${n}=sk-ant-oat01-zero-call-${n}-${randomBytes(8).toString("hex")}`).join("\n")}\n`, { mode: 0o600 });
+  }
+  return f;
+}
+async function withGateway<T>(f: (gw: string) => Promise<T>, zeroCall = false): Promise<T> {
+  const g = await spawnGateway(zeroCall ? { cap: 1, tokens: fakeTokens(), mockApi: "http://127.0.0.1:9" } : { cap: o.cap, tokens: o.tokens, devToken: o.devToken, mockApi: o.mockApi });
+  try {
+    return await f(g.url);
+  } finally {
+    await g.close();
+  }
+}
+const slotsHere = () => maybe<Machine>(paths().machine)?.slots ?? 1;
+async function withRig<T>(gw: string, trees: string[], f: (rig: Rig) => Promise<T>, slots = slotsHere()): Promise<T> {
+  const rig = await openRig({ trees, gateway: gw, slots, port: o.port });
+  try {
+    return await f(rig);
+  } finally {
+    await rig.close();
+  }
+}
+/** Each case slot's champion page, for driver sessions. */
+const championPages = (rig: Rig, tree: string) => Promise.all(Array.from({ length: rig.slots }, async (_, k): Promise<Pages> => ({ A: (await rig.tab(k, "A", tree)).page })));
+const tuningIdOf = async (page: Page) => (await page.eval<{ tuningId: string }>("rtEval.health()")).tuningId;
+
+/** Done, unvoided banked cases of these sets, by id. */
+function banked(sets: string[]): string[] {
+  const dir = paths().bankCases;
+  return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done")) && sets.includes(maybe<CaseInfo>(join(dir, id, "case.json"))!.set)).sort();
+}
+/** Cases in a seeded order that keeps each origin session together (as decisions enter them). */
+const ordered = (ids: string[], seed: string) => entryOrder(ids, (id) => maybe<CaseInfo>(join(paths().bankCase(id), "case.json"))!.originSession, seedOf(seed));
+
+// ---- The history branch
+
+/** eval/history-import (pushed by another machine's `export`) into eval/history: a fast-forward, else a merge; a conflict goes to the owner. */
+function importHistory() {
+  if (tryGit(paths().repo, "rev-parse", "--verify", "-q", "refs/heads/eval/history-import") === undefined) return;
+  const dir = openHistory();
+  if (tryGit(dir, "merge-base", "--is-ancestor", "eval/history-import", "HEAD") !== undefined) return;
+  if (tryGit(dir, "merge", "-q", "--ff-only", "eval/history-import") !== undefined) return say("history: fast-forwarded to eval/history-import");
+  if (tryGit(dir, ...ident(dir), "merge", "-q", "--no-edit", "eval/history-import") !== undefined) return say("history: merged eval/history-import");
+  tryGit(dir, "merge", "--abort");
+  ownerItem("eval/history and eval/history-import conflict: merge them by hand in $RT_EVAL_HOME/history");
+  commitHistory("owner list: a history import to merge by hand");
+}
+
+// ---- init, export, status, ready
+
+/** The clone's node_modules: hard links to the owner's when the lockfiles match (~0.1 s), else npm ci. */
+function modules() {
+  const p = paths();
+  const from = initFrom();
+  const lockOf = (d: string) => (existsSync(join(d, "package-lock.json")) ? readFileSync(join(d, "package-lock.json"), "utf8") : "");
+  const stamp = join(p.home, "modules.lock");
+  if (existsSync(join(p.repo, "node_modules")) && maybe<string>(stamp) === lockOf(p.repo)) return;
+  rmSync(join(p.repo, "node_modules"), { recursive: true, force: true }); // the clone's own copy (links), never the owner's files
+  if (from && existsSync(join(from, "node_modules")) && lockOf(from) === lockOf(p.repo)) {
+    execFileSync("cp", ["-al", join(from, "node_modules"), join(p.repo, "node_modules")]);
+    rmSync(join(p.repo, "node_modules", ".vite"), { recursive: true, force: true });
+  } else execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: p.repo, stdio: "inherit" });
+  writeFileSync(stamp, js(lockOf(p.repo)));
+}
+/** Tags the harness's HEAD eval-harness-<n> unless it's at one already. */
+function pin(): string {
+  const r = paths().repo;
+  const at = tryGit(r, "describe", "--tags", "--exact-match", "--match", "eval-harness-*", "HEAD");
+  if (at) return at;
+  const n = Math.max(0, ...git(r, "tag", "-l", "eval-harness-*").split("\n").filter(Boolean).map((t) => Number(t.split("-").pop())));
+  git(r, "tag", `eval-harness-${n + 1}`);
+  return `eval-harness-${n + 1}`;
+}
+
+async function init() {
+  const p = paths();
+  if (o.f.refresh) {
+    // Re-pins only the harness: the champion takes the owner's master through `sync` alone.
+    if (!existsSync(join(p.repo, ".git"))) throw new Error(`no loop clone at ${p.repo}: init --from <repo> first`);
+    if (git(p.repo, "status", "--porcelain", "--untracked-files=no")) throw new Error(`${p.repo} has local changes: the harness is pinned, never edited`);
+    git(p.repo, "fetch", "-q", "origin", "master");
+    git(p.repo, "merge", "-q", "--ff-only", "FETCH_HEAD");
+  } else {
+    if (typeof o.f.from !== "string") throw new Error("init --from <the owner's checkout>");
+    const from = resolve(o.f.from);
+    if (existsSync(p.repo)) throw new Error(`${p.repo} exists: use init --refresh`);
+    execFileSync("git", ["clone", "-q", "--branch", "master", from, p.repo], { stdio: ["ignore", "pipe", "pipe"] });
+    git(p.repo, "branch", "loop/champion", "master");
+    put(join(p.home, "init.json"), { from, at: new Date().toISOString() });
+  }
+  modules();
+  const tag = pin();
+  openHistory();
+  importHistory();
+  say(`init: ${p.repo} at ${tag}, champion ${championSha().slice(0, 12)}, history at ${p.history}`);
+}
+
+/** Copies what another machine can't rebuild for free (§7.8), never with --delete; eval/history goes over as eval/history-import. */
+async function exportTo() {
+  const host = o.pos[1];
+  if (!host) throw new Error("export <host> (its ~/rt-eval) or export </absolute/dir> (that RT_EVAL_HOME)");
+  const p = paths();
+  const there = host.startsWith("/") ? host : `${host}:rt-eval`;
+  const dirs = ["bank", "cache/replies", "cache/blobs", "labels", "human"].filter((d) => existsSync(join(p.home, d)));
+  execFileSync("rsync", ["-aR", ...dirs, `${there}/`], { cwd: p.home, stdio: ["ignore", "inherit", "inherit"] });
+  openHistory();
+  git(p.repo, "push", "-q", "--force", `${there}/repo`, "eval/history:refs/heads/eval/history-import");
+  say(`export: ${dirs.join(", ")} and eval/history (as eval/history-import) → ${there}; there: rte init --refresh`);
+}
+
+async function status() {
+  const loaded = tokens().length; // a tokens file at any mode but 600, or inside a repo, fails here
+  const inhibit = spawnSync("systemd-inhibit", ["--list", "--no-pager"], { encoding: "utf8" });
+  const p = paths();
+  const st = readState();
+  for (const l of [
+    `slots loaded: ${loaded} (${o.devToken ? "the dev plugin's token" : (o.tokens ?? "~/.config/rt-eval/tokens.env")})`,
+    `cap: ${o.cap ?? "none"}`, `cwd: ${process.cwd()}`, `node: ${process.version} (${process.execPath})`,
+    `launched: ${process.env.RT_EVAL_LAUNCHED === "1" ? "yes" : "no"}`,
+    `inhibitor: ${inhibit.status === 0 ? (inhibit.stdout.includes("rt eval") ? "held ('rt eval')" : "not held") : "n/a"}`,
+    `home: ${p.home}; champion ${tryGit(p.repo, "rev-parse", "--short", "loop/champion") ?? "none (init first)"}`,
+    `loop: ${st ? `epoch ${st.epoch}, ${st.cards.filter((c) => c.status === "done").length} of ${st.cards.length} cards decided${st.blocked ? `; blocked: ${st.blocked}` : ""}` : "not started"}; lock ${existsSync(p.lock) ? readFileSync(p.lock, "utf8") : "free"}`,
+  ]) say(l);
+}
+
+async function readyCmd() {
+  const results = await ready({ stub: !!o.f.stub, mockApi: !!o.f["mock-api"], port: o.port, repo: initFrom(), aaCheck: () => aa(AA_CASES) });
+  const failed = results.filter((r) => !r.ok).map((r) => r.id);
+  if (existsSync(join(paths().repo, ".git"))) {
+    openHistory();
+    historyAdd("health.jsonl", { at: new Date().toISOString(), kind: "ready", pass: !failed.length, detail: { harness: harnessTag(), failed, skipped: results.filter((r) => r.skipped).map((r) => r.id) } });
+    commitHistory(`ready: ${failed.length ? `FAIL ${failed.join(" ")}` : "ok"}`);
+  }
+  say(failed.length ? `ready: FAIL ${failed.join(" ")}` : "ready: ok");
+  return failed.length ? 1 : 0;
+}
+/** The last readiness run passed, at this harness tag, within a day (§7.5: before every recording session). */
+function readyOk(): boolean {
+  const dir = join(paths().home, "ready");
+  const last = (existsSync(dir) ? readdirSync(dir).filter((d) => d.startsWith("ready-")).sort() : []).at(-1);
+  const r = last ? maybe<{ at: string; harnessTag: string | null; results: { ok: boolean }[] }>(join(dir, last, "ready.json")) : undefined;
+  return !!r && r.results.every((x) => x.ok) && (r.harnessTag ?? "") === harnessTag() && Date.now() - Date.parse(r.at) < DAY;
+}
+
+// ---- The zero-call measurements: the ladder and the shared A/A
+
+/** N8: the concurrency knee on a fake API (logged latencies), 0 model calls; machine.json and history/machine/<host>.json. */
+async function ladderCmd() {
+  const champ = championArm();
+  const work = join(paths().home, "ladder");
+  fakeApiReplies(join(work, "replies"), {
+    draw: promptOf("draw", DEFAULTS).system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), "draw-refs": promptOf("resolve", DEFAULTS).system, picture: promptOf("picture", DEFAULTS).system(DEFAULTS),
+  });
+  const log = initFrom() && join(initFrom()!, ".data", "model-calls.jsonl");
+  const api = await startFakeApi({ replies: join(work, "replies"), latency: log && existsSync(log) ? log : undefined });
+  // Its own home: fake calls must not reach the loop's meter or slot state.
+  const gw = await spawnGateway({ home: join(work, "gateway"), tokens: fakeTokens(), mockApi: api.url });
+  try {
+    const s0 = loadFixture("toyshop-home", { pictures: {} }).scene;
+    const { scene, start } = loadFixture("toyshop-home", { pictures: stubPictures(s0) });
+    const send = `rtEval.send(${js({ words: SPOKEN, strokes: [] })})`;
+    const machine = await ladder((slots) => withRig(gw.url, [champ.tree], async (rig) => {
+      const sends: WaveSend[] = [];
+      for (let round = 0; round < LADDER_ROUNDS; round++)
+        await Promise.all(Array.from({ length: slots }, async (_, k) => {
+          const run = `ladder-${slots}`, id = `${run}-${round}-${k}`;
+          const tabs = await Promise.all((["A", "B"] as Arm[]).map((a) => rig.tab(k, a, champ.tree)));
+          for (const t of tabs) await loadPage(t.page, run, id, scene.toJSON(), start);
+          const origin = await Promise.all(tabs.map((t) => t.page.eval<number>("performance.timeOrigin")));
+          const t0 = performance.now();
+          const out = await Promise.all(tabs.map((t) => t.page.eval<SendOutcome>(send)));
+          const wallMs = performance.now() - t0;
+          const s1 = performance.now();
+          await capture(tabs[0].page, { width: DRIVE_VIEW.screenW, quality: DRIVE_VIEW.jpegQuality });
+          const shotMs = performance.now() - s1;
+          const end = (await endCase(run, id, gw.url)) as { loopP99Ms: number };
+          sends.push({ wallMs, shotMs, longTasksMs: Math.max(...out.map((x) => x.timing.longTasksMs)), dispatchOffsetMs: Math.abs(origin[0] + out[0].timing.enterAt - origin[1] - out[1].timing.enterAt), loopDelayP99Ms: end.loopP99Ms, load: sampleLoad() });
+        }));
+      return sends;
+    }, slots), num("max") ?? 12);
+    say(`ladder: ${machine.slots} case slots, dispatch limit ${machine.dispatchLimitMs.toFixed(1)} ms (${machine.steps.map((s) => `${s.slots} ${s.ok ? "ok" : s.why}`).join("; ")})`);
+    if (existsSync(join(paths().repo, ".git"))) {
+      openHistory();
+      recordMachine();
+      commitHistory(`ladder: ${machine.host} runs ${machine.slots} case slots`);
+    }
+  } finally {
+    await gw.close();
+    await api.close();
+  }
+}
+
+/** R8: the champion against itself in timed replay, shared: identical requests and scenes, TTFC ×1.00 ± 0.03, 0 calls. */
+async function aa(n: number): Promise<{ ok: boolean; detail: string }> {
+  const ids = ordered(banked(["tuning", "fresh"]), "aa").slice(0, n);
+  if (ids.length < n) return { ok: false, detail: `the bank has ${ids.length} tuning cases (want ${n})` };
+  const champ = championArm();
+  return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
+    const run = `aa-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const { rows } = await runAB(rig, { run, kind: "aa", arms: { A: champ, B: champ }, mode: "replay", share: true, seed: run, cases: ids });
+    const same = ids.filter((id) => !compareCase(run, id).affected).length;
+    const ttfc = pairedRatio(rows, "ttfc");
+    const calls = (await gatewayStatus(gw)).calls as number;
+    const ok = same === n && calls === 0 && !!ttfc && Math.abs(ttfc.est - 1) <= LOOP.nTimingBand;
+    return { ok, detail: `${same} of ${n} cases identical, paired TTFC ×${ttfc?.est.toFixed(3) ?? "?"}, ${calls} calls (${run})` };
+  }), true);
+}
+async function aaCmd() {
+  if (!o.f.shared) throw new Error("only aa --shared is built here: the unshared A/A is checkpoint 0 (checkpoint --zero)");
+  const r = await aa(num("cases") ?? AA_CASES);
+  say(`aa: ${r.ok ? "ok" : "FAIL"} ${r.detail}`);
+  return r.ok ? 0 : 1;
+}
+
+// ---- Setup steps with real calls (§11), each under its cap
+
+/** One product call the way an arm page makes it (U3's case "u3"): its text. */
+async function productCall(gw: string, run: string, body: object): Promise<string> {
+  const res = await fetch(`${gw}/api/model`, { method: "POST", headers: { "content-type": "application/json", "x-rt-run": run, "x-rt-case": "u3", "x-rt-arm": "A", "x-rt-slot": "0" }, body: js(body) });
+  return (await res.text()).split("\n").filter(Boolean).map((l) => (JSON.parse(l) as { text?: string }).text ?? "").join("");
+}
+const parses = (t: string) => {
+  try {
+    return !!JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
+  } catch {
+    return false;
+  }
+};
+
+/** §11 step 1, pinned to the blank start: every line must pass. */
+async function smoke() {
+  needCap();
+  const champ = championArm();
+  const run = `smoke-${stampNow()}`;
+  let fails = 0;
+  const line = (ok: boolean | "note", what: string) => {
+    if (ok === false) fails++;
+    say(`${ok === "note" ? "note" : ok ? "ok  " : "FAIL"} ${what}`);
+  };
+  await withGateway(async (gw) => {
+    const t = tokens();
+    line(true, `status: ${t.length} token slots, cap ${o.cap}, launched ${process.env.RT_EVAL_LAUNCHED === "1" ? "yes" : "no"}`);
+    // U2: one tiny call per slot, so each slot reports its own reset.
+    for (const k of t) await ask({ role: "probe", model: "haiku", system: "Answer with one word.", user: "Ready?", run, token: k.slot }, gw);
+    const slots = (await gatewayStatus(gw)).slots as { slot: number; resetsAt?: number }[];
+    if (t.length < 2) line("note", "U2: skipped: one token");
+    else line(slots.every((s) => s.resetsAt) && new Set(slots.map((s) => s.resetsAt)).size === slots.length, `U2: the slots' resetsAt ${slots.map((s) => s.resetsAt).join(", ")} differ`);
+    // U3: three Haiku resolver calls, thinking auto / off / off; the third on the "off" process the second left waiting.
+    const { scene } = loadFixture("toyshop-home", { pictures: {} });
+    const user = prompt(plan(SPOKEN, [], scene, new HitIndex(scene), DEFAULTS), scene);
+    const texts: string[] = [];
+    for (const thinking of ["auto", "off", "off"]) {
+      if (texts.length === 2) await sleep(U3_WARM_MS);
+      texts.push(await productCall(gw, run, { model: "haiku", system: promptOf("resolve", DEFAULTS).system, user, thinking, from: "draw-refs" }));
+    }
+    const u3 = meterOf(run).filter((l) => l.case === "u3");
+    line(u3.length === 3 && u3.slice(1).every((l) => l.thinkingTokens === 0) && texts.every(parses) && u3.every((l) => (l.firstMs ?? Infinity) < 2000) && u3[2].readyAtTake === true,
+      `U3: thinking tokens ${u3.map((l) => l.thinkingTokens).join("/")}, first text ${u3.map((l) => l.firstMs).join("/")} ms, third call ${u3[2]?.readyAtTake ? "on a warmed process" : "cold"}`);
+    await withRig(gw, [champ.tree], async (rig) => {
+      const page = (await rig.tab(0, "A", champ.tree)).page;
+      const s = { ...(TUNING.find((x) => x.start === "blank") ?? TUNING[0]), start: "blank" as const, sends: SMOKE_SENDS };
+      const ctx: DriveCtx = { run, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(page) } }, harnessTag: harnessTag() };
+      const sess = await driveSession(ctx, s, { A: page }, { bank: "smoke", session: 1, deposit: true });
+      // The smoke's cases leave the bank at once: they check the harness, they're no fork points.
+      const kept = join(paths().run(run), "bank");
+      mkdirSync(kept, { recursive: true });
+      for (const id of sess.banked) renameSync(paths().bankCase(id), join(kept, id));
+      const events = existsSync(runFile(run, "events.jsonl")) ? readFileSync(runFile(run, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { v: string; why: string }) : [];
+      line(sess.banked.length >= 2 && !events.length, `driver session: ${sess.banked.length} of ${SMOKE_SENDS} sends banked (${sess.ended}), ${events.length} harness events${events.length ? `: ${events.map((e) => `${e.v} ${e.why}`).join("; ")}` : ""}`);
+      const ids = sess.banked.slice(0, 2);
+      const ab = `${run}-ab`;
+      const r = await runAB(rig, { run: ab, kind: "smoke", arms: { A: champ, B: champ }, mode: "live", share: false, seed: ab, judge: judging(ab, { seed: ab, craft: "none" }), cases: ids, source: (id) => join(kept, id) });
+      line(r.rows.length === ids.length && r.rows.every((x) => !x.void) && ids.every((id) => existsSync(join(caseDir(ab, id), "judge", "fidelity-1.json"))), `unshared A/B: ${r.rows.length} cases, judged${r.rows.some((x) => x.void) ? `, voided: ${r.rows.map((x) => x.void).filter(Boolean).join("; ")}` : ""}`);
+    });
+  });
+  const live = readMeter(paths().calls).filter((l): l is MeterCall => !("agent" in l) && l.run.startsWith(run) && l.mode === "live" && l.shared !== "follower");
+  line(live.some((l) => l.fiveHour !== undefined && l.fiveHour !== null) || "note", `U1: ${live.filter((l) => l.fiveHour != null).length} of ${live.length} calls carried five-hour utilization (none: the meter uses the W estimate)`);
+  line(live.every((l) => l.cacheWrite1h === 0), `cacheWrite1h 0 on all ${live.length} calls`);
+  line(live.every((l) => !!l.servedModel), `served models: ${[...new Set(live.map((l) => l.servedModel))].join(", ")}`);
+  say(`smoke: ${fails ? `FAIL (${fails} lines)` : "ok"}, ${live.length} calls`);
+  return fails ? 1 : 0;
+}
+
+async function bakeCmd() {
+  needCap();
+  const champ = championArm();
+  return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
+    const page = (await rig.tab(0, "A", champ.tree)).page;
+    page.labels.run = `bake-${stampNow()}`;
+    const r = await bake(page);
+    say(`bake: ${Object.keys(r.pictures).length} pictures in ${r.file}${r.missing.length ? `; still undrawn: ${r.missing.join(", ")}` : ""}${r.stopped ? ` (${r.stopped})` : ""}`);
+    say(`review them, then commit only that file (§11 step 2) and rte init --refresh`);
+    return r.missing.length ? 1 : 0;
+  }, 1));
+}
+
+async function bankCmd() {
+  if (o.pos[1] !== "build") throw new Error("bank build --tuning n --heldout-gate n --heldout-chart n --cap n");
+  needCap("bank build");
+  const sets: BankSet[] = (["tuning", "heldout-gate", "heldout-chart"] as const).map((set) => ({ set, sessions: num(set) ?? 0 })).filter((s) => s.sessions);
+  const champ = championArm();
+  return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
+    const slots = await championPages(rig, champ.tree);
+    const ctx: DriveCtx = { run: "bank-b1", arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag() };
+    const r = await buildBank(ctx, slots, { bank: "b1", sets });
+    say(`bank: ${r.cases.length} cases; ${r.fails.length ? `REFUSED: ${r.fails.join("; ")}` : "every §2.3 gate passes"}`);
+    return r.fails.length ? 1 : 0;
+  }));
+}
+
+async function benchCmd() {
+  if (o.pos[1] !== "freeze") throw new Error("bench freeze");
+  openHistory();
+  const m = freeze();
+  say(`bench freeze: B1, ${Object.keys(m.files).length} files, hash ${m.hash.slice(0, 12)}`);
+}
+async function humanCmd() {
+  if (o.pos[1] !== "freeze") throw new Error("human freeze");
+  openHistory();
+  const champ = championArm();
+  await withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
+    const m = await freezeHuman(pageShot((await rig.tab(0, "A", champ.tree)).page));
+    say(`human freeze: U1, ${Object.keys(m.files).length} files, hash ${m.hash.slice(0, 12)}`);
+  }, 1), true);
+}
+
+/** A checkpoint of today's champion (an owner step for `sync`), then the champion-miss digest from its losses. */
+async function runCheckpoint(gw: string, epoch: number, owner?: { commits: number; baseSha: string; candSha: string }, champ = championArm()): Promise<StoredCheckpoint> {
+  const ck = await withRig(gw, checkpointTrees(champ), (rig) => checkpoint({ rig, epoch, champion: champ, owner }));
+  writeMissDigest(champ.sha, { run: ck.run, champion: "B" });
+  say(`${ck.id}: champion share ${ck.share.all?.share.toFixed(2)} [${ck.share.all?.lo90.toFixed(2)}, ${ck.share.all?.hi90.toFixed(2)}] against ${ck.anchor}, Q ${ck.Q.value.toFixed(2)}, TTFC ×${ck.latency.ratioTtfc.est.toFixed(2)}, trust ${ck.trust}${ck.aa ? `; A/A ${ck.aa.pass ? "passes" : "FAILS"}: ${Object.entries(ck.aa.tests).map(([k, t]) => `${k} ${t.est.toFixed(2)} ±${t.halfWidth.toFixed(2)}`).join(", ")}` : ""}`);
+  return ck;
+}
+async function checkpointCmd() {
+  needCap(o.f.zero ? "checkpoint --zero" : "checkpoint");
+  openHistory();
+  const zero = !historyRows("checkpoints.jsonl").length;
+  if (o.f.zero && !zero) throw new Error("checkpoint 0 exists already");
+  if (!o.f.zero && zero) throw new Error("no checkpoint 0 yet: checkpoint --zero --cap 750 first");
+  const ck = await withGateway((gw) => runCheckpoint(gw, readState()?.epoch ?? 0));
+  return ck.aa && !ck.aa.pass ? 1 : 0;
+}
+
+/** §4.5: the contrast run and the label pairs, or the labels against the judge. */
+async function calib() {
+  openHistory();
+  if (o.f.check) {
+    const variant = num("variant") === 2 ? 2 : 1;
+    if (variant === 2) needCap("calib --check --variant 2");
+    const r = await withGateway(() => checkCalibration(variant), variant === 1);
+    historyAdd("health.jsonl", r.health);
+    commitHistory(`calibration: ${r.outcome} (variant ${variant})`);
+    say(`calib: ${r.outcome}; fidelity ${r.fidelity.clear.score} of ${r.fidelity.clear.n} clear, craft ${r.craft.score} of ${r.craft.n}${r.outcome === "variant-2" ? "; next: calib --check --variant 2 --cap 150" : ""}`);
+    return r.outcome === "pass" || r.outcome === "pass-no-craft" ? 0 : 1;
+  }
+  const [knob, value] = (str("contrast") ?? "").split("=");
+  if (!knob || value === undefined) throw new Error("calib --contrast <knob=value> --cap n | calib --check [--variant 2]");
+  needCap("calib --contrast");
+  const ck0 = (historyRows("checkpoints.jsonl") as StoredCheckpoint[])[0];
+  if (!ck0) throw new Error("no checkpoint 0 yet: its A/A pairs are most of the label set");
+  const champ = championArm();
+  const run = "calib-contrast";
+  const ids = ordered(banked(["tuning", "fresh"]), run).slice(0, LOOP.calib.contrast);
+  await withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
+    await runAB(rig, { run, kind: "calib", arms: { A: champ, B: { ...champ, tuning: { [knob]: Number(value) } } }, mode: "live", share: true, seed: run, judge: judging(run, { seed: run, craft: "none" }), cases: ids });
+    const page = (await rig.tab(0, "A", champ.tree)).page;
+    const shot = async (scene: SceneJSON, camera: View) => (await loadPage(page, run, "calib-shot", scene, camera), capture(page, { width: LOOP.judgePx, quality: LOOP.judgeQuality }));
+    const pairs = await assemble({ aa: ck0.run, contrast: run, seed: run, capture: shot });
+    say(`calib: ${pairs.length} pairs in labels/pairs.json: label them at /evals/label/ (60 clear fidelity, 30 craft), then rte calib --check`);
+  }));
+}
+
+// ---- The owner's own commits: sync (§8.6)
+
+/** Merges the owner's master into the champion as an owner step: G0's build checks, the bank's scene round trip, a checkpoint. */
+async function sync(gw: string, st: State): Promise<"merged" | "nothing" | "paused"> {
+  const p = paths();
+  openHistory();
+  git(p.repo, "fetch", "-q", "origin", "master");
+  const master = git(p.repo, "rev-parse", "FETCH_HEAD");
+  const base = championSha();
+  if (isAncestor(master, base)) {
+    // The owner undid what conflicted: nothing to merge, nothing blocks.
+    if (st.blocked?.startsWith("sync:")) (st.blocked = undefined), saveState(st);
+    return "nothing";
+  }
+  const block = (why: string) => {
+    ownerItem(`sync: ${why}`);
+    commitHistory(`sync paused: ${why.slice(0, 80)}`);
+    st.blocked = `sync: ${why}`;
+    saveState(st);
+    say(`sync: PAUSED: ${why}`);
+    return "paused" as const;
+  };
+  const wt = worktreeOf(`sync/${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  if (tryGit(wt, ...ident(wt), "merge", "-q", "--no-edit", "-m", "Merge the owner's master into the champion (rte sync)", "-m", CO_AUTHOR, master) === undefined) {
+    const files = (tryGit(wt, "diff", "--name-only", "--diff-filter=U") ?? "").split("\n").join(", ");
+    tryGit(wt, "merge", "--abort");
+    return block(`master ${master.slice(0, 12)} conflicts with the champion in ${files || "?"}: resolve it on master, then rte sync`);
+  }
+  const merged = git(wt, "rev-parse", "HEAD");
+  // G0's build checks only: the path, UX and lint gates bind the loop's own candidates, not the owner.
+  let tree: string;
+  try {
+    tree = treeOf(merged);
+  } catch (err) {
+    if (err instanceof LockfileDiffers) return block(err.message);
+    throw err;
+  }
+  const broken = typecheck(tree);
+  if (broken.length) return block(`${broken.map((f) => f.why).join("; ")} (update evals/ on master, then rte init --refresh)`);
+  // V8 on every banked and yardstick before-scene through the merged Scene.fromJSON: a banked case that fails is
+  // refused; a yardstick case that fails is the owner's (B1 refrozen, a new era) before the champion can take it.
+  const scenes = bankedScenes().filter((f) => !f.includes(".void"));
+  const rt = sceneRoundTrip(tree, [...scenes, ...benchCases().map((c) => join(c.dir, "before.scene.json"))]);
+  const failed = rt.failed.filter((f) => f.startsWith(`${p.bankCases}/`));
+  const other = rt.failed.find((f) => !failed.includes(f));
+  if (other) return block(`master's Scene.fromJSON refuses ${other}: refreeze the yardstick (bench freeze, a new era) first`);
+  const commits = Number(git(p.repo, "rev-list", "--count", `${base}..${master}`));
+  const ck = await runCheckpoint(gw, st.epoch, { commits, baseSha: base, candSha: merged }, { sha: merged, tree });
+  git(p.repo, "branch", "-f", "loop/champion", merged);
+  for (const f of failed) voidCase(dirname(f.slice(0, f.indexOf(": "))), `V8 after rte sync to ${master.slice(0, 12)}: ${f}`);
+  if (failed.length > LOOP.sync.sceneFailMax * scenes.length) {
+    ownerItem(`sync: a scene-format change in ${master.slice(0, 12)}: ${failed.length} of ${scenes.length} banked before-scenes don't round-trip; they're refused and a bank refresh is queued`);
+    st.refreshQueued = `scene format (${master.slice(0, 12)})`;
+    commitHistory("owner list: a scene-format change, bank refresh queued");
+  }
+  Object.assign(st, { blocked: undefined, lastOwnerStep: new Date().toISOString(), keepsSinceCheckpoint: 0, paused: [] });
+  saveState(st);
+  say(`sync: ${commits} owner commits merged into the champion as an owner step (${ck.id})${failed.length ? `; ${failed.length} banked cases refused (V8)` : ""}`);
+  return "merged";
+}
+async function syncCmd() {
+  needCap("sync");
+  const st = readState() ?? newState(nextEpoch());
+  const r = await withGateway((gw) => sync(gw, st));
+  if (r === "nothing") say("sync: master has nothing new for the champion");
+  return r === "paused" ? 1 : 0;
+}
+
+// ---- One decision: the funnel (§1.2)
+
+type Fakes = Partial<Pick<typeof agents, "analyst" | "critic" | "engineer">> & { judge?: (run: string, card: HypothesisCard) => Judge | undefined };
+let fakes: Fakes = {};
+const engine = () => ({ analyst: fakes.analyst ?? agents.analyst, critic: fakes.critic ?? agents.critic, engineer: fakes.engineer ?? agents.engineer });
+const hasU1 = () => benchCases().some((c) => c.bench === "U1");
+/** Machine suspends the heartbeat saw (V10): a decision in flight through one is void. */
+const suspends: number[] = [];
+
+/** The last checkpoint's debts and cost against the anchor, for the vetoes (§1.4 items 3, 4, 6). */
+function loopState(): LoopState {
+  const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
+  const u = last?.productUsdPerSend;
+  return { latencyDebt: !!last?.debts.latency.debt, qualityDebt: !!last?.debts.quality.debt, costVsAnchor: u && u.anchor > 0 ? u.champion / u.anchor : 1 };
+}
+/** Request hashes this run already paid for: a resumed run gets them from the cache (§6.5's resume cache). */
+const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError).map((c) => c.reqHash);
+/** List $ of the upstream calls of runs starting with `prefix`. */
+const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0), 0);
+
+/** G4 (class D): the driver continues on B's result; each send is forked, judged and made a row (a veto only). */
+const continuation = (rig: Rig, arms: Arms, run: string) => async (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number): Promise<Row[]> => {
+  const pages: Pages = { A: (await rig.tab(0, "A", arms.A.tree)).page, B: (await rig.tab(0, "B", arms.B.tree)).page };
+  const ctx: DriveCtx = { run, arms: { A: { sha: arms.A.sha, tuningId: "" }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag() };
+  const s = await continueFrom(ctx, pages, caseId, b, sends, "B");
+  const judge = judging(run, { seed: run, craft: "none" });
+  const pos = positionsFor(s.cases, run);
+  const rows: Row[] = [];
+  for (const id of s.cases.filter((c) => existsSync(caseDir(run, c)))) {
+    await judge.judgeCase(id, pos.get(id)!);
+    const info = maybe<CaseInfo>(join(caseDir(run, id), "case.json"))!;
+    const fork = maybe<Fork>(join(caseDir(run, id), "fork.json"))!;
+    rows.push(rowOf(run, { case: id, cluster: caseId, affected: true, class: "D", overuse: [false, false], ask: info.ask, beat: info.beat, firstArm: fork.order[0] }, meterOf(run)));
+  }
+  return rows;
+};
+
+/** What a decision teaches the next analyst: its candidate-loss digest and one failure-analyst call on its losses. */
+async function lessons(run: string, rows: Row[]) {
+  if (!existsSync(runFile(run, "rows.jsonl"))) return;
+  writeLossDigest(run);
+  const lost = rows.filter((r) => !r.void && r.s < 0).slice(0, 12);
+  if (lost.length) put(runFile(run, "failures.json"), await agents.failureAnalyst(failureDigest(lost.map((r) => ({ case: r.case, run }))), run).catch(() => []));
+}
+
+/** One card through G0 → G1 → G2 (→ G3, G4) → vetoes; a keep fast-forwards loop/champion. Recorded either way. */
+async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Promise<Decided> {
+  const p = paths();
+  const id = `${c.id}${attempt}`;
+  const run = (stage: string) => `${st.stamp}-${id}-${stage}`;
+  const base = championSha();
+  const cand = c.cand!;
+  const t0 = Date.now();
+  const affected = { tuning: 0, of: 0, topUp: 0 };
+  const record = (d: Decision, at: string, result: Omit<ABResult, "invariants"> = { rows: [] }, owner: string[] = []) => {
+    const row = decisionRow({ id, epoch: st.epoch, card: c.card, candSha: cand, baseSha: base, run: at, judgeId: judgeId("fidelity", lastServed(), variants().fidelity), result: { ...result, decision: d }, affected });
+    if (d.verdict === "keep") git(p.repo, "branch", "-f", "loop/champion", cand);
+    if (!historyRows("decisions.jsonl").some((x) => x.id === id)) recordDecision(row, { owner });
+    c.run = at;
+    say(`${id}: ${d.verdict} (${d.class}, ${d.goal}): ${[...d.reasons, ...d.vetoes].join("; ")}`);
+    return row;
+  };
+  const gate = (verdict: "revert" | "owner", reasons: string[]): Decided => {
+    const d: Decision = { verdict, reasons, goal: c.card.goal, class: c.card.classGuess, looks: [], vetoes: [], configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
+    put(runFile(run("g0"), "verdict.json"), d);
+    record(d, run("g0"), undefined, verdict === "owner" ? reasons : []);
+    return { id, verdict, component: c.card.component, at: new Date().toISOString() };
+  };
+
+  // G0, free: the diff's gates, then (code cards) the typecheck and the scene round trip in the candidate's tree.
+  if (cand === base) return gate("revert", ["no change was made"]);
+  const knob = c.card.kind === "knob";
+  let tree: string | undefined;
+  try {
+    tree = knob ? undefined : treeOf(cand);
+  } catch (err) {
+    if (err instanceof LockfileDiffers) return gate("owner", [err.message]);
+    throw err;
+  }
+  const g = g0({ diff: diffOf(p.repo, base, cand), tree });
+  if (g.verdict !== "pass") return gate(g.verdict === "owner" ? "owner" : "revert", g.reasons);
+
+  // A knob card is one tree with two tunings (§7.2).
+  const champ: ArmSpec = { sha: base, tree: treeOf(base) };
+  const arms: Arms = { A: champ, B: knob ? { sha: cand, tree: champ.tree, tuning: c.card.knobs } : { sha: cand, tree: tree! } };
+  const decided = await withRig(gw, [...new Set([arms.A.tree, arms.B.tree])], async (rig) => {
+    // G1: the diffscan at 0 calls (a finished scan is read back on resume).
+    const scanRun = run("scan");
+    const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: banked(["tuning", "fresh", "heldout-gate"]) }));
+    const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? [])];
+    Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
+    if (o.f["quality-only"] && sc.class === "S") {
+      say(`${id}: a schedule change (S): latency-goal cards wait for the PGX (--quality-only)`);
+      return { id, verdict: "deferred", component: c.card.component, at: new Date().toISOString() };
+    }
+    let at: string, result: ABResult;
+    if (sc.class === "N" || sc.class === "S") {
+      // N reverts at 0 calls; S is decided on the timed replay's latency, also at 0 calls.
+      at = sc.class === "N" ? scanRun : sc.timed!.run;
+      const sets = new Map(sc.cases.map((x) => [x.case, x.set]));
+      const rows = readRows(at).filter((r) => sets.get(r.case) !== "heldout-gate").map((r) => ({ ...r, class: sc.class, affected: sc.class === "S" }));
+      result = { rows, decision: decide({ tuning: rows, exhausted: true }, c.card, loopState()), invariants: [] };
+      put(runFile(at, "verdict.json"), result.decision!);
+    } else {
+      // G2 (+ G3, G4): only the affected cases, live (R: on the banked replies), identical calls shared and cached.
+      at = run("ab");
+      const judge = fakes.judge?.(at, c.card) ?? judging(at, { seed: at, craft: c.card.goal === "craft" ? "all" : "sampled" });
+      result = await runAB(rig, {
+        run: at, kind: "ab", arms, mode: sc.class === "R" ? "scan" : "live", share: true, cached: [...sc.cached, ...paid(at)], seed: at, card: c.card, judge, cases: tuning,
+        cls: sc.class,
+      }, { card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined });
+    }
+    let d = result.decision!;
+    const owner: string[] = [];
+    const v9 = result.invariants.some((x) => x.why.startsWith("V9"));
+    if (suspends.some((t) => t >= t0) && d.verdict !== "void") d = { ...d, verdict: "void", reasons: [...d.reasons, "V10: the machine was suspended during the decision"] };
+    // A void is rerun once (new runs, after this rig closes), then goes to the owner list (§1.4 item 9).
+    if (d.verdict === "void" && !attempt && !v9) {
+      record(d, at, result);
+      st.recent.push({ id, verdict: "void", component: c.card.component, at: new Date().toISOString() });
+      return "rerun" as const;
+    }
+    if (d.verdict === "void") owner.push(`void: ${d.reasons.join("; ")}`);
+    if (d.ownerList) owner.push(`too rare to measure: ${result.rows.filter((r) => !r.void).length} affected cases`);
+    if (d.verdict === "owner") owner.push(...d.vetoes);
+    if (d.verdict === "keep") {
+      const hold = [...cardOwnerReasons(c.card, { u1: hasU1() }), ...(c.card.goal === "craft" && !variants().craftCalibrated ? ["a craft keep before craft calibration passed"] : [])];
+      if (hold.length) (d = { ...d, verdict: "owner", vetoes: [...d.vetoes, ...hold] }), owner.push(...hold);
+    }
+    // More than 2× its class budget or 30 min of measuring: void, harness suspect (§6.7).
+    const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0) / 60_000;
+    const over = d.verdict !== "void" && overrun(d.class, usd, minutes);
+    if (over) d = { ...d, verdict: "void", reasons: [...d.reasons, `overran: $${usd.toFixed(2)} in ${minutes.toFixed(0)} min (class ${d.class} budget $${BUDGET[d.class]})`] };
+    record(d, at, { ...result, decision: d }, owner);
+    await lessons(at, result.rows);
+    return { id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: over, v9 };
+  });
+  return decided === "rerun" ? decideCard(gw, st, c, "r") : decided;
+}
+
+// ---- Building cards: knob cards by script, code cards by engineers
+
+/** A knob card's commit: the defaults in tuning.ts set to the card's values, within each knob's range. */
+function applyKnobs(wt: string, knobs: Record<string, number>) {
+  const file = join(wt, "src/core/tuning.ts");
+  let src = readFileSync(file, "utf8");
+  for (const [key, v] of Object.entries(knobs)) {
+    const k = key.replace(/\./g, "\\.");
+    const lit = new RegExp(`(\\b(K|B)\\("${k}",\\s*)(-?[\\d.]+)(,\\s*(-?[\\d.]+),\\s*(-?[\\d.]+))?`).exec(src);
+    const role = /^(\w+)\.prompt$/.exec(key)?.[1];
+    const variant = role && new RegExp(`\\{ \\.\\.\\.P\\("${role}"\\), value: [\\d.]+ \\}|\\bP\\("${role}"\\)`).exec(src);
+    if (lit) {
+      const [min, max] = lit[2] === "B" ? [0, 1] : [Number(lit[5]), Number(lit[6])];
+      if (!(v >= min && v <= max)) throw new Error(`knob ${key} = ${v} is outside its range ${min}–${max}`);
+      src = src.replace(lit[0], `${lit[1]}${v}${lit[4] ?? ""}`);
+    } else if (variant) src = src.replace(variant[0], `{ ...P("${role}"), value: ${v} }`);
+    else throw new Error(`no knob ${key} with a literal default in src/core/tuning.ts`);
+  }
+  writeFileSync(file, src);
+}
+
+/** Builds a card on its branch (cand/e<E>-h<n>, off the champion): a commit, or the champion itself when nothing changed. */
+async function build(gw: string, st: State, c: CardState) {
+  try {
+    const wt = worktreeOf(c.branch);
+    if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
+    if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
+      if (c.card.kind === "knob") applyKnobs(wt, c.card.knobs ?? {});
+      else await engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token: await agents.slotToken(tokens(), gw) });
+      if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
+    }
+    Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
+  } catch (err) {
+    say(`${c.id}: not built: ${msg(err)}`);
+    c.status = "dropped";
+  }
+  saveState(st);
+}
+
+/** The candidate on top of today's champion (a keep moved it); a conflict rebuilds it once (the engineer once more). */
+async function rebased(gw: string, st: State, c: CardState): Promise<boolean> {
+  const champ = championSha();
+  if (isAncestor(champ, c.cand!)) return true;
+  const wt = worktreeOf(c.branch);
+  if (tryGit(wt, ...ident(wt), "rebase", "-q", "loop/champion") !== undefined) {
+    c.cand = git(wt, "rev-parse", "HEAD");
+    return true;
+  }
+  tryGit(wt, "rebase", "--abort");
+  git(wt, "reset", "-q", "--hard", "loop/champion");
+  say(`${c.id}: conflicts with the moved champion: built once more`);
+  await build(gw, st, c);
+  return c.status === "built";
+}
+
+// ---- The loop (§8.1)
+
+const nextEpoch = () => Math.max(0, ...historyRows("epochs.jsonl").map((e) => e.epoch)) + 1;
+let readyAtStart = false;
+let diskAtStart: { at: number; gb: number } | undefined;
+let nightWindows: number = LOOP.nightWindows;
+type SlotStatus = { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; resetsAt?: number; status?: string; usdThisWindow: number; windowUsd: number; usd7d: number; why?: string };
+
+async function facts(gw: string, st: State, error?: string): Promise<Facts> {
+  const s = (await gatewayStatus(gw)) as { pace: Facts["pace"]; slots: SlotStatus[]; cap?: number; capReached: boolean };
+  const W = s.slots.reduce((a, x) => a + x.windowUsd, 0) / s.slots.length;
+  const nightStart = Date.parse(st.nightStart);
+  const lines = readMeter(paths().calls);
+  const nightUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < nightStart ? 0 : "agent" in l ? l.totalCostUsd : l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0), 0);
+  const fs = statfsSync(paths().home);
+  const gb = (fs.bavail * fs.bsize) / 1e9;
+  diskAtStart ??= { at: Date.now(), gb };
+  const perDay = ((diskAtStart.gb - gb) / (Date.now() - diskAtStart.at)) * DAY;
+  return {
+    now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
+    blocked: st.blocked, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
+    daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
+  };
+}
+
+/** §6.7 before new work: true when a rule stops the loop (it says why); pauses wait here. */
+async function halt(gw: string, st: State, error?: string): Promise<boolean> {
+  for (;;) {
+    const acts = rules(await facts(gw, st, error));
+    const noted = acts.filter((a) => a.do === "owner" || a.do === "stop" || a.do === "skip");
+    for (const a of noted) ownerItem(a.why);
+    for (const a of acts) if (a.do === "skip" && !st.paused.includes(a.component!)) st.paused.push(a.component!);
+    if (noted.length) commitHistory(`owner list: ${noted.map((a) => a.why).join("; ").slice(0, 100)}`);
+    const stop = acts.find((a) => a.do === "stop");
+    if (stop) return say(`loop: STOP: ${stop.why}`), true;
+    const pauses = acts.filter((a) => a.do === "pause");
+    if (!pauses.length) return false;
+    const until = Math.max(...pauses.map((a) => a.until!));
+    say(`loop: pause until ${new Date(until).toISOString()}: ${pauses.map((a) => a.why).join("; ")}`);
+    await sleep(Math.max(1000, until - Date.now()));
+  }
+}
+
+/** ≤ 3 cards: queued seed cards first, else digests → analyst → critic (§8.2). */
+async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
+  if (st.queue.length) return st.queue.splice(0, 3);
+  const sha = championSha();
+  const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
+  const ck = last && { run: last.run, champion: "B" as Arm };
+  const run = `${st.stamp}-e${st.epoch}-analyst`;
+  const notes = [...(await agents.championFailures(sha, run, ck)), ...st.lastRuns.flatMap((r) => maybe<agents.FailureNote[]>(runFile(r, "failures.json")) ?? [])];
+  const digest = analystDigest({
+    championSha: sha, checkpoint: ck, runs: st.lastRuns, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
+    ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(),
+  });
+  const analysis = await engine().analyst(digest, run);
+  const r = await engine().critic({ run: `${st.stamp}-e${st.epoch}-critic`, token: await agents.slotToken(tokens(), gw), analysis, digest, tried: triedIndex(), tree: treeOf(sha) });
+  if (r.dropped.length) say(`critic: dropped ${r.dropped.join("; ")}`);
+  return r.cards.slice(0, 3);
+}
+
+async function loopCheckpoint(gw: string, st: State): Promise<string> {
+  const ck = await runCheckpoint(gw, st.epoch);
+  Object.assign(st, { keepsSinceCheckpoint: 0, paused: [] });
+  saveState(st);
+  return ck.id;
+}
+
+/** Between epochs: the owner's master (at most daily), a bank refresh (5 keeps, weekly, or queued), the judge canary. */
+async function between(gw: string, st: State) {
+  if (Date.now() - Date.parse(st.lastOwnerStep ?? "1970-01-01") >= LOOP.sync.minHours * HOUR) await sync(gw, st);
+  const lastRefresh = st.lastRefresh ?? maybe<{ at: string }>(join(paths().home, "bank", "gates.json"))?.at;
+  if (st.refreshQueued || st.keepsSinceRefresh >= LOOP.bank.refreshEveryKeeps || (lastRefresh && Date.now() - Date.parse(lastRefresh) >= 7 * DAY)) {
+    const n = st.refreshes + 1;
+    const champ = championArm();
+    try {
+      await withRig(gw, [champ.tree], async (rig) => {
+        const slots = await championPages(rig, champ.tree);
+        const r = await refresh({ run: `${st.stamp}-refresh${n}`, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag() }, slots, n);
+        say(`refresh ${n}: ${r.cases.length} new cases, ${r.retired.length} to bank/archive${r.fails.length ? ` (the new cases failed ${r.fails.join("; ")})` : ""}`);
+      });
+    } catch (err) {
+      ownerItem(`bank refresh ${n} failed: ${msg(err)}`);
+      commitHistory(`owner list: bank refresh ${n} failed`);
+    }
+    Object.assign(st, { refreshes: n, keepsSinceRefresh: 0, refreshQueued: undefined, lastRefresh: new Date().toISOString() });
+    saveState(st);
+  }
+  if (canaryDue()) {
+    try {
+      const h = await runCanary();
+      historyAdd("health.jsonl", h);
+      if (!h.pass) ownerItem(`judge drift: the canary agreed on ${(h.detail as { agree: number }).agree} of ${LOOP.canary.packets} stable packets, confirmed`);
+      commitHistory(`canary: ${h.pass ? "stable" : "drift"}`);
+    } catch (err) {
+      say(`canary: skipped (${msg(err)})`);
+    }
+  }
+}
+
+/** One epoch: cards, built ahead (≤ 2 engineers at once) while the ones before them are measured, then decided in turn. */
+async function epoch(gw: string, st: State): Promise<boolean> {
+  const started = Date.now();
+  if (!st.cards.length) {
+    const cards = await propose(gw, st);
+    st.cards = cards.map((card, i) => ({ id: `e${st.epoch}-h${i + 1}`, card, branch: `cand/e${st.epoch}-h${i + 1}`, status: "todo" }));
+    saveState(st);
+    say(`epoch ${st.epoch}: ${st.cards.map((c) => `${c.id} ${c.card.kind} ${c.card.component}: ${c.card.change}`).join(" | ") || "no cards"}`);
+  }
+  // Card rules that need no evidence (§8.4) send a card to the owner before anything is built.
+  for (const c of st.cards.filter((x) => x.status === "todo")) {
+    const why = cardOwnerReasons(c.card, { u1: hasU1() }).filter((w) => !/patch|cost/.test(w));
+    const skip = st.paused.includes(c.card.component) ? `${c.card.component} is paused (dry well)` : o.f["quality-only"] && c.card.goal === "latency" ? "a latency-goal card waits for the PGX (--quality-only)" : undefined;
+    if (why.length) ownerItem(`${c.id}: ${c.card.change}: ${why.join("; ")}`), commitHistory(`owner list: ${c.id}`);
+    if (why.length || skip) (c.status = "dropped"), say(`${c.id}: not run: ${[...why, skip].filter(Boolean).join("; ")}`);
+  }
+  const two = limiter(2);
+  const built = st.cards.map((c) => (c.status === "todo" ? two(() => build(gw, st, c)) : Promise.resolve()));
+  let ck: string | undefined;
+  let stopped = false;
+  for (const [i, c] of st.cards.entries()) {
+    await built[i];
+    if (c.status !== "built" || stopped) continue;
+    if ((stopped = await halt(gw, st))) continue;
+    if (!(await rebased(gw, st, c))) continue;
+    let d: Decided;
+    try {
+      d = await decideCard(gw, st, c);
+    } catch (err) {
+      // A cap, a blocked request or a broken step: the rules say whether the loop goes on.
+      say(`${c.id}: failed: ${msg(err)}`);
+      if ((stopped = await halt(gw, st, msg(err)))) continue;
+      throw err;
+    }
+    Object.assign(c, { status: "done", verdict: d.verdict });
+    st.recent = [...st.recent, d].slice(-50);
+    if (d.verdict === "keep") st.keepsSinceCheckpoint++, st.keepsSinceRefresh++;
+    saveState(st);
+    if (st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps) ck = await loopCheckpoint(gw, st);
+  }
+  await Promise.allSettled(built);
+  if (stopped) return false;
+  const rec = await epochRecord(gw, st, started, ck);
+  say(`epoch ${st.epoch}: ${rec.decisions.length} decisions, ${rec.cost.calls} calls, $${rec.cost.listUsd.toFixed(2)} (${(100 * rec.cost.windowShare).toFixed(1)}% of a window), ${rec.minutes.total.toFixed(0)} min`);
+  Object.assign(st, { epoch: st.epoch + 1, stamp: stampNow(), cards: [], lastRuns: st.cards.flatMap((c) => (c.run ? [c.run] : [])) });
+  saveState(st);
+  return true;
+}
+
+/** epochs.jsonl and budget.jsonl (§5.3) from the meter, one commit. */
+async function epochRecord(gw: string, st: State, started: number, ck?: string): Promise<EpochRow> {
+  const lines = readMeter(paths().calls).filter((l) => l.run.startsWith(`${st.stamp}-e${st.epoch}-`) || (ck !== undefined && l.run.startsWith(ck)));
+  const zero = { calls: 0, usd: 0, agentUsd: 0, in: 0, cacheRead: 0, write5m: 0, write1h: 0, out: 0, thinking: 0 };
+  const all = rollup(lines, () => "all").all ?? zero;
+  const slots = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots;
+  const W = slots.reduce((a, s) => a + s.windowUsd, 0) / slots.length;
+  const agentMin = lines.reduce((a, l) => a + ("agent" in l ? (l as AgentLog).minutes : 0), 0);
+  const measure = st.cards.reduce((a, c) => a + (c.run ? (maybe<{ meter: { minutes: number } }>(runFile(c.run, "run.json"))?.meter.minutes ?? 0) : 0), 0);
+  const total = (Date.now() - started) / 60_000;
+  const at = new Date().toISOString();
+  const row: EpochRow = {
+    epoch: st.epoch, at, era: (historyRows("checkpoints.jsonl").at(-1)?.era ?? 1), machine: arch() === "arm64" ? "pgx" : "laptop", championSha: championSha(), configId,
+    decisions: st.cards.filter((c) => c.status === "done").map((c) => c.id), ...(ck ? { checkpoint: ck } : {}),
+    cost: {
+      listUsd: all.usd, windowShare: all.usd / W, calls: all.calls, agentUsd: all.agentUsd,
+      byRole: Object.fromEntries(Object.entries(rollup(lines, (l) => l.role)).map(([k, r]) => [k, { calls: r.calls, usd: r.usd }])),
+      tokens: { in: all.in, cacheRead: all.cacheRead, write5m: all.write5m, write1h: all.write1h, out: all.out, thinking: all.thinking },
+    },
+    minutes: { total, agents: agentMin, measure, idle: Math.max(0, total - agentMin - measure) },
+    slots: slots.map((s) => ({ slot: s.slot, fiveHour: s.fiveHour, sevenDay: s.sevenDay, usdThisWindow: s.usdThisWindow, status: s.why ?? s.status ?? "ok" })),
+  };
+  historyAdd("epochs.jsonl", row);
+  for (const s of slots) historyAdd("budget.jsonl", { at, epoch: st.epoch, slot: s.slot, usdThisWindow: s.usdThisWindow, fiveHour: s.fiveHour, sevenDay: s.sevenDay, windowUsd: s.windowUsd, status: s.why ?? s.status ?? "ok", resetsAt: s.resetsAt, usd7d: s.usd7d });
+  recordMachine();
+  commitHistory(`epoch ${st.epoch}: ${row.decisions.length} decisions, $${all.usd.toFixed(2)}`);
+  return row;
+}
+
+function limiter(n: number) {
+  let busy = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(f: () => Promise<T>): Promise<T> => {
+    while (busy >= n) await new Promise<void>((r) => waiting.push(r));
+    busy++;
+    try {
+      return await f();
+    } finally {
+      busy--;
+      waiting.shift()?.();
+    }
+  };
+}
+
+async function loop() {
+  refuseFactorySlice();
+  const held = lock(); // first: a second loop refuses before it touches anything
+  const stopBeat = heartbeat((gap) => (suspends.push(Date.now()), say(`loop: a ${Math.round(gap / 1000)}-s suspend: the decision in flight is voided`)));
+  try {
+    openHistory();
+    if (!historyRows("checkpoints.jsonl").length) throw new Error("no checkpoint 0 yet: checkpoint --zero --cap 750 first (§11 step 5)");
+    const resume = !!o.f.resume || held.stale;
+    const st = readState() ?? newState(nextEpoch());
+    if (!resume) {
+      const epochs = num("epochs");
+      Object.assign(st, { until: epochs === undefined ? undefined : st.epoch + epochs - 1, nightStart: new Date().toISOString() });
+      if (typeof o.f["seed-cards"] === "string") {
+        const seen = new Set([...historyRows("decisions.jsonl").map((d) => d.card?.id), ...st.queue.map((c) => c.id), ...st.cards.map((c) => c.card.id)]);
+        st.queue.push(...(JSON.parse(readFileSync(o.f["seed-cards"], "utf8")) as HypothesisCard[]).filter((c) => !seen.has(c.id)));
+      }
+    } else if (Date.now() - Date.parse(st.nightStart) >= DAY) st.nightStart = new Date().toISOString();
+    saveState(st);
+    nightWindows = num("night-windows") ?? LOOP.nightWindows;
+    readyAtStart = readyOk();
+    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, night cap ${nightWindows} windows`);
+    await withGateway(async (gw) => {
+      let finished = true;
+      while (st.until === undefined || st.epoch <= st.until) {
+        if (await halt(gw, st)) return void (finished = false);
+        if (!st.cards.length) await between(gw, st);
+        if (!(await epoch(gw, st))) return void (finished = false);
+      }
+      if (finished && st.keepsSinceCheckpoint > 0) await loopCheckpoint(gw, st);
+      say(`loop: done at epoch ${st.epoch - 1}, champion ${championSha().slice(0, 12)}`);
+    });
+  } finally {
+    stopBeat();
+    held.release();
+  }
+}
+
+async function decideCmd() {
+  const branch = o.pos[1];
+  if (!branch) throw new Error("decide <branch> --cap n");
+  needCap("decide");
+  openHistory();
+  const st = readState() ?? newState(nextEpoch());
+  const card: HypothesisCard = { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
+  const c: CardState = { id: `d-${branch.replace(/[^\w-]+/g, "-")}`, card, branch, status: "built", cand: git(paths().repo, "rev-parse", branch) };
+  const d = await withGateway(async (gw) => ((await rebased(gw, st, c)) ? decideCard(gw, st, c) : undefined));
+  return d?.verdict === "keep" ? 0 : 1;
+}
+
+async function gc() {
+  if (!o.f.trees) throw new Error("gc --trees");
+  const p = paths();
+  // What a run may still serve: the champion, every anchor, the cards in flight.
+  const keep = new Set([championSha(), ...historyRead("anchors.json").map((a) => a.sha), ...(readState()?.cards.flatMap((c) => (c.cand ? [c.cand] : [])) ?? [])].map((s) => p.tree(contentHash(s))));
+  const all = existsSync(join(p.home, "trees")) ? readdirSync(join(p.home, "trees")).map((d) => join(p.home, "trees", d)) : [];
+  for (const d of all.filter((d) => !keep.has(d))) rmSync(d, { recursive: true, force: true });
+  say(`gc: ${all.filter((d) => !keep.has(d)).length} trees removed, ${all.filter((d) => keep.has(d)).length} kept`);
+}
+
+const COMMANDS: Record<string, () => Promise<number | void>> = {
+  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
+  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, status,
+  remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc,
+};
+
+if (import.meta.main) {
+  process.stdout.on("error", () => {}); // a closed terminal must not end the run: logs/ has every line
+  try {
+    o = parse(process.argv.slice(2));
+    const run = COMMANDS[o.cmd];
+    if (!run) throw new Error(`no command "${o.cmd}"\n${USAGE}`);
+    if (typeof o.f.fakes === "string") fakes = await import(pathToFileURL(resolve(o.f.fakes)).href);
+    process.exitCode = (await run()) ?? 0;
+  } catch (err) {
+    say(`run.ts ${o.cmd}: ${msg(err)}`);
+    process.exitCode = 1;
+  }
+  // Pages, servers and Claude processes are closed; a stray timer must not hold the step open.
+  setTimeout(() => process.exit(), 1000).unref();
+}
