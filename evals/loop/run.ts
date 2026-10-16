@@ -300,6 +300,21 @@ function readyOk(): boolean {
 
 // ---- The zero-call measurements: the ladder and the shared A/A
 
+/**
+ * Each role's median timing in a call log, one line per role: the ladder's sends then differ only by the machine's
+ * load (replayed in turn, a log's spread moved a 3-send median by ~30% and stopped the ladder at 1 slot).
+ */
+function medianTimings(log: string, out: string): string {
+  const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const by = new Map<string, { first: number[]; rest: number[]; out: number[] }>();
+  for (const r of readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.from && r.firstMs != null && !r.error)) {
+    const b = by.get(r.from) ?? by.set(r.from, { first: [], rest: [], out: [] }).get(r.from)!;
+    b.first.push(r.firstMs - (r.waitMs ?? 0)), b.rest.push(r.ms - r.firstMs), b.out.push(r.outTokens ?? 40);
+  }
+  writeFileSync(out, [...by].map(([from, b]) => js({ from, firstMs: med(b.first), ms: med(b.first) + med(b.rest), outTokens: med(b.out) })).join("\n") + "\n");
+  return out;
+}
+
 /** N8: the concurrency knee on a fake API (logged latencies), 0 model calls; machine.json and history/machine/<host>.json. */
 async function ladderCmd() {
   const champ = championArm();
@@ -309,7 +324,7 @@ async function ladderCmd() {
   });
   // The owner's logged timings, or --latency's (a rehearsal: evals/mock/dry.ts writes them).
   const log = str("latency") ?? (initFrom() && join(initFrom()!, ".data", "model-calls.jsonl"));
-  const api = await startFakeApi({ replies: join(work, "replies"), latency: log && existsSync(log) ? log : undefined });
+  const api = await startFakeApi({ replies: join(work, "replies"), latency: log && existsSync(log) ? medianTimings(log, join(work, "latency.jsonl")) : undefined });
   // Its own home: fake calls must not reach the loop's meter or slot state.
   const gw = await spawnGateway({ home: join(work, "gateway"), tokens: fakeTokens(), mockApi: api.url });
   try {
