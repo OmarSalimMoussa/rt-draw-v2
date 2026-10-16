@@ -216,7 +216,7 @@ async function oneSend(): Promise<boolean> {
   status(`Send ${n}: the driver looks at the screen…`);
   const shot = await takeShot(scene, [], userView, { inkNumbers: false });
   const k = scene.width / shot.width;
-  const { turn } = await span(`driver looks (send ${n})`, undefined, (ctx) => driverTurn(setup!.model, setup!.system, shot.dataUrl, past, setup!.maxSends - n + 1, k, ctx));
+  const { turn } = await span(`driver looks (send ${n})`, undefined, (ctx) => driverTurn(setup!.model, setup!.system, setup!.behaviour, shot.dataUrl, past, setup!.maxSends - n + 1, k, ctx));
   // Its reaction is to the last send; the screen it saw is that send's after.
   const prev = sends.at(-1);
   if (prev) {
