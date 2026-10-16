@@ -135,12 +135,13 @@ export function checkBefore(scene: SceneJSON, replies: RecordedReply[]): { scene
   return { scene: out, filled };
 }
 
-/** A recorded reply's text from the reply cache (cache.ts writes `reply`; `error` marks a call that never completed). */
+/** A recorded reply's text from the reply cache (`error` marks a call that never completed). */
 function replyText(r: RecordedReply): string | undefined {
   const file = isAbsolute(r.cacheFile) ? r.cacheFile : join(dirname(paths().reply("x")), r.cacheFile);
   try {
     const j = JSON.parse(readFileSync(file, "utf8"));
-    return !j.error && typeof j.reply === "string" ? j.reply : undefined;
+    const text = j.text ?? j.reply; // cache.ts stores `text`
+    return !j.error && typeof text === "string" ? text : undefined;
   } catch {
     return undefined;
   }

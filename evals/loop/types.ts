@@ -6,8 +6,7 @@ import type { View } from "../../src/core/board.ts";
 import type { Stroke } from "../../src/core/ink.ts";
 import type { Word } from "../../src/core/link.ts";
 import type { Scene } from "../../src/core/scene.ts";
-import type { Turn } from "../core/driver.ts";
-import type { Step } from "../core/synth.ts";
+import type { Dropped, Turn } from "../core/driver.ts";
 
 // ---- Ids shared by scenarios, cases and cards (§2.1–2.2)
 
@@ -45,8 +44,8 @@ export type CaseInfo = {
 };
 /** input.json, on the person's clock; words is a string only for U1's typed sends. */
 export type CaseInput = { camera: View; words: Word[] | string; strokes: Stroke[]; enterAtMs: number; inputHash: string };
-/** driver.json */
-export type DriverRecord = { raw: string; turn: Turn; retries: number; dropped: Step[]; reqHash: string };
+/** driver.json: the acting turn's raw reply and parse (positions in board px of `view`, the screen it drew on), and the look turns before it. */
+export type DriverRecord = { raw: string; turn: Turn; retries: number; dropped: Dropped[]; clamped: number; reqHash: string; view: View; looks: { raw: string; turn: Turn; reqHash: string }[] };
 /** meant.json, written before Enter. */
 export type Meant = { meant: string; testing?: string; hedged: boolean };
 /** rating.json: the driver's view of this case's champion result, from its next turn (absent on a session's last send). */
