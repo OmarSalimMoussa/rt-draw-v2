@@ -432,7 +432,8 @@ async function smoke() {
       texts.push(await productCall(gw, run, { model: "haiku", system: promptOf("resolve", DEFAULTS).system, user, thinking, from: "draw-refs" }));
     }
     const u3 = meterOf(run).filter((l) => l.case === "u3");
-    line(u3.length === 3 && u3.slice(1).every((l) => l.thinkingTokens === 0) && texts.every(parses) && u3.every((l) => (l.firstMs ?? Infinity) < 2000) && u3[2].readyAtTake === true,
+    // First text under 2 s is the "off" calls' bar (§11); the thinking call before them is the comparison (~2.9 s today).
+    line(u3.length === 3 && u3.slice(1).every((l) => l.thinkingTokens === 0 && (l.firstMs ?? Infinity) < 2000) && texts.every(parses) && u3[2].readyAtTake === true,
       `U3: thinking tokens ${u3.map((l) => l.thinkingTokens).join("/")}, first text ${u3.map((l) => l.firstMs).join("/")} ms, third call ${u3[2]?.readyAtTake ? "on a warmed process" : "cold"}`);
     await withRig(gw, [champ.tree], async (rig) => {
       const page = (await rig.tab(0, "A", champ.tree)).page;
@@ -444,7 +445,9 @@ async function smoke() {
       mkdirSync(kept, { recursive: true });
       for (const d of readdirSync(paths().bankCases).filter((d) => d.startsWith("c-smoke-"))) renameSync(paths().bankCase(d), join(kept, d));
       const events = existsSync(runFile(run, "events.jsonl")) ? readFileSync(runFile(run, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { v: string; why: string }) : [];
-      line(sess.banked.length >= 2 && !events.length, `driver session: ${sess.banked.length} of ${SMOKE_SENDS} sends banked (${sess.ended}), ${events.length} harness events${events.length ? `: ${events.map((e) => `${e.v} ${e.why}`).join("; ")}` : ""}`);
+      // The driver's own notes (§2.7: a look, a clamp, a hedge, a missed beat) aren't the harness failing; every other V is.
+      const harness = events.filter((e) => !["V2", "V3", "V5", "V11"].includes(e.v));
+      line(sess.banked.length >= 2 && !harness.length, `driver session: ${sess.banked.length} of ${SMOKE_SENDS} sends banked (${sess.ended}), ${harness.length} harness events${events.length ? `: ${events.map((e) => `${e.v} ${e.why}`).join("; ")}` : ""}`);
       const ids = sess.banked.slice(0, 2);
       const ab = `${run}-ab`;
       const r = await runAB(rig, { run: ab, kind: "smoke", arms: { A: champ, B: champ }, mode: "live", share: false, seed: ab, judge: judging(ab, { seed: ab, craft: "none" }), cases: ids, source: (id) => join(kept, id) });
