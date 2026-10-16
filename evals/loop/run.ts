@@ -433,10 +433,10 @@ async function smoke() {
       const s = { ...(TUNING.find((x) => x.start === "blank") ?? TUNING[0]), start: "blank" as const, sends: SMOKE_SENDS };
       const ctx: DriveCtx = { run, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(page) } }, harnessTag: harnessTag() };
       const sess = await driveSession(ctx, s, { A: page }, { bank: "smoke", session: 1, deposit: true });
-      // The smoke's cases leave the bank at once: they check the harness, they're no fork points.
+      // The smoke's cases leave the bank at once, voided ones too: they check the harness, they're no fork points.
       const kept = join(paths().run(run), "bank");
       mkdirSync(kept, { recursive: true });
-      for (const id of sess.banked) renameSync(paths().bankCase(id), join(kept, id));
+      for (const d of readdirSync(paths().bankCases).filter((d) => d.startsWith("c-smoke-"))) renameSync(paths().bankCase(d), join(kept, d));
       const events = existsSync(runFile(run, "events.jsonl")) ? readFileSync(runFile(run, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { v: string; why: string }) : [];
       line(sess.banked.length >= 2 && !events.length, `driver session: ${sess.banked.length} of ${SMOKE_SENDS} sends banked (${sess.ended}), ${events.length} harness events${events.length ? `: ${events.map((e) => `${e.v} ${e.why}`).join("; ")}` : ""}`);
       const ids = sess.banked.slice(0, 2);
