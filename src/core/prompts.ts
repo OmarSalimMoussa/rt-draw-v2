@@ -1,0 +1,113 @@
+// How each model role is asked: its prompt texts as named variants, and whether it
+// may think. A prompt change is then a knob change (<role>.prompt picks the variant,
+// <role>.noThink turns thinking off) that the loop can A/B like any other, not an
+// edit hidden in code. Variant 0 is always the text the product shipped with.
+import type { Tuning } from "./tuning.ts";
+
+type DrawText = { name: string; system: (board: boolean, w: number, h: number, cell: number, pageW: number) => string };
+type ResolveText = { name: string; system: string };
+/** Describe has two system prompts: all shapes in one call (describe.batch), or one per call. {min} and {max} are its word limits. */
+type DescribeText = { name: string; batch: string; one: string };
+type PictureText = { name: string; system: (t: Tuning) => string; user: (subject: string, w: number, h: number, t: Tuning) => string };
+
+/** The op manual, short on purpose: v1's long manual is not carried over. On a board it speaks of board pixels, pages and the camera. */
+function drawShipped(board: boolean, w: number, h: number, cell: number, pageW: number): string {
+  const intro = board
+    ? "You edit an infinite board of web pages and app screens, in board pixels (x right, y down). A page is a frame shape: its text is its name, shown above it, and the shapes inside its box are its content."
+    : `You edit a drawing canvas of ${w}×${h} pixels (x right, y down, origin top-left).`;
+  const cells = !board && cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "";
+  return `${intro} Shapes sit in layers like a slide; nothing is laid out for you: a shape is drawn exactly where its box says.
+
+Reply ONLY with op lines, one per line: no prose, no code fences. Each line is applied the moment it is complete, so put the most visible change first.
+
+shape(id, kind, box, "description", style...)   add a shape, or change only what you give
+text(id, "words", size:s|m|l|xl, color:..., align:left|center|right, weight:bold)
+drawing(id, "what the picture shows", fade:0-1)  a doodle picture inside a shape
+layer(id, front | back | above:other | below:other)
+move(id, box)      remove(id)      group(id, [a, b, ...])${board ? `
+camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look ("zoom out", "show me the cart"), or, as your last line, onto what you made if it's off screen` : ""}
+
+kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page: a new page goes beside the others without overlapping them, ${pageW} wide for a website)` : ""}.
+box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
+Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
+style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).
+Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
+A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
+
+The user's words carry [ink n] markers: n is the red ink mark labeled [n] in the ${board ? "pictures" : "screenshot"}, drawn while they said that word. Their ink points at things or sketches a shape and place; it is never part of the page, so don't copy it unless they ask you to draw what they sketched. If the request is unclear, make the most likely change.`;
+}
+
+const RESOLVE_SHIPPED = `You work out which shapes on a canvas a person means.
+You get: the shapes that could be meant (id, kind, box as x y w h in pixels, and a description), what the person said with [ink n] at the moment they drew mark n, and what each mark is (a loop around shapes, an arrow from one place to another, a tap on a shape, a line).
+Return only JSON, no prose: {"refs": [{"phrase": "this headline", "ids": ["hero-title"]}]}
+One entry per phrase that refers to shapes on the canvas ("this", "that one", "the photo", "these three", "over there"), with every id it means. Use only ids from the list. Ink settles which one; words settle how many and what kind. Leave out phrases that refer to nothing on the canvas.
+On a board of pages (frames), a phrase about a whole page ("the shop page", "where you pay", "the other page") means its frame id, and a part of a page means that part's id.`;
+
+const DESCRIBE_BATCH = `You write the id map for a hand-drawn wireframe. Each shape on the page has an id; people later point at shapes by saying things like "the photo of me" or "that button", and your descriptions are how their words find the right id.
+
+You get the whole page first (shapes carry small orange id tags), then one crop per shape, each announced by its number and id.
+
+For every id write one description: what the shape is (and what it shows or says), what it's for, and where it sits relative to its neighbours. Between {min} and {max} words. Plain words, no markdown, no quotes around names.
+
+Example: "round photo of the owner dressed as a clown, top of the main column; the headline sits over it"
+
+Reply with only a JSON object mapping each id to its description, nothing else.`;
+
+const DESCRIBE_ONE = `You write one entry of the id map for a hand-drawn wireframe. People later point at shapes by saying things like "the photo of me" or "that button", and your description is how their words find this shape.
+
+You get the whole page first (shapes carry small orange id tags), then the crop of one shape and its id.
+
+Write one description: what the shape is (and what it shows or says), what it's for, and where it sits relative to its neighbours. Between {min} and {max} words. Plain words, no markdown.
+
+Example: "round photo of the owner dressed as a clown, top of the main column; the headline sits over it"
+
+Reply with only a JSON object: {"<id>": "<description>"}.`;
+
+const PICTURE_SYSTEM = "You draw small, charming doodles as SVG elements. Output only the elements, one per line: no prose, no code fences, no <svg> wrapper.";
+const PICTURE_LOOK = `Like a quick, cute marker sketch in a notebook: a recognizable silhouette, simple shapes, flat colors, no text, no background, no shading.
+It must hold together: draw the biggest shape first (the body), then attach every other part so it overlaps or touches what it belongs to. Nothing floats.`;
+const pictureRules = (t: Tuning) => `Use only these elements, each on its own line and self-closing: <path d="..."/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>.
+Attributes: geometry, fill, stroke, stroke-width. Absolute coordinates, no transforms, no groups, no style attribute.
+At most ${t["picture.maxPaths"]} elements and ${t["picture.colors"]} colors (hex, like #e8590c; fill="none" for outlines). Outlines in near-black #1e1e1e, stroke-width 2 to 4.
+Example (a smiling sun in a 100 x 100 box):
+<circle cx="50" cy="50" r="28" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>
+<path d="M38 56 Q50 66 62 56" fill="none" stroke="#1e1e1e" stroke-width="3"/>`;
+
+export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: DescribeText[]; picture: PictureText[] } = {
+  draw: [{ name: "shipped", system: drawShipped }],
+  resolve: [{ name: "shipped", system: RESOLVE_SHIPPED }],
+  describe: [{ name: "shipped", batch: DESCRIBE_BATCH, one: DESCRIBE_ONE }],
+  picture: [
+    {
+      name: "shipped",
+      system: () => PICTURE_SYSTEM,
+      user: (subject, w, h, t) => `Doodle: ${subject}
+
+${PICTURE_LOOK}
+The box is ${w} wide and ${h} tall (x right, y down, 0 0 at the top left). Fill most of it, centered, and keep everything inside it.
+${pictureRules(t)}`,
+    },
+    // The fixed instructions in the system prompt, where they're cached across pictures (seed card 3); only the subject and box vary.
+    {
+      name: "rules-in-system",
+      system: (t) => `${PICTURE_SYSTEM}
+
+${PICTURE_LOOK}
+Each message gives the box (x right, y down, 0 0 at the top left). Fill most of it, centered, and keep everything inside it.
+${pictureRules(t)}`,
+      user: (subject, w, h) => `Doodle: ${subject}
+The box is ${w} wide and ${h} tall.`,
+    },
+  ],
+};
+
+export type Role = keyof typeof PROMPTS;
+
+/** The variant a tuning picks for a role (its <role>.prompt knob, clamped to the variants there are). */
+export function promptOf<R extends Role>(role: R, t: Tuning): (typeof PROMPTS)[R][number] {
+  const list = PROMPTS[role];
+  return list[Math.max(0, Math.min(list.length - 1, Math.round(t[`${role}.prompt`] ?? 0)))];
+}
+
+/** A role's thinking from its <role>.noThink knob: off, or unset (the model's own choice, so the request is today's). */
+export const thinkingOf = (role: "draw" | "resolve" | "picture", t: Tuning): { thinking?: "off" } => (t[`${role}.noThink`] ? { thinking: "off" } : {});

@@ -4,30 +4,9 @@
 // so they're refreshed in the background whenever a shape changes.
 import { type ModelStats, callModel, modelOf } from "./model.ts";
 import type { Scene } from "./scene.ts";
+import { promptOf } from "./prompts.ts";
 import { takeShot } from "./shot.ts";
 import { DEFAULTS, type Tuning, tune } from "./tuning.ts";
-
-/** Batch mode: every crop in one call. */
-export const SYSTEM_BATCH = `You write the id map for a hand-drawn wireframe. Each shape on the page has an id; people later point at shapes by saying things like "the photo of me" or "that button", and your descriptions are how their words find the right id.
-
-You get the whole page first (shapes carry small orange id tags), then one crop per shape, each announced by its number and id.
-
-For every id write one description: what the shape is (and what it shows or says), what it's for, and where it sits relative to its neighbours. Between {min} and {max} words. Plain words, no markdown, no quotes around names.
-
-Example: "round photo of the owner dressed as a clown, top of the main column; the headline sits over it"
-
-Reply with only a JSON object mapping each id to its description, nothing else.`;
-
-/** One shape per call. */
-export const SYSTEM_ONE = `You write one entry of the id map for a hand-drawn wireframe. People later point at shapes by saying things like "the photo of me" or "that button", and your description is how their words find this shape.
-
-You get the whole page first (shapes carry small orange id tags), then the crop of one shape and its id.
-
-Write one description: what the shape is (and what it shows or says), what it's for, and where it sits relative to its neighbours. Between {min} and {max} words. Plain words, no markdown.
-
-Example: "round photo of the owner dressed as a clown, top of the main column; the headline sits over it"
-
-Reply with only a JSON object: {"<id>": "<description>"}.`;
 
 export type Crop = { id: string; dataUrl: string; w: number; h: number };
 export type Described = {
@@ -106,6 +85,7 @@ export async function describeAll(scene: Scene, t: Tuning, on: { onCall?: (s: Mo
   const t0 = performance.now();
   const model = modelOf(t["describe.model"]);
   const { context, crops } = await cropShapes(scene, t);
+  const prompt = promptOf("describe", t);
   const calls: ModelStats[] = [];
   const got: Record<string, string> = {};
   const run = async (system: string, user: string, images: string[]) => {
@@ -116,9 +96,9 @@ export async function describeAll(scene: Scene, t: Tuning, on: { onCall?: (s: Mo
   };
   if (t["describe.batch"] >= 1) {
     const lines = crops.map((c, i) => `Image ${i + 2}: crop ${i + 1}, id ${c.id}`);
-    await run(fill(SYSTEM_BATCH, t), `Image 1 is the whole page.\n${lines.join("\n")}\n\nIds to describe: ${crops.map((c) => c.id).join(", ")}`, [context, ...crops.map((c) => c.dataUrl)]);
+    await run(fill(prompt.batch, t), `Image 1 is the whole page.\n${lines.join("\n")}\n\nIds to describe: ${crops.map((c) => c.id).join(", ")}`, [context, ...crops.map((c) => c.dataUrl)]);
   } else {
-    for (const c of crops) await run(fill(SYSTEM_ONE, t), `Image 1 is the whole page; image 2 is the crop of the shape with id ${c.id}. Describe ${c.id}.`, [context, c.dataUrl]);
+    for (const c of crops) await run(fill(prompt.one, t), `Image 1 is the whole page; image 2 is the crop of the shape with id ${c.id}. Describe ${c.id}.`, [context, c.dataUrl]);
   }
   return { results: crops.map((c) => check(c.id, got[c.id], t)), calls, ms: Math.round(performance.now() - t0), crops, contextBytes: context.length };
 }

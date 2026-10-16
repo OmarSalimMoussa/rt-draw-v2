@@ -10,14 +10,9 @@ import { type Mark, type Reading, readMark } from "./marks.ts";
 import { type ModelStats, callModel, modelOf } from "./model.ts";
 import type { Scene } from "./scene.ts";
 import { pageName, pageOf, pagesOf } from "./board.ts";
+import { promptOf, thinkingOf } from "./prompts.ts";
 import { takeShot } from "./shot.ts";
 import type { Tuning } from "./tuning.ts";
-
-export const RESOLVE_SYSTEM = `You work out which shapes on a canvas a person means.
-You get: the shapes that could be meant (id, kind, box as x y w h in pixels, and a description), what the person said with [ink n] at the moment they drew mark n, and what each mark is (a loop around shapes, an arrow from one place to another, a tap on a shape, a line).
-Return only JSON, no prose: {"refs": [{"phrase": "this headline", "ids": ["hero-title"]}]}
-One entry per phrase that refers to shapes on the canvas ("this", "that one", "the photo", "these three", "over there"), with every id it means. Use only ids from the list. Ink settles which one; words settle how many and what kind. Leave out phrases that refer to nothing on the canvas.
-On a board of pages (frames), a phrase about a whole page ("the shop page", "where you pay", "the other page") means its frame id, and a part of a page means that part's id.`;
 
 /** Plural pointing words: a loop around several shapes means all of them. */
 const PLURAL = new Set(["these", "those"]);
@@ -120,10 +115,11 @@ export async function resolve(words: Word[], strokes: Stroke[], marks: Mark[], s
   if (p.inkIds) return { ...p, ids: p.inkIds, refs: [{ phrase: "(ink)", ids: p.inkIds }], via: "ink" };
   const user = prompt(p, scene);
   const images = t["resolve.sendScreenshot"] ? [(await takeShot(scene, strokes, t)).dataUrl] : [];
-  const { text, stats } = await callModel({ model: modelOf(t["resolve.model"]), system: RESOLVE_SYSTEM, user, images, from }, undefined, undefined, parent);
+  const system = promptOf("resolve", t).system;
+  const { text, stats } = await callModel({ model: modelOf(t["resolve.model"]), system, user, images, from, ...thinkingOf("resolve", t) }, undefined, undefined, parent);
   const { refs, dropped } = parseReply(text, scene);
   const ids = [...new Set(refs.flatMap((r) => r.ids))];
-  return { ...p, ids, refs, via: "model", prompt: { system: RESOLVE_SYSTEM, user, images: images.length }, reply: text, stats, features: { ...p.features, refs: refs.length, droppedIds: dropped } };
+  return { ...p, ids, refs, via: "model", prompt: { system, user, images: images.length }, reply: text, stats, features: { ...p.features, refs: refs.length, droppedIds: dropped } };
 }
 
 /** Exact match: the same set of ids. */

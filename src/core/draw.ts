@@ -17,34 +17,8 @@ import { OpStream, type Parsed, applyOp } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
 import { type TraceContext, mark, span, spanSync, timed } from "./trace.ts";
+import { promptOf, thinkingOf } from "./prompts.ts";
 import { DEFAULTS, type Tuning, tune } from "./tuning.ts";
-
-/** The op manual, short on purpose: v1's long manual is not carried over. On a board it speaks of board pixels, pages and the camera. */
-export function systemPrompt(board: boolean, w: number, h: number, cell: number): string {
-  const intro = board
-    ? "You edit an infinite board of web pages and app screens, in board pixels (x right, y down). A page is a frame shape: its text is its name, shown above it, and the shapes inside its box are its content."
-    : `You edit a drawing canvas of ${w}×${h} pixels (x right, y down, origin top-left).`;
-  const cells = !board && cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "";
-  return `${intro} Shapes sit in layers like a slide; nothing is laid out for you: a shape is drawn exactly where its box says.
-
-Reply ONLY with op lines, one per line: no prose, no code fences. Each line is applied the moment it is complete, so put the most visible change first.
-
-shape(id, kind, box, "description", style...)   add a shape, or change only what you give
-text(id, "words", size:s|m|l|xl, color:..., align:left|center|right, weight:bold)
-drawing(id, "what the picture shows", fade:0-1)  a doodle picture inside a shape
-layer(id, front | back | above:other | below:other)
-move(id, box)      remove(id)      group(id, [a, b, ...])${board ? `
-camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look ("zoom out", "show me the cart"), or, as your last line, onto what you made if it's off screen` : ""}
-
-kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page: a new page goes beside the others without overlapping them, ${SCREEN.w} wide for a website)` : ""}.
-box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
-Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
-style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).
-Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
-A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
-
-The user's words carry [ink n] markers: n is the red ink mark labeled [n] in the ${board ? "pictures" : "screenshot"}, drawn while they said that word. Their ink points at things or sketches a shape and place; it is never part of the page, so don't copy it unless they ask you to draw what they sketched. If the request is unclear, make the most likely change.`;
-}
 
 export type Prompt = {
   system: string;
@@ -122,6 +96,14 @@ export function typedWords(text: string, marks: Mark[]): Word[] {
 const r0 = (n: number) => Math.round(n);
 const fmtBox = (v: View) => `${r0(v.x)} ${r0(v.y)} ${r0(v.w)} ${r0(v.h)}`;
 
+/** A map's first `max` shape lines (0: all of them), the rest only counted, so a big board can't crowd the prompt. */
+function capShapes(lines: string[], max: number, isShape: (line: string) => boolean = () => true): string[] {
+  if (!max) return lines;
+  let n = 0;
+  const kept = lines.filter((l) => !isShape(l) || ++n <= max);
+  return n > max ? [...kept, `(${n - max} more shapes not listed)`] : kept;
+}
+
 /**
  * What the model gets for this send. Words are spoken (with times) or typed (a
  * string). With a camera, the scene is a board seen through it.
@@ -132,7 +114,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     const transcript = spanSync("link words to ink", ctx, () => (typeof words === "string" ? typedTranscript(words, marks.length) : linkInk(words, marks, t).text));
     // A board has no grid: cells name places on one fixed canvas.
     const cell = camera ? 0 : t["draw.gridCellPx"];
-    const system = systemPrompt(!!camera, scene.width, scene.height, cell);
+    const system = promptOf("draw", t).system(!!camera, scene.width, scene.height, cell, SCREEN.w);
 
     // What the ink is, read from its geometry: free, and the screenshot only shows it as pixels.
     const { hits, readings } = spanSync("read marks (hit-test, arrows)", ctx, () => {
@@ -169,14 +151,15 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
       parts.push(`Board: ${pagesOf(scene).length} pages, ${scene.shapes.size} shapes. The screen shows ${fmtBox(camera)} of it (x y w h, board pixels).`);
       if (shots?.length) parts.push(`Pictures (boxes are always in board pixels):\n${shots.map((s, i) => `${i + 1}. ${s.name}: board ${fmtBox(s.view)} at ${s.shot.width}×${s.shot.height} (${s.why})`).join("\n")}`);
       if (t["draw.sendIdMap"]) {
-        const map = siteMap(scene, t, { depth: t["draw.mapDepth"], words: t["draw.mapWords"], boxes: !!t["draw.mapBoxes"] });
+        const tree = siteMap(scene, t, { depth: t["draw.mapDepth"], words: t["draw.mapWords"], boxes: !!t["draw.mapBoxes"] });
+        const map = capShapes(tree.split("\n"), t["draw.mapMaxShapes"], (l) => /^\s*- /.test(l)).join("\n");
         mapChars = map.length;
         parts.push(`Site map (each page's content as a tree, id${t["draw.mapBoxes"] ? " (box)" : ""}: description):\n${map}`);
       }
     } else {
       parts.push(`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`);
       idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
-      if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${idMap.join("\n")}`);
+      if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${capShapes(idMap, t["draw.mapMaxShapes"]).join("\n")}`);
     }
     const ops = t["draw.sendOps"] ? sceneToOps(scene) : "";
     if (ops) parts.push(`The scene as ops:\n${ops}`);
@@ -235,20 +218,21 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
           // camera(...) moves the screen, not the scene: on a board, the caller glides there.
           const camera = p.op.name === "camera" && prompt.camera ? parseCamera(p.op.line, scene, t).view : undefined;
           if (!camera) applyOp(scene, p.op, opT);
-          firstOpMs ??= ms;
+          // A camera move changes the screen, not the scene, so it's never the first op (F1).
+          if (!camera) firstOpMs ??= ms;
           r = { line: p.op.line, ok: true, ms, camera };
         } catch (e) {
           r = { line: p.op.line, ok: false, error: e instanceof Error ? e.message : String(e), ms };
         }
       }
       ops.push(r);
-      if (r.ok && ops.filter((o) => o.ok).length === 1) mark(ctx, "first op applied");
+      if (r.ok && !r.camera && ops.filter((o) => o.ok && !o.camera).length === 1) mark(ctx, "first op applied");
       // The page's redraw after each op is part of the op's time on screen.
       spanSync(`op ${ops.length}: ${r.line.slice(0, 48)}`, ctx, () => onOp(r), { ok: r.ok, line: r.line });
     }
   };
   try {
-    const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw" }, (chunk, soFar) => {
+    const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw", ...thinkingOf("draw", t) }, (chunk, soFar) => {
       handle(stream.push(chunk));
       onText?.(soFar);
     }, signal, ctx);

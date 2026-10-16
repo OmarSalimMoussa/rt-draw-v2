@@ -9,23 +9,10 @@
 import rough from "roughjs";
 import type { Options } from "roughjs/bin/core";
 import { type ModelStats, callModel, modelOf, warmModel } from "./model.ts";
+import { promptOf, thinkingOf } from "./prompts.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type TraceContext, span } from "./trace.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
-
-export const PICTURE_SYSTEM = "You draw small, charming doodles as SVG elements. Output only the elements, one per line: no prose, no code fences, no <svg> wrapper.";
-
-export const picturePrompt = (subject: string, w: number, h: number, t: Tuning) => `Doodle: ${subject}
-
-Like a quick, cute marker sketch in a notebook: a recognizable silhouette, simple shapes, flat colors, no text, no background, no shading.
-It must hold together: draw the biggest shape first (the body), then attach every other part so it overlaps or touches what it belongs to. Nothing floats.
-The box is ${w} wide and ${h} tall (x right, y down, 0 0 at the top left). Fill most of it, centered, and keep everything inside it.
-Use only these elements, each on its own line and self-closing: <path d="..."/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>.
-Attributes: geometry, fill, stroke, stroke-width. Absolute coordinates, no transforms, no groups, no style attribute.
-At most ${t["picture.maxPaths"]} elements and ${t["picture.colors"]} colors (hex, like #e8590c; fill="none" for outlines). Outlines in near-black #1e1e1e, stroke-width 2 to 4.
-Example (a smiling sun in a 100 x 100 box):
-<circle cx="50" cy="50" r="28" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>
-<path d="M38 56 Q50 66 62 56" fill="none" stroke="#1e1e1e" stroke-width="3"/>`;
 
 /** The tags a doodle may use. Anything else (script, image, use, foreignObject, text...) is dropped. */
 const TAGS = ["path", "circle", "ellipse", "rect", "line", "polyline", "polygon"] as const;
@@ -168,8 +155,11 @@ const dist3 = (a: number[], b: number[]) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) *
  */
 export async function drawPicture(subject: string, w: number, h: number, t: Tuning = DEFAULTS, onEls?: (els: El[]) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ picture: Picture; stats: ModelStats }> {
   let shown = 0;
+  const prompt = promptOf("picture", t);
+  // A stuck call gives up after picture.timeoutMs: its shape stays a placeholder and the send can end.
+  const timeout = AbortSignal.timeout(t["picture.timeoutMs"]);
   const { text, stats } = await callModel(
-    { model: modelOf(t["picture.model"]), system: PICTURE_SYSTEM, user: picturePrompt(subject, w, h, t), from: "picture", warm: t["picture.parallel"] },
+    { model: modelOf(t["picture.model"]), system: prompt.system(t), user: prompt.user(subject, w, h, t), from: "picture", warm: t["picture.parallel"], ...thinkingOf("picture", t) },
     (_chunk, soFar) => {
       const { els } = readPicture(soFar, subject, w, h, t);
       if (els.length > shown) {
@@ -177,7 +167,7 @@ export async function drawPicture(subject: string, w: number, h: number, t: Tuni
         onEls?.(els);
       }
     },
-    signal,
+    signal ? AbortSignal.any([signal, timeout]) : timeout,
     parent,
   );
   const read = readPicture(text, subject, w, h, t);
@@ -250,7 +240,8 @@ export type PictureFiller = {
  */
 export function pictureFiller(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext): PictureFiller {
   const model = modelOf(t["picture.model"]);
-  warmModel(model, PICTURE_SYSTEM, t["picture.parallel"]);
+  // With the system prompt and thinking the picture calls will use: a process started with others can't serve them.
+  warmModel(model, promptOf("picture", t).system(t), t["picture.parallel"], thinkingOf("picture", t));
   const t0 = performance.now();
   /** Shape id and subject of every picture started this send. */
   const started = new Set<string>();
