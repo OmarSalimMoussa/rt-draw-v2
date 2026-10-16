@@ -4,39 +4,35 @@
 // talks and draws (synthesized into timed words and messy ink, played back
 // here), presses Enter, and the real product answers. The product is a board:
 // the driver sees the screen's part of it and can scroll and zoom by hand.
-import board from "../../src/fixtures/board.ops.txt?raw";
-import clowns from "../../src/fixtures/clowns.ops.txt?raw";
-import messy from "../../src/fixtures/messy.ops.txt?raw";
-import { type SendResult, buildPrompt, run } from "../../src/core/draw.ts";
+import type { SendResult } from "../../src/core/draw.ts";
 import { strokePath } from "../../src/core/ink.ts";
-import { pictureFiller } from "../../src/core/picture.ts";
 import { MODELS, type ModelName, callModel } from "../../src/core/model.ts";
-import { runScript } from "../../src/core/ops.ts";
 import { render } from "../../src/core/render.ts";
 import type { Scene } from "../../src/core/scene.ts";
+import { send } from "../../src/core/send.ts";
 import { takeShot } from "../../src/core/shot.ts";
 import { span } from "../../src/core/trace.ts";
 import { DEFAULTS, tune, tuningId } from "../../src/core/tuning.ts";
-import { SCREEN, type View, asPage, boardBounds, fitView, pageTop, pagesOf } from "../../src/core/board.ts";
+import type { View } from "../../src/core/board.ts";
 import { boardStage } from "../../src/boardStage.ts";
 import { $, download, fontsReady, shell } from "../../src/ui.ts";
+import { FIXTURES, loadFixture } from "../fixtures/fixtures.ts";
 import { DRIVE_VIEW } from "../loop/config.ts";
+import type { StartId } from "../loop/types.ts";
 import { type Card, type Past, type Turn, describeMarks, describeMove, describeStep, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
 import { type Planned, plan } from "../core/scenarios.ts";
 import { PERSONAS, STYLES, type Style, TARGETS, randomStyle } from "../core/personas.ts";
 import { type Step, type Timeline, type Token, type Traits, type Voiced, isView, lineText, lines, rng, synthesize } from "../core/synth.ts";
 
 shell("", "Driver demo: a model plays a user. It sees only its screen (part of the board), scrolls and zooms by hand, talks and scribbles (synthesized into timed words and messy ink), presses Enter, and the real product answers. Each send is a few calls on your Claude subscription: the driver, then the product (resolver, drawing model, pictures).");
-const fixtures: Record<string, string> = { "Blank page": asPage("", "page", "Home"), "Toy shop (5 pages)": board, "Clowns.com": asPage(clowns, "page", "Home"), "Messy shop": asPage(messy, "page", "Home") };
-/** Where the camera starts: the top of the first page. */
-const startOf = (sc: Scene): View => (pagesOf(sc)[0] ? pageTop(pagesOf(sc)[0]) : fitView(boardBounds(sc)));
-const st = boardStage($("#left"), startOf(runScript(fixtures["Blank page"]).scene));
+// The eval's starts (evals/fixtures), their doodles baked, so a session start draws no pictures.
+const st = boardStage($("#left"), loadFixture("blank").start);
 const { canvas, ink } = st;
 const INK = "#e03131";
 const tuning = DEFAULTS;
-/** What the driver sees: the screen as a user sees it, no id tags or grid. */
-const userView = tune({ "shot.tagPx": 0, "shot.gridCellPx": 0 }, tuning);
-const screenW = Math.round(SCREEN.w * userView["shot.scale"]);
+/** What the driver sees: the screen as a user sees it (no id tags or grid), framed by the eval's DRIVE_VIEW, not the product's shot knobs. */
+const userView = tune({ "shot.tagPx": 0, "shot.gridCellPx": 0, "shot.jpegQuality": DRIVE_VIEW.jpegQuality, "ink.size": DRIVE_VIEW.inkSize }, tuning);
+const screenW = DRIVE_VIEW.screenW;
 
 const now = document.createElement("div");
 now.className = "card";
@@ -62,8 +58,8 @@ $("#side").innerHTML = `
     ${slider("changeMind", "changes their mind", 0.3)}
     <label style="font-size:12px"><input type="checkbox" id="bigThenSmall"> asks for too much, then tones it down</label>
     <div class="row" style="font-size:12px">seed <input id="seed" type="number" value="1" style="width:70px"><button id="dice" title="a new seed">🎲</button> sends <input id="maxSends" type="number" min="1" max="20" value="6" style="width:50px"></div>
-    <div class="row" style="font-size:12px">driver model <select id="model">${MODELS.map((m) => `<option${m === "sonnet" ? " selected" : ""}>${m}</option>`).join("")}</select> start <select id="fixture">${Object.keys(fixtures).map((k) => `<option>${k}</option>`).join("")}</select></div>
-    <div class="row" style="font-size:12px">playback <select id="speed"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="0">instant</option></select><button id="voice" class="primary" title="Speaks the driver's lines with ElevenLabs (eleven_v4), paid per character; each line is bought once and kept in .data/tts/. Its words then time the ink and the transcript.">voice: on</button><select id="voiceName"><option value="will">Will</option><option value="sarah">Sarah</option></select></div>
+    <div class="row" style="font-size:12px">driver model <select id="model">${MODELS.map((m) => `<option${m === "sonnet" ? " selected" : ""}>${m}</option>`).join("")}</select> start <select id="fixture">${FIXTURES.map((f) => `<option>${f.id}</option>`).join("")}</select></div>
+    <div class="row" style="font-size:12px">playback <select id="speed"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="0">instant</option></select><button id="voice" title="Speaks the driver's lines with ElevenLabs (eleven_v4), paid per character; each line is bought once and kept in .data/tts/. Its words then time the ink and the transcript. Off by default: it costs money.">voice: off</button><select id="voiceName"><option value="will">Will</option><option value="sarah">Sarah</option></select></div>
     <div class="muted stat" id="voiceStat"></div>
     <div class="row"><button class="primary" id="run">Run</button><button id="step">One send</button><button id="stop" disabled>Stop after this send</button></div>
     <div class="row"><button id="reset">Reset</button><button id="save" disabled>Download the session record</button></div>
@@ -99,15 +95,17 @@ type Record_ = {
   n: number; turn: Turn; timeline: Timeline; transcript: string; result: SendResult; pics?: { drawn: number; failed: string[]; ms: number }; before: string; after?: string;
   /** View moves by hand before this send, the camera at Enter, the pictures the product sent its model. */
   looks: string[]; camera: View; views: string;
+  /** The driver's rating of this send, from the first turn after it that gives one (a look turn too). */
+  rating?: { satisfaction: number; feeling?: string; saw?: string };
 };
-let scene: Scene = runScript(fixtures["Blank page"]).scene;
+let scene: Scene = loadFixture("blank").scene;
 let past: Past[] = [];
 let sends: Record_[] = [];
 let setup: { persona: string; target?: string; style: string; traits: Traits; card: Card; plans: Planned[]; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
 /** The screen at the last Enter with the ink, the driver's "before" picture. */
 let lastEnter: string | undefined;
 let stopAsked = false;
-let voiceOn = true;
+let voiceOn = false;
 const spent = { bought: 0, cached: 0 };
 let busy = false;
 let finished = "";
@@ -131,7 +129,7 @@ function freshSetup() {
   // One shared system prompt; who and how go in each turn's message, with the seed's ask type and beat per send.
   const system = systemPrompt();
   const styleId = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value)?.id ?? "typical";
-  const start = $<HTMLSelectElement>("#fixture").value.startsWith("Toy shop") ? "toyshop-home" : "blank";
+  const start = $<HTMLSelectElement>("#fixture").value as StartId;
   const plans = plan({ id: "demo", set: "fresh", persona: persona.id, style: styleId, target: target?.id, start, sends: Math.max(1, num("maxSends")), seed: num("seed") });
   $("#sys").textContent = system;
   const styleName = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value)?.name.split(":")[0] ?? $<HTMLSelectElement>("#style").value;
@@ -224,8 +222,6 @@ function card(r: Record_) {
   const t = r.turn;
   const ok = r.result.ops.filter((o) => o.ok).length;
   const bad = r.result.ops.length - ok;
-  const next = sends[r.n] as Record_ | undefined;
-  const reaction = next?.turn ?? (finished && r === sends.at(-1) ? lastReaction : undefined);
   return `<div class="card" data-n="${r.n}">
     <h2>Send ${r.n}</h2>
     ${r.looks.length ? `<div><b>Looked around first</b>: ${esc(r.looks.join(" → "))}</div>` : ""}
@@ -235,10 +231,9 @@ function card(r: Record_) {
     <div class="stat muted">the product got: ${esc(r.transcript || "(no words)")} · pictures: ${esc(r.views || "none")}</div>
     <div class="stat">${r.result.error ? `<span class="bad">✗ ${esc(r.result.error)}</span>` : `${ok} ops applied${bad ? `, <span class="bad">${bad} failed</span>` : ""} · first op ${r.result.firstOpMs ?? "-"} ms · done ${r.result.ms} ms`}${r.pics?.drawn || r.pics?.failed.length ? ` · ${r.pics.drawn} picture${r.pics.drawn === 1 ? "" : "s"} in ${r.pics.ms} ms${r.pics.failed.length ? ` <span class="bad">(${r.pics.failed.length} failed)</span>` : ""}` : ""}</div>
     <div class="row" style="align-items:start"><figure style="margin:0;flex:1"><img src="${r.before}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="muted stat">before</figcaption></figure>${r.after ? `<figure style="margin:0;flex:1"><img src="${r.after}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="muted stat">after</figcaption></figure>` : ""}</div>
-    ${reaction?.satisfaction ? `<div><b>Then</b>: <span style="color:var(--accent)">${stars(reaction.satisfaction)}</span> ${esc(reaction.feeling ?? "")}<div class="muted">saw: ${esc(reaction.saw ?? "")}</div></div>` : ""}
+    ${r.rating ? `<div><b>Then</b>: <span style="color:var(--accent)">${stars(r.rating.satisfaction)}</span> ${esc(r.rating.feeling ?? "")}<div class="muted">saw: ${esc(r.rating.saw ?? "")}</div></div>` : ""}
   </div>`;
 }
-let lastReaction: Turn | undefined;
 const showLog = () => (log.innerHTML = [...sends].reverse().map(card).join(""));
 
 async function oneSend(): Promise<boolean> {
@@ -260,21 +255,20 @@ async function oneSend(): Promise<boolean> {
     const user = userMessage(setup.card, past, planned?.beat, planned?.ask ?? "add", setup.maxSends - n + 1, looks);
     const { text } = await span(`driver looks (send ${n}${look ? `, look ${look + 1}` : ""})`, undefined, (ctx) => callModel({ model: setup!.model, system: setup!.system, user, images: [lastEnter ?? shot.dataUrl, shot.dataUrl], from: "driver" }, undefined, undefined, ctx));
     ({ turn } = parseTurn(text, v));
-    // Its reaction is to the last send, given once; the first screen it saw after it is that send's after.
+    // The first screen it saw after the last send is that send's after; its rating lands on that send, from whichever turn gives it (harness-7).
     const prev = sends.at(-1);
-    if (prev && !prev.after) {
-      prev.after = shot.dataUrl;
+    if (prev && !prev.after) prev.after = shot.dataUrl;
+    if (prev && !prev.rating && turn.satisfaction) {
+      prev.rating = { satisfaction: turn.satisfaction, feeling: turn.feeling, saw: turn.saw };
       Object.assign(past.at(-1)!, { satisfaction: turn.satisfaction, feeling: turn.feeling });
     }
     if (turn.stop || !turn.steps.length) {
-      lastReaction = turn;
       finished = turn.stop ? "the driver stopped" : "the driver had nothing to do";
       showLog();
       return false;
     }
     if (!isLook(turn)) break;
     if (look >= DRIVE_VIEW.maxLooks) {
-      lastReaction = turn;
       finished = "the driver only looked around";
       showLog();
       return false;
@@ -299,30 +293,17 @@ async function oneSend(): Promise<boolean> {
   status(`Send ${n}: Enter. The product is answering…`);
   const camera = st.view();
   lastEnter = (await takeShot(scene, timeline.strokes, userView, { inkNumbers: false, view: camera, width: screenW })).dataUrl;
-  const result = await span(`send ${n}`, undefined, async (ctx) => {
-    // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
-    const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
-    const prompt = await buildPrompt(scene, timeline.strokes, timeline.words, tuning, ctx, camera);
-    let gliding: Promise<void> = Promise.resolve();
-    const res = await run(scene, prompt, tuning, (r) => {
-      // The product moves the screen when its model says camera(...).
-      if (r.camera) gliding = st.setView(r.camera, tuning["camera.easeMs"]);
-      draw();
-      pictures?.kick();
-    }, undefined, undefined, ctx);
-    // The product isn't done until its pictures are drawn: the driver looks at what a user would see.
-    status(`Send ${n}: finishing the pictures…`);
-    const pics = await pictures?.finish();
-    await gliding;
-    return { prompt, res, pics };
-  });
+  // The product's own send (src/core/send.ts), done once its pictures are drawn: the driver looks at what a user would see.
+  const result = await span(`send ${n}`, undefined, (ctx) =>
+    send(scene, { strokes: timeline.strokes, words: timeline.words }, tuning, { draw, setView: st.setView, onReply: () => status(`Send ${n}: finishing the pictures…`), parent: ctx }, camera),
+  );
   ink!.replaceChildren();
   draw();
-  sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.res, pics: result.pics, before: shot.dataUrl, looks, camera, views: result.prompt.features.views });
+  sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.result, pics: result.pics, before: shot.dataUrl, looks, camera, views: result.prompt.features.views });
   past.push({ said: timeline.spoken, marks: describeMarks(turn.steps, drawnOn), meant: turn.meant });
   showLog();
   $<HTMLButtonElement>("#save").disabled = false;
-  return !result.res.error;
+  return !result.result.error;
 }
 
 async function go(once: boolean) {
@@ -345,19 +326,19 @@ async function go(once: boolean) {
 }
 
 function reset() {
-  scene = runScript(fixtures[$<HTMLSelectElement>("#fixture").value]).scene;
+  const f = loadFixture($<HTMLSelectElement>("#fixture").value as StartId);
+  scene = f.scene;
   past = [];
   lastEnter = undefined;
   sends = [];
   setup = undefined;
   finished = "";
-  lastReaction = undefined;
   ink!.replaceChildren();
   log.innerHTML = "";
   $("#caption").textContent = "";
   $<HTMLButtonElement>("#save").disabled = true;
   status("Pick a driver and press Run.");
-  void st.setView(startOf(scene));
+  void st.setView(f.start);
   draw();
 }
 
@@ -378,7 +359,7 @@ $("#save").addEventListener("click", () => {
   const record = {
     meta: { kind: "driver-session", at: new Date().toISOString(), tuningId: tuningId(tuning), ...setup, system: undefined, finished },
     system: setup?.system,
-    sends: sends.map((s) => ({ n: s.n, looks: s.looks, camera: s.camera, views: s.views, cameraOps: s.result.ops.filter((o) => o.camera).map((o) => o.line), meant: s.turn.meant, steps: s.turn.steps, spoken: s.timeline.spoken, words: s.timeline.words, strokes: s.timeline.strokes, transcript: s.transcript, ops: s.result.ops, reply: s.result.reply, ms: s.result.ms, firstOpMs: s.result.firstOpMs, error: s.result.error, satisfaction: s.n < sends.length ? sends[s.n].turn.satisfaction : lastReaction?.satisfaction, feeling: s.n < sends.length ? sends[s.n].turn.feeling : lastReaction?.feeling })),
+    sends: sends.map((s) => ({ n: s.n, looks: s.looks, camera: s.camera, views: s.views, cameraOps: s.result.ops.filter((o) => o.camera).map((o) => o.line), meant: s.turn.meant, steps: s.turn.steps, spoken: s.timeline.spoken, words: s.timeline.words, strokes: s.timeline.strokes, transcript: s.transcript, ops: s.result.ops, reply: s.result.reply, ms: s.result.ms, firstOpMs: s.result.firstOpMs, error: s.result.error, rating: s.rating })),
   };
   download(`driver-${setup?.persona}-${setup?.seed}-${record.meta.at.slice(0, 16).replace(/[:T]/g, "-")}.json`, JSON.stringify(record, null, 1));
 });
