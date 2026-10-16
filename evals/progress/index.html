@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rt-draw v2 · eval progress</title>
+  <style>
+    main.progress { max-width: 1240px; margin: 0 auto; padding: 16px 20px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+    main.progress > .wide { grid-column: 1 / -1; }
+    main.progress .chart { min-width: 0; }
+    .trio { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+    .legend i { display: inline-block; width: 18px; margin-right: 5px; vertical-align: middle; }
+    .strip { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+    .strip b { font: 17px Excalifont, cursive; }
+    .meter { display: inline-block; width: 80px; height: 8px; border: 1px solid var(--ink); border-radius: 4px; vertical-align: middle; overflow: hidden; }
+    .meter > span { display: block; height: 100%; background: var(--accent); }
+    .scroll { overflow-x: auto; }
+    table.marks tr[data-decision] { cursor: pointer; }
+    table.marks tr[data-decision]:hover { background: #fff4e6; }
+    .drill { display: grid; grid-template-columns: minmax(0, 250px) minmax(0, 1fr); height: 100%; }
+    .drill > div { overflow: auto; padding: 10px 14px; }
+    .drill img { max-width: 100%; border: 1.5px solid var(--ink); border-radius: 6px; }
+    .drill .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+    @media (max-width: 700px) { .drill { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="progress" id="panels"></main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

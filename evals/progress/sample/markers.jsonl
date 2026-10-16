@@ -1,0 +1,6 @@
+{"at":"2026-10-18T23:08:49.384Z","era":1,"kind":"harness","label":"eval-harness-2 (fixture doodles re-pinned)","ref":"eval-harness-2"}
+{"at":"2026-10-19T11:54:41.317Z","era":2,"kind":"anchor","label":"anchor A1","ref":"ck-03"}
+{"at":"2026-10-19T13:01:34.977Z","era":2,"kind":"served-model","label":"draw served claude-sonnet-5-5-20261101","ref":"claude-sonnet-5-5-20261101"}
+{"at":"2026-10-19T13:52:47.647Z","era":2,"kind":"owner-step","label":"owner: 3 commits","ref":"ck-04"}
+{"at":"2026-10-20T01:51:03.967Z","era":3,"kind":"anchor","label":"anchor A2","ref":"ck-06"}
+{"at":"2026-10-20T02:19:56.385Z","era":3,"kind":"harness","label":"eval-harness-3 (init --refresh)","ref":"eval-harness-3"}
