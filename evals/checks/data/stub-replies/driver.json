@@ -1,0 +1,1 @@
+{"saw": "the shop's home page, the nav bar along the top is a pale cream", "satisfaction": 4, "feeling": "ok, that's the page I wanted", "meant": "the top navigation bar turns pink, nothing else changes", "steps": [{"say": "can you make this bar here pink"}, {"draw": "circle", "around": [20, 4, 920, 56]}, {"say": "just the bar"}], "stop": false}
