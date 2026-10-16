@@ -25,7 +25,7 @@ export type FakeOpts = {
   port?: number; mode?: FakeMode; replies?: string; script?: string; latency?: string;
   /** Five-hour and seven-day utilization (0–1) in the rate-limit headers, and the status they send. */
   util5h?: number; util7d?: number; status?: "allowed" | "allowed_warning" | "rejected";
-  /** Unix seconds; default an hour from start. */
+  /** Unix seconds; default an hour from start. Each token (by first appearance) gets its own: +60 s per token. */
   resetsAt?: number;
   /** slow: ms before the first text, then between chunks. */
   slowMs?: number; chunkMs?: number;
@@ -74,27 +74,31 @@ export async function startFakeApi(opts: FakeOpts = {}) {
         .map((r) => ({ firstMs: r.firstMs - (r.waitMs ?? 0), restMs: r.ms - r.firstMs, chunks: Math.max(1, Math.round((r.outTokens ?? 40) / 20)) }))
     : [];
   let timingN = 0;
+  const tokens: string[] = [];
 
-  function limitHeaders(status = o.status!): Record<string, string> {
+  function limitHeaders(auth: string, status = o.status!): Record<string, string> {
+    if (!tokens.includes(auth)) tokens.push(auth);
+    const reset = o.resetsAt! + 60 * tokens.indexOf(auth);
     return {
       "anthropic-ratelimit-unified-status": status,
       "anthropic-ratelimit-unified-5h-utilization": String(o.util5h),
       "anthropic-ratelimit-unified-7d-utilization": String(o.util7d),
-      "anthropic-ratelimit-unified-5h-reset": String(o.resetsAt),
-      "anthropic-ratelimit-unified-7d-reset": String(o.resetsAt! + 3 * 86400),
-      "anthropic-ratelimit-unified-reset": String(o.resetsAt),
+      "anthropic-ratelimit-unified-5h-reset": String(reset),
+      "anthropic-ratelimit-unified-7d-reset": String(reset + 3 * 86400),
+      "anthropic-ratelimit-unified-reset": String(reset),
       "anthropic-ratelimit-unified-representative-claim": "five_hour",
     };
   }
 
   async function messages(req: IncomingMessage, res: ServerResponse, b: Body, rec: FakeRequest) {
     const mode = rec.mode;
+    const auth = String(req.headers.authorization ?? req.headers["x-api-key"] ?? "");
     const fail = (status: number, type: string, message: string, headers: Record<string, string> = {}) => {
       rec.status = status;
       res.writeHead(status, { "content-type": "application/json", ...headers });
       res.end(JSON.stringify({ type: "error", error: { type, message } }));
     };
-    if (mode === "limit") return fail(429, "rate_limit_error", "fake: usage limit reached", { ...limitHeaders("rejected"), "retry-after": "3600" });
+    if (mode === "limit") return fail(429, "rate_limit_error", "fake: usage limit reached", { ...limitHeaders(auth, "rejected"), "retry-after": "3600" });
     if (mode === "overload") return fail(529, "overloaded_error", "fake: overloaded");
     if (mode === "auth") return fail(401, "authentication_error", "fake: invalid token");
 
@@ -115,7 +119,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
     const oneHour = rec.ttls.includes("1h");
     const timed = timings.length ? timings[timingN++ % timings.length] : undefined;
 
-    res.writeHead(200, { "content-type": "text/event-stream", ...limitHeaders() });
+    res.writeHead(200, { "content-type": "text/event-stream", ...limitHeaders(auth) });
     const ev = (type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
     ev("message_start", { message: { id: `msg_fake_${requests.length}`, type: "message", role: "assistant", model: `${b.model}-fake`, content: [], stop_reason: null, stop_sequence: null,
       usage: { input_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: write, cache_creation: { ephemeral_5m_input_tokens: oneHour ? 0 : write, ephemeral_1h_input_tokens: oneHour ? write : 0 }, output_tokens: 1 } } });
