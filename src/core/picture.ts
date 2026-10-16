@@ -9,6 +9,8 @@
 import rough from "roughjs";
 import type { Options } from "roughjs/bin/core";
 import { type ModelStats, callModel, modelOf } from "./model.ts";
+import type { Scene, Shape } from "./scene.ts";
+import { type TraceContext, span } from "./trace.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 export const PICTURE_SYSTEM = "You draw small, charming doodles as SVG elements. Output only the elements, one per line: no prose, no code fences, no <svg> wrapper.";
@@ -164,7 +166,7 @@ const dist3 = (a: number[], b: number[]) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) *
  * Asks the model for a doodle of `subject` filling a w × h box. `onEls` gets the
  * elements so far each time one more completes, so the picture can fill in live.
  */
-export async function drawPicture(subject: string, w: number, h: number, t: Tuning = DEFAULTS, onEls?: (els: El[]) => void, signal?: AbortSignal): Promise<{ picture: Picture; stats: ModelStats }> {
+export async function drawPicture(subject: string, w: number, h: number, t: Tuning = DEFAULTS, onEls?: (els: El[]) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ picture: Picture; stats: ModelStats }> {
   let shown = 0;
   const { text, stats } = await callModel(
     { model: modelOf(t["picture.model"]), system: PICTURE_SYSTEM, user: picturePrompt(subject, w, h, t), from: "picture" },
@@ -176,6 +178,7 @@ export async function drawPicture(subject: string, w: number, h: number, t: Tuni
       }
     },
     signal,
+    parent,
   );
   const read = readPicture(text, subject, w, h, t);
   onEls?.(read.els);
@@ -190,8 +193,9 @@ let clipN = 0;
  * through rough.js with picture.roughness, clipped to the box. Seeds are fixed
  * per element, so redrawing doesn't change the wobble.
  */
-export function renderPicture(parent: SVGElement, els: El[], box: { x: number; y: number; w: number; h: number }, t: Tuning = DEFAULTS): SVGGElement {
-  const svg = parent instanceof SVGSVGElement ? parent : parent.ownerSVGElement!;
+export function renderPicture(parent: SVGElement, els: El[], box: { x: number; y: number; w: number; h: number }, t: Tuning = DEFAULTS, root?: SVGSVGElement): SVGGElement {
+  // `root`: the <svg> it will end up in, when `parent` isn't in it yet.
+  const svg = root ?? (parent instanceof SVGSVGElement ? parent : parent.ownerSVGElement!);
   const rc = rough.svg(svg);
   const id = `pic-clip-${++clipN}`;
   const g = document.createElementNS(NS, "g");
@@ -224,4 +228,49 @@ export function renderPicture(parent: SVGElement, els: El[], box: { x: number; y
   });
   parent.append(g);
   return g;
+}
+
+/** A shape whose picture is missing, unfinished, or drawn for another subject. */
+export const needsPicture = (s: Shape) => !!s.drawing && !(s.picture?.subject === s.drawing && s.picture.done);
+
+/**
+ * Draws every picture the scene needs, picture.parallel at a time, straight
+ * into each shape (so they fill in live: onUpdate after each element lands).
+ * A failed picture stays a placeholder.
+ */
+export async function fillPictures(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ drawn: number; failed: string[]; ms: number }> {
+  const t0 = performance.now();
+  const todo = scene.stacked().filter(needsPicture);
+  const failed: string[] = [];
+  let drawn = 0;
+  if (!todo.length) return { drawn, failed, ms: 0 };
+  await span("draw pictures", parent, async (ctx) => {
+    const queue = [...todo];
+    const worker = async () => {
+      for (let s = queue.shift(); s; s = queue.shift()) {
+        const shape = s;
+        const subject = shape.drawing!;
+        const w = Math.round(shape.box.w * t["picture.fill"]);
+        const h = Math.round(shape.box.h * t["picture.fill"]);
+        try {
+          await span(`picture: ${shape.id}`, ctx, (pctx) =>
+            drawPicture(subject, w, h, t, (els) => {
+              // Still this shape's subject (a later op may have changed it): show what's drawn so far.
+              if (shape.drawing !== subject) return;
+              shape.picture = { subject, w, h, els, done: false };
+              onUpdate();
+            }, signal, pctx),
+          );
+          if (shape.picture?.subject === subject) shape.picture.done = true;
+          drawn++;
+        } catch {
+          if (shape.picture?.subject === subject && !shape.picture.els.length) shape.picture = undefined;
+          failed.push(shape.id);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(t["picture.parallel"], todo.length) }, worker));
+  }, { pictures: todo.length });
+  onUpdate();
+  return { drawn, failed, ms: Math.round(performance.now() - t0) };
 }

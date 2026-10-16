@@ -1,6 +1,7 @@
 // The canvas: free-form shapes stacked in layers, like a slide. Nothing lays
 // anything out; a shape is drawn exactly where its box says.
 
+import type { El } from "./picture.ts";
 export type Box = { x: number; y: number; w: number; h: number };
 export type Kind = "rect" | "round" | "circle" | "pill" | "line" | "arrow";
 export const KINDS: Kind[] = ["rect", "round", "circle", "pill", "line", "arrow"];
@@ -39,6 +40,8 @@ export type Shape = {
   text?: TextStyle;
   /** What the picture inside shows; drawn later by the picture model. */
   drawing?: string;
+  /** The doodle the picture model drew for a `drawing`, in its own w × h space (shown scaled to fit). Stale once `drawing` changes. */
+  picture?: { subject: string; w: number; h: number; els: El[]; done: boolean };
 };
 
 export class Scene {

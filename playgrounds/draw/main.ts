@@ -9,6 +9,7 @@ import { makeSet } from "../../src/core/labels.ts";
 import type { Word } from "../../src/core/link.ts";
 import { modelOf } from "../../src/core/model.ts";
 import { runScript } from "../../src/core/ops.ts";
+import { fillPictures } from "../../src/core/picture.ts";
 import { render } from "../../src/core/render.ts";
 import type { Scene } from "../../src/core/scene.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
@@ -106,6 +107,10 @@ async function send() {
     if (result.error) $("#errors").textContent = result.error;
     clearInk();
     $<HTMLTextAreaElement>("#words").value = "";
+    if (tuning["draw.fillPictures"]) {
+      const pics = await fillPictures(scene, tuning, () => draw(), undefined, ctx);
+      if (pics.drawn || pics.failed.length) $("#sendStat").textContent += ` · ${pics.drawn} pictures in ${pics.ms} ms${pics.failed.length ? ` (${pics.failed.length} failed)` : ""}`;
+    }
     spanSync("final redraw", ctx, () => draw());
     listSends();
   });
@@ -226,7 +231,7 @@ async function stopTalking() {
 }
 $("#talk").addEventListener("click", () => void (talking ? stopTalking() : talk()));
 
-tuningPanel($("#side"), ["draw", "shot", "link", "speech"], (t) => {
+tuningPanel($("#side"), ["draw", "picture", "shot", "link", "speech"], (t) => {
   tuning = t;
   draw();
 });

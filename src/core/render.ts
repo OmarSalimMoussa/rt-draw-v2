@@ -1,9 +1,10 @@
 // Draws a scene into an <svg> in the doodle style: rough outlines, Excalifont,
-// shapes painted back to front. A shape's picture is a placeholder until the
-// picture model exists.
+// shapes painted back to front. A shape's picture is its doodle once the
+// picture model has drawn it (src/core/picture.ts), a hatched placeholder until then.
 import rough from "roughjs";
 import type { Options } from "roughjs/bin/core";
 import { colName } from "./ops.ts";
+import { renderPicture } from "./picture.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
@@ -95,7 +96,17 @@ function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shap
   clip.append(el("path", { d: outline(s) }));
   svg.querySelector("defs")!.append(clip);
 
-  if (s.drawing) {
+  const drawn = s.drawing && s.picture?.subject === s.drawing && s.picture.els.length ? s.picture : undefined;
+  if (drawn) {
+    // The doodle, scaled to fit the shape as it is now (it may have moved or been resized since). Fade dims it, not the box.
+    const pic = el("g", { "clip-path": `url(#${clipId})` });
+    if (st.fade) pic.setAttribute("style", `opacity:${1 - st.fade * knobs["render.fadeOpacity"]};filter:saturate(${1 - st.fade})`);
+    const k = Math.min((w * knobs["picture.fill"]) / drawn.w, (h * knobs["picture.fill"]) / drawn.h);
+    const fit = el("g", { transform: `translate(${x + (w - drawn.w * k) / 2} ${y + (h - drawn.h * k) / 2}) scale(${k})` });
+    renderPicture(fit, drawn.els, { x: 0, y: 0, w: drawn.w, h: drawn.h }, knobs, svg);
+    pic.append(fit);
+    g.append(pic);
+  } else if (s.drawing) {
     // Placeholder picture: hatched, with what it will show. Fade dims it, not the box.
     const pic = el("g", { "clip-path": `url(#${clipId})` });
     if (st.fade) pic.setAttribute("style", `opacity:${1 - st.fade * knobs["render.fadeOpacity"]};filter:saturate(${1 - st.fade})`);

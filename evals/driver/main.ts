@@ -7,6 +7,7 @@ import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import messy from "../../src/fixtures/messy.ops.txt?raw";
 import { type SendResult, buildPrompt, run } from "../../src/core/draw.ts";
 import { strokePath } from "../../src/core/ink.ts";
+import { fillPictures, needsPicture } from "../../src/core/picture.ts";
 import { MODELS, type ModelName } from "../../src/core/model.ts";
 import { runScript } from "../../src/core/ops.ts";
 import { render } from "../../src/core/render.ts";
@@ -84,7 +85,7 @@ $("#persona").addEventListener("change", syncTarget);
 syncTarget();
 $("#dice").addEventListener("click", () => ($<HTMLInputElement>("#seed").value = String(Math.floor(Math.random() * 10000))));
 
-type Record_ = { n: number; turn: Turn; timeline: Timeline; transcript: string; result: SendResult; before: string; after?: string };
+type Record_ = { n: number; turn: Turn; timeline: Timeline; transcript: string; result: SendResult; pics?: { drawn: number; failed: string[]; ms: number }; before: string; after?: string };
 let scene: Scene = runScript("").scene;
 let past: Past[] = [];
 let sends: Record_[] = [];
@@ -198,7 +199,7 @@ function card(r: Record_) {
     <div><b>Says</b>: <span style="font:18px Excalifont, cursive">${esc(r.timeline.spoken || "(nothing)")}</span></div>
     <div><b>Does</b>: ${t.steps.map((s) => esc(describeStep(s as Step))).join(" → ")}</div>
     <div class="stat muted">the product got: ${esc(r.transcript || "(no words)")}</div>
-    <div class="stat">${r.result.error ? `<span class="bad">✗ ${esc(r.result.error)}</span>` : `${ok} ops applied${bad ? `, <span class="bad">${bad} failed</span>` : ""} · first op ${r.result.firstOpMs ?? "-"} ms · done ${r.result.ms} ms`}</div>
+    <div class="stat">${r.result.error ? `<span class="bad">✗ ${esc(r.result.error)}</span>` : `${ok} ops applied${bad ? `, <span class="bad">${bad} failed</span>` : ""} · first op ${r.result.firstOpMs ?? "-"} ms · done ${r.result.ms} ms`}${r.pics?.drawn || r.pics?.failed.length ? ` · ${r.pics.drawn} picture${r.pics.drawn === 1 ? "" : "s"} in ${r.pics.ms} ms${r.pics.failed.length ? ` <span class="bad">(${r.pics.failed.length} failed)</span>` : ""}` : ""}</div>
     <div class="row" style="align-items:start"><figure style="margin:0;flex:1"><img src="${r.before}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="muted stat">before</figcaption></figure>${r.after ? `<figure style="margin:0;flex:1"><img src="${r.after}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="muted stat">after</figcaption></figure>` : ""}</div>
     ${reaction?.satisfaction ? `<div><b>Then</b>: <span style="color:var(--accent)">${stars(reaction.satisfaction)}</span> ${esc(reaction.feeling ?? "")}<div class="muted">saw: ${esc(reaction.saw ?? "")}</div></div>` : ""}
   </div>`;
@@ -245,11 +246,15 @@ async function oneSend(): Promise<boolean> {
   const result = await span(`send ${n}`, undefined, async (ctx) => {
     const prompt = await buildPrompt(scene, timeline.strokes, timeline.words, tuning, ctx);
     const res = await run(scene, prompt, tuning, () => draw(), undefined, undefined, ctx);
-    return { prompt, res };
+    // The product isn't done until its pictures are drawn: the driver looks at what a user would see.
+    const waiting = scene.stacked().filter(needsPicture).length;
+    if (tuning["draw.fillPictures"] && waiting) status(`Send ${n}: drawing ${waiting} picture${waiting > 1 ? "s" : ""}…`);
+    const pics = tuning["draw.fillPictures"] ? await fillPictures(scene, tuning, () => draw(), undefined, ctx) : undefined;
+    return { prompt, res, pics };
   });
   ink!.replaceChildren();
   draw();
-  sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.res, before: shot.dataUrl });
+  sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.res, pics: result.pics, before: shot.dataUrl });
   past.push({ said: timeline.spoken, drew: turn.steps.filter((s) => "draw" in s).map((s) => describeStep(s)), intent: turn.intent });
   showLog();
   $<HTMLButtonElement>("#save").disabled = false;
