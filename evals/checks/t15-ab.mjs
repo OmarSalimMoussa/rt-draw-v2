@@ -4,7 +4,7 @@
 // at a closed port (the gateway's mockApi), the fake API's request count must equal the gateway's call
 // count, and scans and replays must make no call at all. The bank is built at 0 calls too: a first scan
 // serves each case's canned replies as stand-ins, then every request hash it saw gets its canned reply.
-// t20-history.mjs builds on fakeLoop(). Ports 5320–5322.
+// t20-history.mjs builds on fakeLoop(). Ports 5320–5322 (t20: 5325–5327).
 //   TMPDIR=<work dir> node --import ./evals/loop/node-hooks.mjs evals/checks/t15-ab.mjs
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -77,7 +77,8 @@ export async function fakeLoop({ port, slots = 2 }) {
     [`draw.${sha(PROMPTS.draw[0].system(true, 1280, 800, 0, SCREEN.w)).slice(0, 12)}.json`]: [note("#ffc9c9", 100), note("#a5d8ff", 140)],
     [`resolver.${sha(PROMPTS.resolve[0].system).slice(0, 12)}.txt`]: '{"refs": []}',
     [`picture.${sha(PROMPTS.picture[0].system(DEFAULTS)).slice(0, 12)}.txt`]: stubReply("picture"),
-    [`judge.${sha(P.SYSTEM).slice(0, 12)}.json`]: ["left", "right", "tie", "left", "right"].map((w, i) => JSON.stringify({ winner: w, confidence: 2 + (i % 2), why: `fake ${w}` })),
+    // One system prompt for every judge role: each reply reads as a verdict and as an expectation.
+    [`judge.${sha(P.SYSTEM).slice(0, 12)}.json`]: ["left", "right", "tie", "left", "right"].map((w, i) => JSON.stringify({ winner: w, confidence: 2 + (i % 2), why: `fake ${w}`, should: ["the asked change is made"], mustNot: ["nothing else moves"] })),
   };
   for (const [f, body] of Object.entries(files)) writeFileSync(join(replies, f), typeof body === "string" ? body : JSON.stringify(body));
   const api = await startFakeApi({ port, replies });

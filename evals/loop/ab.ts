@@ -168,7 +168,8 @@ function meterTail(run: string) {
   };
 }
 
-const product = (c: CallLog) => !["driver", "judge", "craft", "expectation", "miss", "failure", "probe", "analyst"].includes(c.role);
+/** A product call (an arm's), not the harness's own roles. */
+export const product = (c: CallLog) => !["driver", "judge", "craft", "expectation", "miss", "failure", "probe", "analyst"].includes(c.role);
 
 /** A run in progress: cases go in through add(), in entry order (dispatch order and judge positions follow it). */
 export function begin(rig: Rig, s: RunSpec) {
@@ -328,7 +329,8 @@ export function harnessTag(): string {
 
 // ---- Runs and decisions
 
-const clusterOf = (run: string) => (id: string) => json<CaseInfo>(caseFile(id, "case.json", run)).originSession;
+/** A case's origin session, read where its inputs come from: a yardstick case (U1's) may not be in the bank. */
+const clusterOf = (s: RunSpec) => (id: string) => json<CaseInfo>(s.source?.(id) ? join(s.source(id)!, "case.json") : caseFile(id, "case.json", s.run)).originSession;
 
 /** A decision's extra stages (G2 → G3 → G4) and the loop state its vetoes read. */
 export type Decide = {
@@ -349,7 +351,7 @@ export type ABResult = { rows: Row[]; heldout?: Row[]; continuation?: Row[]; dec
  */
 export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Decide): Promise<ABResult> {
   const r = begin(rig, s);
-  const order = entryOrder(s.cases, clusterOf(s.run), seedOf(s.seed));
+  const order = entryOrder(s.cases, clusterOf(s), seedOf(s.seed));
   try {
     if (!d) return { rows: await r.add(order), invariants: r.invariants };
     const rows: Row[] = [];
@@ -370,7 +372,7 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
       }
       if (dec.pending?.includes("heldout")) {
         const gate = (d.heldout ?? []).filter((id) => json<CaseInfo>(caseFile(id, "case.json", s.run)).set === "heldout-gate");
-        heldout = await r.add(entryOrder(gate, clusterOf(s.run), seedOf(`${s.seed} heldout`)).slice(0, LOOP.heldoutMax));
+        heldout = await r.add(entryOrder(gate, clusterOf(s), seedOf(`${s.seed} heldout`)).slice(0, LOOP.heldoutMax));
         continue;
       }
       if (dec.pending?.includes("continuation")) {
