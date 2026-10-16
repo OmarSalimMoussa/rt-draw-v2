@@ -16,8 +16,8 @@ import { span } from "../../src/core/trace.ts";
 import { DEFAULTS, tune, tuningId } from "../../src/core/tuning.ts";
 import { $, download, fontsReady, shell, stage } from "../../src/ui.ts";
 import { type Behaviour, type Past, type Turn, describeStep, driverTurn, systemPrompt } from "../core/driver.ts";
-import { PERSONAS, TARGETS } from "../core/personas.ts";
-import { type Step, type Timeline, type Token, type Traits, type Voiced, lineText, lines, synthesize } from "../core/synth.ts";
+import { PERSONAS, STYLES, type Style, TARGETS, randomStyle } from "../core/personas.ts";
+import { type Step, type Timeline, type Token, type Traits, type Voiced, lineText, lines, rng, synthesize } from "../core/synth.ts";
 
 shell("", "Driver demo: a model plays a user. It sees only the screen, talks and scribbles (synthesized into timed words and messy ink), presses Enter, and the real product answers. Each send is two or three calls on your Claude subscription: the driver, then the product (resolver and drawing model).");
 const { canvas, ink } = stage($("#left"), 1280, 800, true);
@@ -39,8 +39,12 @@ const slider = (id: string, label: string, value: number) => `<label title="${la
 $("#side").innerHTML = `
   <div class="card">
     <h2>Driver</h2>
-    <select id="persona">${PERSONAS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("")}</select>
-    <select id="target">${TARGETS.map((t) => `<option value="${t.id}">${t.name}</option>`).join("")}</select>
+    <select id="persona">${PERSONAS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("")}<option value="random">Who: random from the seed</option></select>
+    <select id="target">${TARGETS.map((t) => `<option value="${t.id}">${t.name}</option>`).join("")}<option value="random">Site: random from the seed</option></select>
+    <select id="style">${STYLES.map((x) => `<option value="${x.id}">${x.name}</option>`).join("")}<option value="random">How: random from the seed</option><option value="custom">Custom (the sliders)</option></select>
+    ${slider("words", "how much they say", 0.5)}
+    ${slider("clarity", "how clearly they describe", 0.5)}
+    ${slider("pen", "uses the marker", 0.5)}
     ${slider("mess", "messy ink", 0.5)}
     ${slider("disfluency", "ums and restarts", 0.5)}
     ${slider("patience", "patience", 0.5)}
@@ -54,10 +58,28 @@ $("#side").innerHTML = `
     <div class="row"><button id="reset">Reset</button><button id="save" disabled>Download the session record</button></div>
     <pre class="log bad" id="errors"></pre>
   </div>
-  <div class="card"><h2>What the driver is told</h2><details><summary class="muted">system prompt (fixed for the run)</summary><pre class="log" id="sys"></pre></details><div class="muted stat">It never sees our prompts, ops, knobs or code. Its last reply is in Model calls.</div></div>`;
+  <div class="card"><h2>What the driver is told</h2><div class="stat" id="who">Set when a run starts.</div><details><summary class="muted">system prompt (fixed for the run)</summary><pre class="log" id="sys"></pre></details><div class="muted stat">It never sees our prompts, ops, knobs or code. Its last reply is in Model calls.</div></div>`;
 
-for (const id of ["mess", "disfluency", "patience", "changeMind"]) $(`#${id}`).addEventListener("input", () => ($(`[data-for="${id}"]`).textContent = $<HTMLInputElement>(`#${id}`).value));
-const syncTarget = () => ($<HTMLSelectElement>("#target").disabled = $<HTMLSelectElement>("#persona").value !== "first-timer");
+const TRAITS = ["words", "clarity", "pen", "mess", "disfluency", "patience", "changeMind"] as const;
+for (const id of TRAITS)
+  $(`#${id}`).addEventListener("input", () => {
+    $(`[data-for="${id}"]`).textContent = $<HTMLInputElement>(`#${id}`).value;
+    // Moving a slider by hand makes the style a custom one.
+    $<HTMLSelectElement>("#style").value = "custom";
+  });
+/** Puts a style on the sliders. */
+function showStyle(st: Style) {
+  for (const id of TRAITS) {
+    $<HTMLInputElement>(`#${id}`).value = String(st[id]);
+    $(`[data-for="${id}"]`).textContent = String(st[id]);
+  }
+  $<HTMLInputElement>("#bigThenSmall").checked = st.bigThenSmall;
+}
+$("#style").addEventListener("change", () => {
+  const preset = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value);
+  if (preset) showStyle(preset.style);
+});
+const syncTarget = () => ($<HTMLSelectElement>("#target").disabled = !["first-timer", "random"].includes($<HTMLSelectElement>("#persona").value));
 $("#persona").addEventListener("change", syncTarget);
 syncTarget();
 $("#dice").addEventListener("click", () => ($<HTMLInputElement>("#seed").value = String(Math.floor(Math.random() * 10000))));
@@ -66,7 +88,7 @@ type Record_ = { n: number; turn: Turn; timeline: Timeline; transcript: string; 
 let scene: Scene = runScript("").scene;
 let past: Past[] = [];
 let sends: Record_[] = [];
-let setup: { persona: string; target?: string; traits: Traits; behaviour: Behaviour; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
+let setup: { persona: string; target?: string; style: string; traits: Traits; behaviour: Behaviour; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
 let stopAsked = false;
 let voiceOn = true;
 const spent = { bought: 0, cached: 0 };
@@ -80,15 +102,23 @@ const num = (id: string) => Number($<HTMLInputElement>(`#${id}`).value);
 const stars = (n?: number) => (n ? `${"★".repeat(n)}${"☆".repeat(5 - n)}` : "");
 
 function freshSetup() {
-  const persona = PERSONAS.find((p) => p.id === $<HTMLSelectElement>("#persona").value)!;
-  const target = persona.id === "first-timer" ? TARGETS.find((t) => t.id === $<HTMLSelectElement>("#target").value) : undefined;
-  const behaviour: Behaviour = { patience: num("patience"), changeMind: num("changeMind"), bigThenSmall: $<HTMLInputElement>("#bigThenSmall").checked };
+  // Anything set to random is drawn from the seed (its own stream), so a seed always gives the same driver.
+  const pick = rng(num("seed") ^ 0x2f6b9a1d);
+  const choose = <T,>(list: T[]) => list[Math.floor(pick() * list.length)];
+  const personaId = $<HTMLSelectElement>("#persona").value;
+  const persona = personaId === "random" ? choose(PERSONAS) : PERSONAS.find((p) => p.id === personaId)!;
+  const targetId = $<HTMLSelectElement>("#target").value;
+  const target = persona.id === "first-timer" ? (targetId === "random" ? choose(TARGETS) : TARGETS.find((t) => t.id === targetId)) : undefined;
+  if ($<HTMLSelectElement>("#style").value === "random") showStyle(randomStyle(pick));
+  const behaviour: Behaviour = { words: num("words"), clarity: num("clarity"), pen: num("pen"), patience: num("patience"), changeMind: num("changeMind"), bigThenSmall: $<HTMLInputElement>("#bigThenSmall").checked };
   // The driver's screenshot size, so it can give positions in its own pixels.
   const w = Math.round(scene.width * userView["shot.scale"]);
   const h = Math.round(scene.height * userView["shot.scale"]);
   const system = systemPrompt(persona, target, behaviour, w, h);
   $("#sys").textContent = system;
-  return { persona: persona.id, target: target?.id, traits: { mess: num("mess"), disfluency: num("disfluency") }, behaviour, seed: num("seed"), maxSends: Math.max(1, num("maxSends")), model: $<HTMLSelectElement>("#model").value as ModelName, system, fixture: $<HTMLSelectElement>("#fixture").value };
+  const styleName = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value)?.name.split(":")[0] ?? $<HTMLSelectElement>("#style").value;
+  $("#who").textContent = `${persona.name}${target ? ` · ${target.name}` : ""} · ${styleName} · ${TRAITS.map((id) => `${id} ${num(id)}`).join(" · ")}${behaviour.bigThenSmall ? " · big then small" : ""}`;
+  return { persona: persona.id, target: target?.id, style: $<HTMLSelectElement>("#style").value, traits: { mess: num("mess"), disfluency: num("disfluency") }, behaviour, seed: num("seed"), maxSends: Math.max(1, num("maxSends")), model: $<HTMLSelectElement>("#model").value as ModelName, system, fixture: $<HTMLSelectElement>("#fixture").value };
 }
 
 /** Each say step's line spoken by the voice (ElevenLabs, via the dev server), with its word times. */

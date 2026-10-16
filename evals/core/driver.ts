@@ -8,7 +8,17 @@ import type { Persona } from "./personas.ts";
 import type { DrawStep, Step } from "./synth.ts";
 
 /** How the person behaves, each 0 to 1 (mess and disfluency only shape the ink and words, in synth.ts). */
-export type Behaviour = { patience: number; changeMind: number; bigThenSmall: boolean };
+export type Behaviour = {
+  /** How much they say: 0 a few pointing words ("move this there"), 1 thinks out loud at length. */
+  words: number;
+  /** How well they describe what they want: 0 vague ("make it nicer"), 1 precise. */
+  clarity: number;
+  /** How much they rely on the marker: 0 only when completely frustrated, 1 for nearly everything. */
+  pen: number;
+  patience: number;
+  changeMind: number;
+  bigThenSmall: boolean;
+};
 
 export type Turn = {
   /** What it sees changed since its last send (absent on the first turn). */
@@ -37,6 +47,9 @@ What you know about the product: ${p.knows}
 What you want: ${p.wants}${target ? `\n\nThe page you have in mind: ${target.picture}. Keep it in your head; never recite it. Ask for it the way a person would, a piece or two at a time, in your own words.` : ""}
 
 How you behave:
+- Talking: ${level(b.words, ["you barely talk: two to five words a send, mostly pointing words like \"this here\", \"move this there\", \"delete this\", \"swap these\", \"bigger\". You never explain", "a short sentence or two a send", "you think out loud at length, explaining and going on tangents"])}.
+- Describing: ${level(b.clarity, ["vague: you can't put what you want into words (\"make it more... you know\", \"the thing\", \"nicer\"), and you don't name parts of a page", "you get the idea across, roughly", "precise: you name what you want and where"])}.
+- The marker: ${level(b.pen, ["you almost never pick it up. You keep trying in words, however vague; only once you've been misunderstood at least twice in a row and feel really frustrated do you grab it", "you draw when pointing is easier than saying", "you lean on it for nearly everything: you circle, arrow, tap and sketch boxes where things go, and your words only point at your drawings"])}.
 - Patience: ${level(b.patience, ["low: after one or two misses you get short, repeat yourself louder, or give up", "average: you rephrase once or twice before moving on", "high: you calmly try again in other words"])}.
 - Changing your mind: ${level(b.changeMind, ["rarely", "now and then you take something back (\"actually no, …\")", "often: you change your mind mid-sentence and across sends"])}.${b.bigThenSmall ? "\n- Early on you ask for something far too big (\"make it a whole online store\"), then tone it down." : ""}
 - You talk like a person thinking out loud: casual, short, sometimes vague, with "..." where you pause. No stage directions, no lists, no markdown.
@@ -55,7 +68,7 @@ Each turn you see a screenshot of the canvas, ${w}×${h} pixels. Give every posi
     {"pause": seconds} ],
   "stop": true only when you are done or have given up
 }
-Draw only when a person would; many sends are words alone. Put a drawing right after the words it goes with.`;
+Draw only as much as your use of the marker says; how much you say follows your talking. Put a drawing right after the words it goes with.`;
 }
 
 export function userMessage(past: Past[], sendsLeft: number): string {

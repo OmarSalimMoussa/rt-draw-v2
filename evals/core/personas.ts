@@ -45,3 +45,20 @@ export const TARGETS: { id: string; name: string; picture: string }[] = [
   { id: "dashboard", name: "A SaaS dashboard", picture: "an analytics dashboard: a top bar with search and an avatar, a left menu, four number cards across the top (users, revenue, churn, signups), a line chart, and a table of recent customers" },
   { id: "repo", name: "A code repository page (like GitHub)", picture: "a code repository page: the repo name and a star button, tabs (Code, Issues, Pull requests), a file list, and the README below with a title and a few paragraphs" },
 ];
+
+/** How a person talks and draws, as presets of the driver's traits (each 0 to 1). */
+export type Style = { mess: number; disfluency: number; words: number; clarity: number; pen: number; patience: number; changeMind: number; bigThenSmall: boolean };
+
+export const STYLES: { id: string; name: string; style: Style }[] = [
+  { id: "typical", name: "Typical: says it and points sometimes", style: { mess: 0.5, disfluency: 0.5, words: 0.5, clarity: 0.5, pen: 0.5, patience: 0.5, changeMind: 0.3, bigThenSmall: false } },
+  { id: "pointer", name: "Pointer: few words, all marker", style: { mess: 0.6, disfluency: 0.2, words: 0, clarity: 0.2, pen: 1, patience: 0.5, changeMind: 0.3, bigThenSmall: false } },
+  { id: "talker", name: "Vague talker: avoids the marker", style: { mess: 0.6, disfluency: 0.7, words: 0.6, clarity: 0.1, pen: 0, patience: 0.6, changeMind: 0.4, bigThenSmall: false } },
+  { id: "precise", name: "Precise: names everything", style: { mess: 0.3, disfluency: 0.2, words: 0.7, clarity: 1, pen: 0.4, patience: 0.7, changeMind: 0.1, bigThenSmall: false } },
+  { id: "rambler", name: "Rambler: talks a lot, changes their mind", style: { mess: 0.7, disfluency: 0.9, words: 1, clarity: 0.4, pen: 0.4, patience: 0.4, changeMind: 0.9, bigThenSmall: true } },
+];
+
+/** A style drawn from a seed, every trait anywhere from 0 to 1 (to a tenth), so runs spread across all of them. */
+export function randomStyle(next: () => number): Style {
+  const x = () => Math.round(next() * 10) / 10;
+  return { mess: x(), disfluency: x(), words: x(), clarity: x(), pen: x(), patience: x(), changeMind: x(), bigThenSmall: next() < 0.25 };
+}

@@ -34,6 +34,18 @@ export const SYNTH = {
   talkOverDraw: 0.6,
   /** Between the shaft and the head of an arrow. */
   liftMs: 180,
+  /** Even the tidiest hand has this much mess (mess 0 → this, mess 1 → 1). */
+  handFloor: 0.25,
+  /** A hand-drawn box's corners land up to this far off, at full mess (and never more than a tenth of its shorter side, plus 3). */
+  boxCornerPx: 14,
+  /** Its sides bow out or in by up to this, at full mess. */
+  boxBowPx: 7,
+  /** It sits tilted by up to this, at full mess. */
+  boxTiltDeg: 3.5,
+  /** Drawn as four separate sides, each runs past its corners by up to this. */
+  boxOverrunPx: 14,
+  /** A hand rounds each corner over up to this, at full mess. */
+  boxRoundPx: 12,
   /** At full mess, a loop stops up to this share of a turn short of closing, or runs on this far past it (people overshoot more). */
   loopShort: 0.1,
   loopOver: 0.22,
@@ -95,10 +107,43 @@ function trace(path: (u: number) => [number, number], length: number, t0: number
   return pts;
 }
 
+type XY = [number, number];
+
+/** A path through points, by length along it, each inner corner rounded over up to `round` px. */
+function polyline(pts: XY[], round: number): { at: (u: number) => XY; length: number } {
+  const p: XY[] = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, v, b] = [pts[i - 1], pts[i], pts[i + 1]];
+    const da = Math.hypot(a[0] - v[0], a[1] - v[1]) || 1;
+    const db = Math.hypot(b[0] - v[0], b[1] - v[1]) || 1;
+    const ka = Math.min(round, da * 0.3) / da;
+    const kb = Math.min(round, db * 0.3) / db;
+    const p1: XY = [v[0] + (a[0] - v[0]) * ka, v[1] + (a[1] - v[1]) * ka];
+    const p2: XY = [v[0] + (b[0] - v[0]) * kb, v[1] + (b[1] - v[1]) * kb];
+    // The corner cut by a curve that passes halfway between the cut and the corner.
+    p.push(p1, [(p1[0] + p2[0]) / 4 + v[0] / 2, (p1[1] + p2[1]) / 4 + v[1] / 2], p2);
+  }
+  p.push(pts.at(-1)!);
+  const cum = [0];
+  for (let i = 1; i < p.length; i++) cum.push(cum[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+  const length = cum.at(-1)! || 1;
+  return {
+    length,
+    at: (u) => {
+      const d = Math.max(0, Math.min(1, u)) * length;
+      let i = 1;
+      while (i < p.length - 1 && cum[i] < d) i++;
+      const f = (d - cum[i - 1]) / (cum[i] - cum[i - 1] || 1);
+      return [p[i - 1][0] + (p[i][0] - p[i - 1][0]) * f, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * f];
+    },
+  };
+}
+
 const box4 = (b: number[]) => ({ x: b[0] ?? 0, y: b[1] ?? 0, w: Math.max(4, b[2] ?? 40), h: Math.max(4, b[3] ?? 40) });
 
 /** The strokes for one drawing step, starting at t0. */
-function strokesFor(step: DrawStep, t0: number, r: Rand, mess: number): Pt[][] {
+function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
+  const mess = SYNTH.handFloor + (1 - SYNTH.handFloor) * tidy;
   const out: Pt[][] = [];
   const add = (path: (u: number) => [number, number], length: number, at: number) => {
     const pts = trace(path, length, at, r, mess);
@@ -125,16 +170,47 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, mess: number): Pt[][] {
       break;
     }
     case "box": {
+      // Where a box or section should go: corners off, sides bowed, the whole thing a little
+      // tilted, corners rounded; drawn as one loop, as two L's, or as four sides that overrun.
       const b = box4(step.box);
-      const o = 8 * mess;
-      const c: [number, number][] = [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h], [b.x + between(r, 0, o), b.y - between(r, 0, o)]];
-      const jit = c.map(([x, y]) => [x + between(r, -o, o), y + between(r, -o, o)] as [number, number]);
-      add((u) => {
-        const s = u * 4;
-        const i = Math.min(3, Math.floor(s));
-        const f = s - i;
-        return [jit[i][0] + (jit[i + 1][0] - jit[i][0]) * f, jit[i][1] + (jit[i + 1][1] - jit[i][1]) * f];
-      }, 2 * (b.w + b.h), t0);
+      const jit = Math.min(SYNTH.boxCornerPx * mess, Math.min(b.w, b.h) / 10 + 3);
+      const tilt = (between(r, -1, 1) * SYNTH.boxTiltDeg * mess * Math.PI) / 180;
+      const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
+      const turn = ([x, y]: XY): XY => [cx + (x - cx) * Math.cos(tilt) - (y - cy) * Math.sin(tilt), cy + (x - cx) * Math.sin(tilt) + (y - cy) * Math.cos(tilt)];
+      const corner = ([x, y]: XY): XY => turn([x + between(r, -jit, jit), y + between(r, -jit, jit)]);
+      const [tl, tr, br, bl] = ([[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]] as XY[]).map(corner);
+      /** A side from a to b, bowed at its middle. */
+      const side = (a: XY, c: XY): XY[] => {
+        const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
+        const bow = between(r, -1, 1) * SYNTH.boxBowPx * mess;
+        return [a, [(a[0] + c[0]) / 2 + (-(c[1] - a[1]) / len) * bow, (a[1] + c[1]) / 2 + ((c[0] - a[0]) / len) * bow]];
+      };
+      const round = SYNTH.boxRoundPx * mess;
+      const draw = (pts: XY[], at: number) => {
+        const pl = polyline(pts, round);
+        return add(pl.at, pl.length, at);
+      };
+      const lift = () => SYNTH.liftMs * between(r, 0.6, 1.4);
+      const style = r();
+      if (style < 0.45) {
+        // One stroke round, ending short of the start or running past it.
+        const end: XY = [tl[0] + between(r, -0.5, 1) * jit * 1.5, tl[1] + between(r, -1, 1) * jit];
+        draw([...side(tl, tr), ...side(tr, br), ...side(br, bl), ...side(bl, tl), end], t0);
+      } else if (style < 0.75) {
+        // Top and right, then left and bottom.
+        const t = draw([...side(tl, tr), ...side(tr, br), br], t0) + lift();
+        draw([...side(tl, bl), ...side(bl, br), [br[0] + between(r, -jit, jit), br[1] + between(r, -jit, jit) / 2]], t);
+      } else {
+        // Four sides, each overrunning its corners.
+        let t = t0;
+        for (const [a, c] of [[tl, tr], [tr, br], [br, bl], [bl, tl]] as [XY, XY][]) {
+          const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
+          const [ux, uy] = [(c[0] - a[0]) / len, (c[1] - a[1]) / len];
+          const o1 = between(r, 0, SYNTH.boxOverrunPx * mess);
+          const o2 = between(r, 0, SYNTH.boxOverrunPx * mess);
+          t = draw([[a[0] - ux * o1, a[1] - uy * o1], ...side(a, c).slice(1), [c[0] + ux * o2, c[1] + uy * o2]], t) + lift();
+        }
+      }
       break;
     }
     case "cross": {
