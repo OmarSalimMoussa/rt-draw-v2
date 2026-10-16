@@ -100,6 +100,8 @@ export type Judged = {
   winner: "left" | "right" | "tie"; confidence: 1 | 2 | 3; why: string;
   /** prompt variant 2's per-side answers */ left?: string; right?: string;
   positions: { left: Arm; right: Arm }; judgeId: string;
+  /** The prompt variant it was asked with (§4.3; absent = 1), so calibration knows what a re-judge must replace. */
+  variant?: 1 | 2;
 };
 /** load.ndjson, every 5 s. */
 export type LoadSample = { at: number; load1: number; psiCpu: number; psiMemory: number };
