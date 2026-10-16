@@ -412,8 +412,8 @@ async function smoke() {
   await withGateway(async (gw) => {
     const t = tokens();
     line(true, `status: ${t.length} token slots, cap ${o.cap}, launched ${process.env.RT_EVAL_LAUNCHED === "1" ? "yes" : "no"}`);
-    // U2: one tiny call per slot, so each slot reports its own reset.
-    for (const k of t) await ask({ role: "probe", model: "haiku", system: "Answer with one word.", user: "Ready?", run, token: k.slot }, gw);
+    // U2: one tiny call per slot, so each slot reports its own reset (each its own request: the run's cache would serve a repeat).
+    for (const k of t) await ask({ role: "probe", model: "haiku", system: "Answer with one word.", user: `Ready, slot ${k.slot}?`, run, token: k.slot }, gw);
     const slots = (await gatewayStatus(gw)).slots as { slot: number; resetsAt?: number }[];
     if (t.length < 2) line("note", "U2: skipped: one token");
     else line(slots.every((s) => s.resetsAt) && new Set(slots.map((s) => s.resetsAt)).size === slots.length, `U2: the slots' resetsAt ${slots.map((s) => s.resetsAt).join(", ")} differ`);

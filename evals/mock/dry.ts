@@ -43,6 +43,16 @@ function drawReplies(): string[] {
   });
 }
 
+/** The stored driver replies predate `meant` (they say `intent`): renamed, or V6 voids every send as "meant is empty". */
+function meant(reply: string): string {
+  try {
+    const { intent, ...turn } = JSON.parse(reply);
+    return JSON.stringify(intent === undefined ? turn : { ...turn, meant: turn.meant ?? intent });
+  } catch {
+    return reply; // prose around the object: parseTurn's job, as with a real reply
+  }
+}
+
 /** One reply for every judge role (they share a system prompt): a verdict, an expectation and a miss check. */
 const judgeReplies = () =>
   ["left", "right", "left", "tie", "right", "left", "right"].map((winner, i) =>
@@ -55,7 +65,7 @@ export function writeDry(dir: string) {
   for (const v of PROMPTS.draw) put("draw", v.system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), drawReplies());
   for (const v of PROMPTS.resolve) put("draw-refs", v.system, ['{"refs": []}']);
   for (const v of PROMPTS.picture) put("picture", v.system(DEFAULTS), [stubReply("picture")]);
-  put("driver", systemPrompt(), readFileSync(DRIVER_REPLIES, "utf8").split("\n").filter(Boolean).map((l) => (JSON.parse(l) as { reply: string }).reply));
+  put("driver", systemPrompt(), readFileSync(DRIVER_REPLIES, "utf8").split("\n").filter(Boolean).map((l) => meant((JSON.parse(l) as { reply: string }).reply)));
   put("judge", JUDGE_SYSTEM, judgeReplies());
   put("failure", FAILURE_SYSTEM, ["[]"]);
   put("analyst", ANALYST_SYSTEM, ["dry run: nothing to propose"]);
