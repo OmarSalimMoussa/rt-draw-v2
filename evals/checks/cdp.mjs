@@ -105,6 +105,8 @@ export async function openChrome({ stubs = {}, width = 1280, height = 800 } = {}
     const body = request.postData ?? (request.postDataEntries ?? []).map((e) => Buffer.from(e.bytes ?? "", "base64").toString()).join("");
     const r = await stub({ url: request.url, method: request.method, headers: request.headers, body });
     const out = typeof r === "string" ? { body: r } : r;
+    // A stub may hand the request on to a local server instead, e.g. one that streams its reply over time.
+    if (out.redirect) return send("Fetch.continueRequest", { requestId, url: assertLocalOnly(new URL(out.redirect, request.url).href) }, sessionId);
     const reply = { requestId, responseCode: out.status ?? 200, responseHeaders: [{ name: "content-type", value: out.type ?? "application/x-ndjson" }], body: Buffer.from(out.body ?? "").toString("base64") };
     await send("Fetch.fulfillRequest", reply, sessionId);
   }
@@ -142,6 +144,9 @@ export async function openChrome({ stubs = {}, width = 1280, height = 800 } = {}
     errors,
     /** /api/* requests the page sent (seen), answered by a stub (stubbed), and per path. */
     counts: () => ({ seen: 0, stubbed: 0, ...counted.all }),
+    /** Raw CDP for what `page` doesn't cover, e.g. a second tab: cdp(method, params, sessionId), and every event. */
+    cdp: send,
+    onEvent: (f) => listeners.add(f),
     /** Closes Chrome and waits until none of its processes is left; returns how many are (0). */
     async close() {
       send("Browser.close").catch(() => {});
