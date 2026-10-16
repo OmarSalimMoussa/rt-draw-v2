@@ -2,13 +2,18 @@
 // there") into what a person would have produced: timed words and messy ink on
 // one clock, so the product gets exactly what it gets from a real user. Seeded:
 // the same steps and seed give the same words and strokes.
+import type { View } from "../../src/core/board.ts";
 import type { Pt, Stroke } from "../../src/core/ink.ts";
 import type { Word } from "../../src/core/link.ts";
 
 /** How messy and how fluent the simulated person is, each 0 (tidy, fluent) to 1. */
 export type Traits = { mess: number; disfluency: number };
 
-/** The harness's numbers, by name. Frozen for the optimizer (eval/ is read-only to it). */
+/**
+ * The harness's numbers, by name. Frozen for the optimizer (evals/ is read-only to it).
+ * Lengths are screen pixels on the product's 1280-wide screen (board pixels at the start
+ * view): the hand works on the screen, so zoomed out the same arrow covers more board.
+ */
 export const SYNTH = {
   /** Words a second when speaking fluently. */
   wordsPerSec: 2.8,
@@ -22,7 +27,7 @@ export const SYNTH = {
   fillerRate: 0.18,
   /** And this share of words are restarted ("the, the"). */
   restartRate: 0.08,
-  /** Pen speed, canvas px per ms, give or take a fifth. */
+  /** Pen speed, screen px per ms, give or take a fifth. */
   penPxPerMs: 1.1,
   /** A point every this many ms of pen movement. */
   sampleMs: 12,
@@ -30,6 +35,9 @@ export const SYNTH = {
   wobblePx: 7,
   /** A drawing starts this long before the end of the word just said (people point while saying "this"). */
   pointLeadMs: 250,
+  /** Lifting the pen and moving to the next drawing takes this long, at least and at most. */
+  penUpMinMs: 150,
+  penUpMaxMs: 400,
   /** Speech carries on once this share of a drawing is done. */
   talkOverDraw: 0.6,
   /** Between the shaft and the head of an arrow. */
@@ -46,19 +54,26 @@ export const SYNTH = {
   boxOverrunPx: 14,
   /** A hand rounds each corner over up to this, at full mess. */
   boxRoundPx: 12,
+  /** A loop is a rounded box this far outside its target on each side, at least and at most. */
+  loopMarginMinPx: 10,
+  loopMarginMaxPx: 30,
   /** At full mess, a loop stops up to this share of a turn short of closing, or runs on this far past it (people overshoot more). */
   loopShort: 0.1,
   loopOver: 0.22,
-  /** At full mess, a loop can come up this share short of enclosing its box's corners. */
+  /** At full mess, a loop's corners can be rounded this share past the radius that still encloses its target's corners. */
   loopClip: 0.15,
   /** A scribble-out runs this share of the box past its edges. */
   crossOverrun: 0.08,
-  /** An arrowhead's barbs are this long, smallest to largest. */
-  headMinPx: 20,
+  /** An arrowhead's barbs are this share of the shaft, smallest to largest, and never shorter or longer than these. */
+  headMinFrac: 0.25,
+  headMaxFrac: 0.4,
+  headMinPx: 8,
   headMaxPx: 34,
   /** A scroll or zoom by hand takes this long, give or take a fifth. */
   viewMs: 600,
 };
+/** The product's screen width: SYNTH's lengths are in these pixels (board.ts' SCREEN.w, copied so this file imports only types). */
+const SCREEN_W = 1280;
 
 export type DrawStep =
   | { draw: "circle"; around: number[] }
@@ -67,11 +82,16 @@ export type DrawStep =
   | { draw: "underline"; box: number[] }
   | { draw: "arrow"; from: number[]; to: number[] }
   | { draw: "line"; from: number[]; to: number[] }
-  | { draw: "tap"; at: number[] };
+  | { draw: "tap"; at: number[] }
+  | { draw: "sketch"; shape: "wave" | "zigzag" | "blob"; box: number[] };
 /** Moving the view by hand, like on a trackpad: scroll by (dx, dy), zoom a step, or zoom in on a box. Board pixels once parsed. */
 export type ViewStep = { scroll: number[] } | { zoom: "in" | "out" } | { look: number[] };
-export type Step = { say: string } | DrawStep | ViewStep | { pause: number };
+/** `undo` takes the last send back: the harness restores the scene, so it takes no time here. */
+export type Step = { say: string } | DrawStep | ViewStep | { pause: number } | { undo: true };
 export const isView = (s: Step): s is ViewStep => "scroll" in s || "zoom" in s || "look" in s;
+
+/** Every stroke the synthesizer makes says so, so ink-reading tuning can refuse it (scripts/tune.ts). */
+export type SynthStroke = Stroke & { source: "synth" };
 
 /** mulberry32: a small seeded random source. */
 export function rng(seed: number) {
@@ -94,12 +114,12 @@ function wobble(r: Rand, amp: number) {
   return (u: number): [number, number] => [amp * (0.7 * Math.sin(f1 * u * 6.28 + p1) + 0.3 * Math.sin(f2 * u * 6.28 + p2)), amp * (0.7 * Math.cos(f1 * u * 6.28 + p2) + 0.3 * Math.sin(f2 * u * 6.28 + p1))];
 }
 
-/** Samples a path (u from 0 to 1) at pen speed from time t0, with wobble. */
-function trace(path: (u: number) => [number, number], length: number, t0: number, r: Rand, mess: number): Pt[] {
-  const speed = SYNTH.penPxPerMs * between(r, 0.8, 1.2);
+/** Samples a path (u from 0 to 1) at pen speed from time t0, with wobble; k = board px per screen px. */
+function trace(path: (u: number) => [number, number], length: number, t0: number, r: Rand, mess: number, k: number): Pt[] {
+  const speed = SYNTH.penPxPerMs * between(r, 0.8, 1.2) * k;
   const ms = Math.max(SYNTH.sampleMs * 2, length / speed);
   const n = Math.max(2, Math.round(ms / SYNTH.sampleMs));
-  const off = wobble(r, SYNTH.wobblePx * mess);
+  const off = wobble(r, SYNTH.wobblePx * mess * k);
   const pts: Pt[] = [];
   for (let i = 0; i <= n; i++) {
     // Slow at the ends, fast in the middle, like a hand.
@@ -113,6 +133,7 @@ function trace(path: (u: number) => [number, number], length: number, t0: number
 }
 
 type XY = [number, number];
+type Path = { at: (d: number) => XY; length: number };
 
 /** A path through points, by length along it, each inner corner rounded over up to `round` px. */
 function polyline(pts: XY[], round: number): { at: (u: number) => XY; length: number } {
@@ -144,41 +165,64 @@ function polyline(pts: XY[], round: number): { at: (u: number) => XY; length: nu
   };
 }
 
-const box4 = (b: number[]) => ({ x: b[0] ?? 0, y: b[1] ?? 0, w: Math.max(4, b[2] ?? 40), h: Math.max(4, b[3] ?? 40) });
+/** A box with corners rounded by rc, clockwise from the top left by length along it (wrapping round). */
+function roundedBox(x: number, y: number, w: number, h: number, rc: number): Path {
+  const [sw, sh, q] = [w - 2 * rc, h - 2 * rc, (Math.PI / 2) * rc];
+  const arc = (cx: number, cy: number, a0: number) => (f: number): XY => [cx + rc * Math.cos(a0 + (f * Math.PI) / 2), cy + rc * Math.sin(a0 + (f * Math.PI) / 2)];
+  const segs: [number, (f: number) => XY][] = [
+    [sw, (f) => [x + rc + sw * f, y]], [q, arc(x + w - rc, y + rc, -Math.PI / 2)],
+    [sh, (f) => [x + w, y + rc + sh * f]], [q, arc(x + w - rc, y + h - rc, 0)],
+    [sw, (f) => [x + w - rc - sw * f, y + h]], [q, arc(x + rc, y + h - rc, Math.PI / 2)],
+    [sh, (f) => [x, y + h - rc - sh * f]], [q, arc(x + rc, y + rc, Math.PI)],
+  ];
+  const length = segs.reduce((s, [l]) => s + l, 0) || 1;
+  return {
+    length,
+    at: (d) => {
+      let left = ((d % length) + length) % length;
+      for (const [l, at] of segs) {
+        if (left <= l && l > 0) return at(left / l);
+        left -= l;
+      }
+      return segs[0][1](0);
+    },
+  };
+}
 
-/** The strokes for one drawing step, starting at t0. */
-function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
+const box4 = (b: number[], k: number) => ({ x: b[0] ?? 0, y: b[1] ?? 0, w: Math.max(4 * k, b[2] ?? 40 * k), h: Math.max(4 * k, b[3] ?? 40 * k) });
+
+/** The strokes for one drawing step, starting at t0; k = board px per screen px. */
+function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number, k: number): Pt[][] {
   const mess = SYNTH.handFloor + (1 - SYNTH.handFloor) * tidy;
   const out: Pt[][] = [];
   const add = (path: (u: number) => [number, number], length: number, at: number) => {
-    const pts = trace(path, length, at, r, mess);
+    const pts = trace(path, length, at, r, mess, k);
     out.push(pts);
     return pts.at(-1)![2];
   };
   switch (step.draw) {
     case "circle": {
-      const b = box4(step.around);
-      const cx = b.x + b.w / 2 + between(r, -0.08, 0.08) * b.w * mess;
-      const cy = b.y + b.h / 2 + between(r, -0.08, 0.08) * b.h * mess;
-      // Around a box's corners takes √2 its half-size; a messy hand sometimes clips a corner.
-      const rx = (b.w / 2) * Math.SQRT2 * between(r, 1 - SYNTH.loopClip * mess, 1.12) + 4;
-      const ry = (b.h / 2) * Math.SQRT2 * between(r, 1 - SYNTH.loopClip * mess, 1.15) + 4;
-      const start = r() * Math.PI * 2;
+      // A loop around a thing: a rounded box with room on every side (an ellipse through
+      // the corners takes in the neighbours), sometimes cutting a corner, not quite closed.
+      const b = box4(step.around, k);
+      const m = () => between(r, SYNTH.loopMarginMinPx, SYNTH.loopMarginMaxPx) * k;
+      const [ml, mt, mr, mb] = [m(), m(), m(), m()];
+      const [w, h] = [b.w + ml + mr, b.h + mt + mb];
+      // The largest corner radius whose arc still passes outside the target's corner: a + c + √(2ac) for margins a, c.
+      const enclose = Math.min(...([[ml, mt], [mr, mt], [mr, mb], [ml, mb]] as XY[]).map(([a, c]) => a + c + Math.sqrt(2 * a * c)));
+      const rc = Math.min(Math.min(w, h) / 2, enclose * between(r, 0.4, 1 + SYNTH.loopClip * mess));
+      const loop = roundedBox(b.x - ml, b.y - mt, w, h, rc);
+      const start = r() * loop.length;
       // A tidy loop closes; a messy one stops short or runs on past the start.
-      const sweep = Math.PI * 2 * (1 + between(r, -SYNTH.loopShort, SYNTH.loopOver) * mess);
-      const tilt = between(r, -0.15, 0.15) * mess;
-      add((u) => {
-        const a = start + sweep * u;
-        const [ex, ey] = [rx * Math.cos(a), ry * Math.sin(a)];
-        return [cx + ex * Math.cos(tilt) - ey * Math.sin(tilt), cy + ex * Math.sin(tilt) + ey * Math.cos(tilt)];
-      }, sweep * (rx + ry) / 2, t0);
+      const sweep = loop.length * (1 + between(r, -SYNTH.loopShort, SYNTH.loopOver) * mess);
+      add((u) => loop.at(start + sweep * u), sweep, t0);
       break;
     }
     case "box": {
       // Where a box or section should go: corners off, sides bowed, the whole thing a little
       // tilted, corners rounded; drawn as one loop, as two L's, or as four sides that overrun.
-      const b = box4(step.box);
-      const jit = Math.min(SYNTH.boxCornerPx * mess, Math.min(b.w, b.h) / 10 + 3);
+      const b = box4(step.box, k);
+      const jit = Math.min(SYNTH.boxCornerPx * mess * k, Math.min(b.w, b.h) / 10 + 3 * k);
       const tilt = (between(r, -1, 1) * SYNTH.boxTiltDeg * mess * Math.PI) / 180;
       const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
       const turn = ([x, y]: XY): XY => [cx + (x - cx) * Math.cos(tilt) - (y - cy) * Math.sin(tilt), cy + (x - cx) * Math.sin(tilt) + (y - cy) * Math.cos(tilt)];
@@ -187,10 +231,10 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
       /** A side from a to b, bowed at its middle. */
       const side = (a: XY, c: XY): XY[] => {
         const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
-        const bow = between(r, -1, 1) * SYNTH.boxBowPx * mess;
+        const bow = between(r, -1, 1) * SYNTH.boxBowPx * mess * k;
         return [a, [(a[0] + c[0]) / 2 + (-(c[1] - a[1]) / len) * bow, (a[1] + c[1]) / 2 + ((c[0] - a[0]) / len) * bow]];
       };
-      const round = SYNTH.boxRoundPx * mess;
+      const round = SYNTH.boxRoundPx * mess * k;
       const draw = (pts: XY[], at: number) => {
         const pl = polyline(pts, round);
         return add(pl.at, pl.length, at);
@@ -211,8 +255,8 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
         for (const [a, c] of [[tl, tr], [tr, br], [br, bl], [bl, tl]] as [XY, XY][]) {
           const len = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
           const [ux, uy] = [(c[0] - a[0]) / len, (c[1] - a[1]) / len];
-          const o1 = between(r, 0, SYNTH.boxOverrunPx * mess);
-          const o2 = between(r, 0, SYNTH.boxOverrunPx * mess);
+          const o1 = between(r, 0, SYNTH.boxOverrunPx * mess * k);
+          const o2 = between(r, 0, SYNTH.boxOverrunPx * mess * k);
           t = draw([[a[0] - ux * o1, a[1] - uy * o1], ...side(a, c).slice(1), [c[0] + ux * o2, c[1] + uy * o2]], t) + lift();
         }
       }
@@ -220,7 +264,7 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
     }
     case "cross": {
       // Scribbled out: a zigzag across the box.
-      const b = box4(step.box);
+      const b = box4(step.box, k);
       const passes = Math.round(between(r, 4, 7));
       add((u) => {
         const s = u * passes;
@@ -233,10 +277,10 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
       break;
     }
     case "underline": {
-      const b = box4(step.box);
-      const y = b.y + b.h + between(r, 4, 10);
-      const slant = between(r, -6, 6) * mess;
-      add((u) => [b.x - 4 + (b.w + 8) * u, y + slant * u], b.w, t0);
+      const b = box4(step.box, k);
+      const y = b.y + b.h + between(r, 4, 10) * k;
+      const slant = between(r, -6, 6) * mess * k;
+      add((u) => [b.x - 4 * k + (b.w + 8 * k) * u, y + slant * u], b.w, t0);
       break;
     }
     case "line": {
@@ -253,10 +297,11 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
       const [qx, qy] = [(x0 + x1) / 2 + nx * bow, (y0 + y1) / 2 + ny * bow];
       const bez = (u: number): [number, number] => [(1 - u) ** 2 * x0 + 2 * (1 - u) * u * qx + u * u * x1, (1 - u) ** 2 * y0 + 2 * (1 - u) * u * qy + u * u * y1];
       let t = add(bez, len, t0);
-      // The head: two barbs back from the tip along the shaft's last direction. Messy hands
-      // make them lopsided, and sometimes draw only one (it then reads like a tick).
+      // The head: two barbs back from the tip along the shaft's last direction, sized to the
+      // shaft (a fixed 20–34 px head swallowed short arrows). Messy hands make them lopsided,
+      // and sometimes draw only one (it then reads like a tick).
       const back = Math.atan2(y1 - qy, x1 - qx) + Math.PI;
-      const size = between(r, SYNTH.headMinPx, SYNTH.headMaxPx);
+      const size = Math.min(SYNTH.headMaxPx * k, Math.max(SYNTH.headMinPx * k, len * between(r, SYNTH.headMinFrac, SYNTH.headMaxFrac)));
       const spread = (between(r, 22, 38) * Math.PI) / 180;
       const lop = between(r, -0.35, 0.35) * mess;
       const b1: [number, number] = [x1 + size * Math.cos(back + spread * (1 + lop)), y1 + size * Math.sin(back + spread * (1 + lop))];
@@ -268,8 +313,31 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, tidy: number): Pt[][] {
     }
     case "tap": {
       const [x, y] = step.at;
-      const j = 3 * mess;
-      out.push([[x + between(r, -j, j), y + between(r, -j, j), Math.round(t0)], [x + between(r, -1, 1), y + between(r, -1, 1), Math.round(t0 + 60)]]);
+      const j = 3 * mess * k;
+      out.push([[x + between(r, -j, j), y + between(r, -j, j), Math.round(t0)], [x + between(r, -1, 1) * k, y + between(r, -1, 1) * k, Math.round(t0 + 60)]]);
+      break;
+    }
+    case "sketch": {
+      // A quick freehand squiggle filling the box where something goes: a wave, a zigzag or a blob.
+      const b = box4(step.box, k);
+      if (step.shape === "zigzag") {
+        const teeth = Math.round(between(r, 3, 6));
+        const pts = Array.from({ length: teeth + 1 }, (_, i): XY => [b.x + (b.w * i) / teeth, i % 2 ? b.y + b.h * between(r, 0.94, 1) : b.y + b.h * between(r, 0, 0.06)]);
+        const pl = polyline(pts, 0);
+        add(pl.at, pl.length, t0);
+      } else if (step.shape === "wave") {
+        const [cycles, phase, amp] = [between(r, 1.5, 3), r() * Math.PI * 2, (b.h / 2) * between(r, 0.9, 1)];
+        add((u) => [b.x + b.w * u, b.y + b.h / 2 + amp * Math.sin(phase + cycles * Math.PI * 2 * u)], b.w + 4 * amp * cycles, t0);
+      } else {
+        // A lumpy loop: two slow bumps take up to a tenth off the radius.
+        const [a3, a2, p3, p2, start] = [between(r, 0.04, 0.07), between(r, 0, 0.03), r() * 6.28, r() * 6.28, r() * 6.28];
+        const sweep = Math.PI * 2 * (1 + between(r, 0, 0.08));
+        add((u) => {
+          const a = start + sweep * u;
+          const f = 1 - a3 * (1 + Math.sin(3 * a + p3)) - a2 * (1 + Math.sin(2 * a + p2));
+          return [b.x + (b.w / 2) * (1 + f * Math.cos(a)), b.y + (b.h / 2) * (1 + f * Math.sin(a))];
+        }, (sweep * (b.w + b.h)) / 4, t0);
+      }
       break;
     }
   }
@@ -295,7 +363,8 @@ export function lines(steps: Step[], traits: Traits, seed: number): Map<number, 
       const w = raw.replace(/(\.\.\.|…|—)+/g, "");
       if (w) {
         if (r() < SYNTH.fillerRate * traits.disfluency) toks.push({ word: r() < 0.5 ? "um," : "uh,", pause: false });
-        if (r() < SYNTH.restartRate * traits.disfluency && w.length > 1) toks.push({ word: `${w},`, pause: false });
+        // The restart copy drops the word's own trailing punctuation ("there," → "there, there,", never "there,,").
+        if (r() < SYNTH.restartRate * traits.disfluency && w.length > 1) toks.push({ word: `${w.replace(/[,.;:!?]+$/, "")},`, pause: false });
         toks.push({ word: w, pause });
       } else if (toks.length) toks.at(-1)!.pause = true;
     }
@@ -312,7 +381,7 @@ export type Voiced = { words: { start: number; end: number }[]; ms: number };
 
 export type Timeline = {
   words: Word[];
-  strokes: Stroke[];
+  strokes: SynthStroke[];
   /** What was said, fillers and restarts included. */
   spoken: string;
   ms: number;
@@ -323,22 +392,27 @@ export type Timeline = {
 };
 
 /**
- * The steps played out on one clock (ms from when the person starts). Say
- * steps given in `voiced` take their word times from the voice; the rest are
+ * The steps (board pixels) played out on one clock (ms from when the person
+ * starts). `view` is the screen they drew on: the hand's sizes and speed are in
+ * screen pixels, so they scale with its width (none: the start view's 1280).
+ * Say steps given in `voiced` take their word times from the voice; the rest are
  * timed at SYNTH's speaking pace.
  */
-export function synthesize(steps: Step[], traits: Traits, seed: number, voiced?: Map<number, Voiced>): Timeline {
+export function synthesize(steps: Step[], traits: Traits, seed: number, o: { view?: View; voiced?: Map<number, Voiced> } = {}): Timeline {
   const r = rng(seed);
+  // Pen-ups have their own stream, so they never shift the ink's shapes.
+  const up = rng(seed ^ 0x7f4a7c15);
+  const k = (o.view?.w ?? SCREEN_W) / SCREEN_W;
   const said = lines(steps, traits, seed);
   const words: Word[] = [];
-  const strokes: Stroke[] = [];
+  const strokes: SynthStroke[] = [];
   const clips: Timeline["clips"] = [];
   const moves: Timeline["moves"] = [];
   let now = between(r, 300, 700);
   steps.forEach((step, i) => {
     if ("say" in step) {
       const toks = said.get(i) ?? [];
-      const v = voiced?.get(i);
+      const v = o.voiced?.get(i);
       if (v && v.words.length === toks.length) {
         clips.push({ step: i, at: Math.round(now) });
         toks.forEach((t, j) => words.push({ word: t.word, t0: Math.round(now + v.words[j].start * 1000), t1: Math.round(now + v.words[j].end * 1000) }));
@@ -357,10 +431,16 @@ export function synthesize(steps: Step[], traits: Traits, seed: number, voiced?:
       const ms = SYNTH.viewMs * between(r, 0.8, 1.2);
       moves.push({ move: step, at: Math.round(now), ms: Math.round(ms) });
       now += ms;
-    } else {
+    } else if ("draw" in step) {
+      // The pen comes down once it's free (lifted from the last drawing and moved over), and
+      // not before now; right after a say it leads the last word (pointing while saying "this").
+      const penUp = between(up, SYNTH.penUpMinMs, SYNTH.penUpMaxMs);
+      const last = strokes.at(-1);
+      const free = last ? last.t1 + penUp : 0;
       const lastWord = words.at(-1);
-      const t0 = Math.max(strokes.at(-1)?.t1 ?? 0, lastWord ? lastWord.t1 - SYNTH.pointLeadMs : now);
-      for (const pts of strokesFor(step, t0, r, traits.mess)) strokes.push({ id: strokes.length + 1, points: pts, t0: pts[0][2], t1: pts.at(-1)![2] });
+      const prev = steps[i - 1];
+      const t0 = prev && "say" in prev && lastWord ? Math.max(free, lastWord.t1 - SYNTH.pointLeadMs) : Math.max(now, free);
+      for (const pts of strokesFor(step, t0, r, traits.mess, k)) strokes.push({ id: strokes.length + 1, points: pts, t0: pts[0][2], t1: pts.at(-1)![2], source: "synth" });
       const end = strokes.at(-1)?.t1 ?? t0;
       now = Math.max(now, t0 + (end - t0) * SYNTH.talkOverDraw);
     }
