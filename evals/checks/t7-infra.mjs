@@ -280,11 +280,12 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
     return Array.from({ length: 6 * n }, (_, i) => ({ wallMs: s.wall, shotMs: 30, longTasksMs: s.lt, dispatchOffsetMs: i ? 1 : s.p99, loopDelayP99Ms: 3, load: { at: 0, load1: 0.3, psiCpu: s.psi, psiMemory: 0 } }));
   };
   const scenarios = [
-    ["slower at 6", { 1: { wall: 1000 }, 2: { wall: 1060, p99: 6 }, 4: { wall: 1140, p99: 12 }, 6: { wall: 1200 }, 8: { wall: 1300 } }, 12, 4, 12, [1, 2, 4, 6]],
-    ["pressure at 4", { 1: { wall: 1000 }, 2: { wall: 1000, p99: 7 }, 4: { wall: 1000, psi: 0.12 } }, 12, 2, 7, [1, 2, 4]],
-    ["long tasks at 2 (the limit's floor)", { 1: { wall: 1000, lt: 40 }, 2: { wall: 1000, lt: 70 } }, 12, 1, LADDER.dispatchFloorMs, [1, 2]],
+    // The dispatch limit is always the cap (load.ts says why); the knee is what these vary.
+    ["slower at 6", { 1: { wall: 1000 }, 2: { wall: 1060, p99: 6 }, 4: { wall: 1140, p99: 12 }, 6: { wall: 1200 }, 8: { wall: 1300 } }, 12, 4, LOOP.dispatchOffsetCapMs, [1, 2, 4, 6]],
+    ["pressure at 4", { 1: { wall: 1000 }, 2: { wall: 1000, p99: 7 }, 4: { wall: 1000, psi: 0.12 } }, 12, 2, LOOP.dispatchOffsetCapMs, [1, 2, 4]],
+    ["long tasks at 2", { 1: { wall: 1000, lt: 40 }, 2: { wall: 1000, lt: 70 } }, 12, 1, LOOP.dispatchOffsetCapMs, [1, 2]],
     ["offset over the cap", { 1: { wall: 1000 }, 2: { wall: 1000, p99: 40 }, 4: { wall: 2000 } }, 12, 2, LOOP.dispatchOffsetCapMs, [1, 2, 4]],
-    ["--max 4", { 1: { wall: 1000 }, 2: { wall: 1000 }, 4: { wall: 1000, p99: 9 } }, 4, 4, 9, [1, 2, 4]],
+    ["--max 4", { 1: { wall: 1000 }, 2: { wall: 1000 }, 4: { wall: 1000, p99: 9 } }, 4, 4, LOOP.dispatchOffsetCapMs, [1, 2, 4]],
   ];
   for (const [name, spec, max, slots, limit, steps] of scenarios) {
     ran.length = 0;

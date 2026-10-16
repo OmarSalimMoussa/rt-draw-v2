@@ -13,12 +13,7 @@ import { paths } from "./paths.ts";
 import type { LoadSample } from "./types.ts";
 
 /** The ladder (§7.6): slot counts tried in order, and how much worse than one slot a step may get. */
-export const LADDER = {
-  slots: [1, 2, 4, 6, 8, 12], wallMax: 1.15, longTaskRiseMax: 0.2, longTaskFloorMs: 50,
-  // The dispatch limit never goes below this: a quiet machine's p99 over a ladder's few sends read 0.2 ms, and V9
-  // then voided every case of the dry run at 0.2 ms. 5 ms is under 0.2% of a 3-s TTFC.
-  dispatchFloorMs: 5,
-} as const;
+export const LADDER = { slots: [1, 2, 4, 6, 8, 12], wallMax: 1.15, longTaskRiseMax: 0.2, longTaskFloorMs: 50 } as const;
 /** Before a wave: poll this often, for at most this long, then run one slot smaller. */
 const WAVE_POLL_MS = 5_000;
 const WAVE_WAIT_MS = 5 * 60_000;
@@ -142,8 +137,7 @@ export function step(slots: number, sends: WaveSend[], base?: Step): Step {
 
 /**
  * Climbs LADDER.slots up to `max` until a step breaks the knee's bounds, and freezes the last good one in
- * machine.json with the machine's dispatch limit: the p99 dispatch offset at the knee, at least
- * LADDER.dispatchFloorMs and at most LOOP.dispatchOffsetCapMs (V9 voids a case past it).
+ * machine.json with the machine's dispatch limit, LOOP.dispatchOffsetCapMs (V9 voids a case past it).
  */
 export async function ladder(runWave: (slots: number) => Promise<WaveSend[]>, max = 12, file = paths().machine): Promise<Machine> {
   const steps: Step[] = [];
@@ -156,7 +150,10 @@ export async function ladder(runWave: (slots: number) => Promise<WaveSend[]>, ma
   if (!knee) throw new Error(`ladder: even one slot is too much here (${steps[0]?.why}); quiet the machine first`);
   const machine: Machine = {
     host: hostname(), arch: arch(), cores: cpus().length, at: new Date().toISOString(),
-    slots: knee.slots, dispatchLimitMs: Math.min(Math.max(knee.dispatchP99Ms, LADDER.dispatchFloorMs), LOOP.dispatchOffsetCapMs), steps,
+    // The limit is the cap, not the knee's p99: a ladder's few sends under-read the tail. Its p99 read 0.2 ms on an idle
+    // laptop, then a dry checkpoint dispatched one case of 12 at 10.2 ms; V9 voids that case and any V9 stops the loop.
+    // 25 ms is under 1% of a 3-s TTFC. Each step's p99 stays in machine.json.
+    slots: knee.slots, dispatchLimitMs: LOOP.dispatchOffsetCapMs, steps,
   };
   writeFileSync(file, JSON.stringify(machine, null, 2) + "\n");
   return machine;
