@@ -1,8 +1,10 @@
 // Dev-server only: POST /api/tts {text, voice} speaks the text with ElevenLabs
 // (ELEVENLABS_API_KEY in .env, never sent to the page) and answers the audio
 // with each word's start and end, so a page can play it and time things to it.
-// Paid per character: replies are kept in .data/tts/ by text and voice, so the
-// same line is only ever bought once, and every call is logged to .data/tts-calls.jsonl.
+// Paid per character: replies are kept in <RT_DATA_DIR, default .data>/tts/ by text
+// and voice, so the same line is only ever bought once, and every call is logged to
+// tts-calls.jsonl there. A server started with RT_DENY_TTS=1 (any server the eval
+// harness starts: the eval never uses voice) answers 403 before anything else.
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -43,7 +45,7 @@ export function ttsApi(): Plugin {
     apply: "serve",
     configResolved(config) {
       key = loadEnv(config.mode, config.root, "").ELEVENLABS_API_KEY ?? "";
-      dir = join(config.root, ".data");
+      dir = process.env.RT_DATA_DIR || join(config.root, ".data");
     },
     configureServer(server) {
       server.middlewares.use("/api/tts", async (req, res) => {
@@ -52,6 +54,7 @@ export function ttsApi(): Plugin {
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify(body));
         };
+        if (process.env.RT_DENY_TTS === "1") return json(403, { error: "voice is off on this server (RT_DENY_TTS=1)" });
         if ((req as { method?: string }).method !== "POST") return json(405, { error: "POST only" });
         let body: { text?: string; voice?: string };
         try {
@@ -68,6 +71,7 @@ export function ttsApi(): Plugin {
         const file = join(dir, "tts", `${createHash("sha256").update(`${MODEL}\n${voice}\n${text}`).digest("hex").slice(0, 32)}.json`);
         const log = (rec: Record<string, unknown>) => {
           try {
+            mkdirSync(dir, { recursive: true });
             appendFileSync(join(dir, "tts-calls.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), voice: body.voice, model: MODEL, chars: text.length, ...rec })}\n`);
           } catch {}
         };
