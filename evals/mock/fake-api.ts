@@ -11,6 +11,7 @@
 // --replies <dir>: files named <role>.<sha12>.txt (one reply) or .json (an array, served in turn),
 //   where sha12 is the first 12 hex of sha256(the caller's system prompt); the role (the "role
 //   marker") is logged with each request it answers. Unmatched requests get "ok" and role "?".
+//   A reply "!limit", "!overload" or "!auth" fails that one request (429, 529, 401).
 // --script <file>: a JSON array of assistant turns [{content: [blocks], stop_reason?, usage?}],
 //   text and tool_use blocks; a request's turn is the number of assistant messages it carries.
 // --latency <jsonl>: replays the logged model time (firstMs − waitMs to first text, the rest
@@ -98,9 +99,11 @@ export async function startFakeApi(opts: FakeOpts = {}) {
       res.writeHead(status, { "content-type": "application/json", ...headers });
       res.end(JSON.stringify({ type: "error", error: { type, message } }));
     };
-    if (mode === "limit") return fail(429, "rate_limit_error", "fake: usage limit reached", { ...limitHeaders(auth, "rejected"), "retry-after": "3600" });
-    if (mode === "overload") return fail(529, "overloaded_error", "fake: overloaded");
-    if (mode === "auth") return fail(401, "authentication_error", "fake: invalid token");
+    const failAs = (m: FakeMode) =>
+      m === "limit" ? fail(429, "rate_limit_error", "fake: usage limit reached", { ...limitHeaders(auth, "rejected"), "retry-after": "3600" })
+      : m === "overload" ? fail(529, "overloaded_error", "fake: overloaded")
+      : fail(401, "authentication_error", "fake: invalid token");
+    if (mode === "limit" || mode === "overload" || mode === "auth") return failAs(mode);
 
     // What to answer: the script's turn, a canned reply for this system prompt, or "ok".
     let turn: Turn;
@@ -112,6 +115,9 @@ export async function startFakeApi(opts: FakeOpts = {}) {
       rec.role = hit?.role ?? (o.replies ? "?" : undefined);
       turn = { content: [{ type: "text", text: hit ? hit.texts[n % hit.texts.length] : "ok" }] };
     }
+    // A canned "!limit", "!overload" or "!auth" fails just this one request that way.
+    const canned = /^!(limit|overload|auth)$/.exec(turn.content[0]?.text ?? "")?.[1] as FakeMode | undefined;
+    if (canned) return failAs((rec.mode = canned));
     if (mode === "thinking") turn = { ...turn, content: [{ type: "thinking", thinking: "Let me think about this." }, ...turn.content] };
     const thinkingTokens = mode === "thinking" ? 57 : 0;
     const promptChars = JSON.stringify(b.system ?? "").length + JSON.stringify(b.messages).length;
