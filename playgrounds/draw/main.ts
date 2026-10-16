@@ -9,7 +9,7 @@ import { makeSet } from "../../src/core/labels.ts";
 import type { Word } from "../../src/core/link.ts";
 import { modelOf } from "../../src/core/model.ts";
 import { runScript } from "../../src/core/ops.ts";
-import { fillPictures } from "../../src/core/picture.ts";
+import { pictureFiller } from "../../src/core/picture.ts";
 import { render } from "../../src/core/render.ts";
 import type { Scene } from "../../src/core/scene.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
@@ -83,6 +83,8 @@ async function send() {
   // From pressing Send to the last op on screen, as one trace: the Latency modal shows its parts.
   await span(`send ${sends.length + 1}`, undefined, async (ctx) => {
     if (talking) await span("finish listening (Scribe)", ctx, () => stopTalking());
+    // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
+    const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
     const input = words.length ? words : typed;
     const prompt = await buildPrompt(scene, strokes, input, tuning, ctx);
     showPrompt(prompt);
@@ -96,6 +98,7 @@ async function send() {
       lines.push(logLine(r));
       $("#opLog").textContent = lines.join("\n");
       draw();
+      pictures?.kick();
     }, undefined, undefined, ctx);
     const sent = { n: sends.length + 1, request: prompt.transcript, prompt, result, strokes, model };
     sends.push(sent);
@@ -107,10 +110,8 @@ async function send() {
     if (result.error) $("#errors").textContent = result.error;
     clearInk();
     $<HTMLTextAreaElement>("#words").value = "";
-    if (tuning["draw.fillPictures"]) {
-      const pics = await fillPictures(scene, tuning, () => draw(), undefined, ctx);
-      if (pics.drawn || pics.failed.length) $("#sendStat").textContent += ` · ${pics.drawn} pictures in ${pics.ms} ms${pics.failed.length ? ` (${pics.failed.length} failed)` : ""}`;
-    }
+    const pics = await pictures?.finish();
+    if (pics && (pics.drawn || pics.failed.length)) $("#sendStat").textContent += ` · ${pics.drawn} pictures, all done ${pics.ms} ms after Send${pics.failed.length ? ` (${pics.failed.length} failed)` : ""}`;
     spanSync("final redraw", ctx, () => draw());
     listSends();
   });

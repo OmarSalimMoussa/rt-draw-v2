@@ -27,7 +27,20 @@ export type ModelStats = {
   error?: string;
 };
 
-export type ModelRequest = { model: ModelName; system: string; user: string; images?: string[]; from?: string };
+export type ModelRequest = {
+  model: ModelName;
+  system: string;
+  user: string;
+  images?: string[];
+  from?: string;
+  /** Calls with this prompt made side by side: the server keeps this many processes waiting for it. */
+  warm?: number;
+};
+
+/** Starts `n` processes for this model and prompt now, so calls about to come don't wait for one. Not a model call. */
+export function warmModel(model: ModelName, system: string, n = 1) {
+  void fetch("/api/model", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, system, warm: n }) }).catch(() => {});
+}
 
 /** Every call made from this page, newest last, exactly as sent: what the Model calls drawer shows. */
 export type CallRecord = { n: number; at: string; page: string; req: ModelRequest; reply: string; stats?: ModelStats; error?: string; running: boolean };

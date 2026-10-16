@@ -8,7 +8,7 @@
 // Sonnet is the default); no text, no background; a fixed small palette.
 import rough from "roughjs";
 import type { Options } from "roughjs/bin/core";
-import { type ModelStats, callModel, modelOf } from "./model.ts";
+import { type ModelStats, callModel, modelOf, warmModel } from "./model.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type TraceContext, span } from "./trace.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
@@ -169,7 +169,7 @@ const dist3 = (a: number[], b: number[]) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) *
 export async function drawPicture(subject: string, w: number, h: number, t: Tuning = DEFAULTS, onEls?: (els: El[]) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ picture: Picture; stats: ModelStats }> {
   let shown = 0;
   const { text, stats } = await callModel(
-    { model: modelOf(t["picture.model"]), system: PICTURE_SYSTEM, user: picturePrompt(subject, w, h, t), from: "picture" },
+    { model: modelOf(t["picture.model"]), system: PICTURE_SYSTEM, user: picturePrompt(subject, w, h, t), from: "picture", warm: t["picture.parallel"] },
     (_chunk, soFar) => {
       const { els } = readPicture(soFar, subject, w, h, t);
       if (els.length > shown) {
@@ -233,44 +233,87 @@ export function renderPicture(parent: SVGElement, els: El[], box: { x: number; y
 /** A shape whose picture is missing, unfinished, or drawn for another subject. */
 export const needsPicture = (s: Shape) => !!s.drawing && !(s.picture?.subject === s.drawing && s.picture.done);
 
+export type PictureFiller = {
+  /** Queues every picture the scene needs that isn't drawn or drawing yet, and starts as many as picture.parallel allows. Call it after each op lands. */
+  kick: () => void;
+  /** No more ops are coming: draws what's left and resolves once every picture is done. */
+  finish: () => Promise<{ drawn: number; failed: string[]; ms: number }>;
+};
+
 /**
- * Draws every picture the scene needs, picture.parallel at a time, straight
- * into each shape (so they fill in live: onUpdate after each element lands).
- * A failed picture stays a placeholder.
+ * Pictures for one send, drawn as soon as their drawing() ops land, side by
+ * side with the rest of the drawing model's reply (not after it). Make it when
+ * the send starts: it starts picture.parallel picture processes right away, so
+ * the first pictures don't wait for one. Each picture goes straight into its
+ * shape and fills in live (onUpdate after each element). A failed one stays a
+ * placeholder.
  */
-export async function fillPictures(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ drawn: number; failed: string[]; ms: number }> {
+export function pictureFiller(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext): PictureFiller {
+  const model = modelOf(t["picture.model"]);
+  warmModel(model, PICTURE_SYSTEM, t["picture.parallel"]);
   const t0 = performance.now();
-  const todo = scene.stacked().filter(needsPicture);
+  /** Shape id and subject of every picture started this send. */
+  const started = new Set<string>();
+  const queue: Shape[] = [];
   const failed: string[] = [];
   let drawn = 0;
-  if (!todo.length) return { drawn, failed, ms: 0 };
-  await span("draw pictures", parent, async (ctx) => {
-    const queue = [...todo];
-    const worker = async () => {
-      for (let s = queue.shift(); s; s = queue.shift()) {
-        const shape = s;
-        const subject = shape.drawing!;
-        const w = Math.round(shape.box.w * t["picture.fill"]);
-        const h = Math.round(shape.box.h * t["picture.fill"]);
-        try {
-          await span(`picture: ${shape.id}`, ctx, (pctx) =>
-            drawPicture(subject, w, h, t, (els) => {
-              // Still this shape's subject (a later op may have changed it): show what's drawn so far.
-              if (shape.drawing !== subject) return;
-              shape.picture = { subject, w, h, els, done: false };
-              onUpdate();
-            }, signal, pctx),
-          );
-          if (shape.picture?.subject === subject) shape.picture.done = true;
-          drawn++;
-        } catch {
-          if (shape.picture?.subject === subject && !shape.picture.els.length) shape.picture = undefined;
-          failed.push(shape.id);
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(t["picture.parallel"], todo.length) }, worker));
-  }, { pictures: todo.length });
-  onUpdate();
-  return { drawn, failed, ms: Math.round(performance.now() - t0) };
+  let active = 0;
+  let closed = false;
+  let ctx: TraceContext | undefined;
+  let finished!: () => void;
+  const allDone = new Promise<void>((ok) => (finished = ok));
+
+  const drawOne = async (shape: Shape) => {
+    const subject = shape.drawing!;
+    const w = Math.round(shape.box.w * t["picture.fill"]);
+    const h = Math.round(shape.box.h * t["picture.fill"]);
+    try {
+      await span(`picture: ${shape.id}`, ctx, (pctx) =>
+        drawPicture(subject, w, h, t, (els) => {
+          // Still this shape's subject (a later op may have changed it): show what's drawn so far.
+          if (shape.drawing !== subject) return;
+          shape.picture = { subject, w, h, els, done: false };
+          onUpdate();
+        }, signal, pctx),
+      );
+      if (shape.picture?.subject === subject) shape.picture.done = true;
+      drawn++;
+    } catch {
+      if (shape.picture?.subject === subject && !shape.picture.els.length) shape.picture = undefined;
+      failed.push(shape.id);
+    }
+  };
+  const pump = () => {
+    while (active < t["picture.parallel"] && queue.length) {
+      const shape = queue.shift()!;
+      active++;
+      void drawOne(shape).finally(() => {
+        active--;
+        pump();
+        if (closed && !active && !queue.length) finished();
+      });
+    }
+  };
+  const kick = () => {
+    for (const s of scene.stacked().filter(needsPicture)) {
+      const key = `${s.id}\n${s.drawing}`;
+      if (started.has(key)) continue;
+      started.add(key);
+      queue.push(s);
+    }
+    // One span for all of this send's pictures, from the first one queued.
+    if (queue.length && !ctx) void span("draw pictures", parent, (c) => ((ctx = c), allDone));
+    pump();
+  };
+  return {
+    kick,
+    finish: async () => {
+      closed = true;
+      kick();
+      if (!active && !queue.length) finished();
+      await allDone;
+      onUpdate();
+      return { drawn, failed, ms: drawn || failed.length ? Math.round(performance.now() - t0) : 0 };
+    },
+  };
 }

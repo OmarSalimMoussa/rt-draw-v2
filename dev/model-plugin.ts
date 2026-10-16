@@ -5,9 +5,12 @@
 // Every call is appended to .data/model-calls.jsonl (what was asked, how long,
 // how many tokens) so the playgrounds' model knobs can be tuned from real runs.
 //
-// Starting a Claude Code process takes a second or more, so one is kept started
-// and waiting per model and system prompt (v1 measured first text in 0.8-1.1 s
-// with a waiting process against 1.3 s+ starting one). The stats say which.
+// Starting a Claude Code process takes a second or more, so processes are kept
+// started and waiting per model and system prompt (v1 measured first text in
+// 0.8-1.1 s with a waiting process against 1.3 s+ starting one). The stats say
+// which. A page that will make several calls with one prompt at once (pictures)
+// asks for that many waiting ({warm: n}), and can start them before it needs
+// them with a request that has no message: {model, system, warm: n}.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,8 +23,10 @@ const MAX_TOKENS = 4096;
 const TIMEOUT_MS = 120_000;
 /** A waiting process older than this is replaced rather than trusted. */
 const MAX_WAIT_MS = 10 * 60_000;
-/** Models and system prompts with a process waiting, at most (pages each have their own prompts). */
+/** Models and system prompts with processes waiting, at most (pages each have their own prompts). */
 const MAX_KEYS = 6;
+/** Processes kept waiting for one model and prompt, at most. */
+const MAX_WARM = 4;
 /** How each call is made, reported back with its stats so the pages can show it. */
 const SETTINGS = {
   via: "Claude Agent SDK 0.3.299 (Claude Code) on the Claude subscription",
@@ -44,14 +49,20 @@ export type ModelRequest = {
   images?: string[];
   /** Which playground asked, for the call log. */
   from?: string;
+  /** Keep this many processes waiting for this model and prompt (calls made side by side). */
+  warm?: number;
 };
 
 type Content = Exclude<SDKUserMessage["message"]["content"], string>;
 type Spare = { q: Query; give: (content: Content) => void; ready: Promise<void>; born: number };
 
 /** Kept on globalThis: this module is evaluated afresh after edits, and the processes outlive it. */
-const g = globalThis as typeof globalThis & { __rtV2Spares?: Map<string, Promise<Spare>> };
-const spares: Map<string, Promise<Spare>> = (g.__rtV2Spares ??= new Map());
+const g = globalThis as typeof globalThis & { __rtV2Spares?: Map<string, Promise<Spare>>; __rtV2Pools?: Map<string, Promise<Spare>[]> };
+// The one-per-prompt map from before pools: let its processes go.
+for (const old of g.__rtV2Spares?.values() ?? []) void old.then((s) => s.q.close(), () => {});
+g.__rtV2Spares = undefined;
+/** Waiting processes per model and prompt, oldest first; the map's order is least recently used first. */
+const pools: Map<string, Promise<Spare>[]> = (g.__rtV2Pools ??= new Map());
 
 const keyOf = (model: string, system: string) => {
   let h = 2166136261;
@@ -82,18 +93,27 @@ async function start(model: string, system: string, token: string): Promise<Spar
   return { q, give, ready, born: Date.now() };
 }
 
-/** The waiting process for this model and prompt if it's fresh (else a new one), and a new one starting for next time. */
-async function take(model: string, system: string, token: string): Promise<{ spare: Spare; warm: boolean }> {
+const clampWarm = (n: unknown) => Math.max(1, Math.min(MAX_WARM, Math.round(Number(n) || 1)));
+
+/** Tops this model and prompt up to n waiting processes, and lets the least recently used prompts' processes go. */
+function warmUp(model: string, system: string, token: string, n: number) {
   const key = keyOf(model, system);
-  const waiting = spares.get(key);
-  spares.delete(key);
-  spares.set(key, start(model, system, token));
-  // Prompts edited in development leave processes nobody will use: let the oldest go.
-  for (const [k, old] of spares) {
-    if (spares.size <= MAX_KEYS) break;
-    spares.delete(k);
-    void old.then((s) => s.q.close(), () => {});
+  const pool = pools.get(key) ?? [];
+  pools.delete(key);
+  pools.set(key, pool);
+  while (pool.length < n) pool.push(start(model, system, token));
+  // Prompts edited in development leave processes nobody will use.
+  for (const [k, old] of pools) {
+    if (pools.size <= MAX_KEYS) break;
+    pools.delete(k);
+    for (const p of old) void p.then((s) => s.q.close(), () => {});
   }
+}
+
+/** A waiting process for this model and prompt if there's a fresh one (else a new one); the pool is topped back up to `n` for next time. */
+async function take(model: string, system: string, token: string, n: number): Promise<{ spare: Spare; warm: boolean }> {
+  const waiting = pools.get(keyOf(model, system))?.shift();
+  warmUp(model, system, token, n);
   const spare = await waiting?.catch(() => undefined);
   if (spare && Date.now() - spare.born < MAX_WAIT_MS) return { spare, warm: true };
   spare?.q.close();
@@ -129,6 +149,12 @@ export function modelApi(): Plugin {
         }
         const model = MODEL_IDS[body.model];
         if (!model) return fail(400, `unknown model "${body.model}" (haiku, sonnet, opus)`);
+        // No message: only start processes for calls about to come.
+        if (body.user === undefined) {
+          warmUp(model, body.system, token, clampWarm(body.warm));
+          res.setHeader("content-type", "application/json");
+          return res.end(JSON.stringify({ warming: clampWarm(body.warm) }));
+        }
         let content: Content;
         try {
           content = [
@@ -157,7 +183,7 @@ export function modelApi(): Plugin {
         const timer = setTimeout(() => spare?.q.close(), TIMEOUT_MS);
         res.on("close", () => !res.writableEnded && spare?.q.close());
         try {
-          ({ spare, warm } = await take(model, body.system, token));
+          ({ spare, warm } = await take(model, body.system, token, clampWarm(body.warm)));
           await spare.ready;
           waitMs = since();
           spare.give(content);

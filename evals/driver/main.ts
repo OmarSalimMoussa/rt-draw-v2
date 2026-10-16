@@ -7,7 +7,7 @@ import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import messy from "../../src/fixtures/messy.ops.txt?raw";
 import { type SendResult, buildPrompt, run } from "../../src/core/draw.ts";
 import { strokePath } from "../../src/core/ink.ts";
-import { fillPictures, needsPicture } from "../../src/core/picture.ts";
+import { pictureFiller } from "../../src/core/picture.ts";
 import { MODELS, type ModelName } from "../../src/core/model.ts";
 import { runScript } from "../../src/core/ops.ts";
 import { render } from "../../src/core/render.ts";
@@ -244,12 +244,16 @@ async function oneSend(): Promise<boolean> {
   await play(timeline, num("speed"), spoken?.audio);
   status(`Send ${n}: Enter. The product is answering…`);
   const result = await span(`send ${n}`, undefined, async (ctx) => {
+    // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
+    const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
     const prompt = await buildPrompt(scene, timeline.strokes, timeline.words, tuning, ctx);
-    const res = await run(scene, prompt, tuning, () => draw(), undefined, undefined, ctx);
+    const res = await run(scene, prompt, tuning, () => {
+      draw();
+      pictures?.kick();
+    }, undefined, undefined, ctx);
     // The product isn't done until its pictures are drawn: the driver looks at what a user would see.
-    const waiting = scene.stacked().filter(needsPicture).length;
-    if (tuning["draw.fillPictures"] && waiting) status(`Send ${n}: drawing ${waiting} picture${waiting > 1 ? "s" : ""}…`);
-    const pics = tuning["draw.fillPictures"] ? await fillPictures(scene, tuning, () => draw(), undefined, ctx) : undefined;
+    status(`Send ${n}: finishing the pictures…`);
+    const pics = await pictures?.finish();
     return { prompt, res, pics };
   });
   ink!.replaceChildren();
