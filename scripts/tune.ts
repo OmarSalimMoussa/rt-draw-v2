@@ -5,6 +5,10 @@
 //   node scripts/tune.ts sets/*.json [--parts marks,arrow,hit] [--out best.json]
 //   node scripts/tune.ts router-set.json --parts router
 //
+// Synthetic ink (the eval's synthesizer marks its strokes source "synth") is refused
+// for the ink readers' knobs (marks, arrow, hit, link) unless --allow-synth: tuned on
+// it, they would learn the synthesizer's habits, not people's.
+//
 // Every 4th example is held out, so a "better" tuning that only memorized the
 // set shows up as a drop on the held-out score.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -24,8 +28,10 @@ const flag = (name: string) => {
 // Grouping knobs (marks.gapMs, marks.nearPx) need whole sessions, not single marks; they're left out.
 const parts = (flag("--parts") ?? "marks,arrow,hit").split(",");
 const out = flag("--out");
+const allowSynth = args.includes("--allow-synth");
+if (allowSynth) args.splice(args.indexOf("--allow-synth"), 1);
 const sets = args.map((f) => JSON.parse(readFileSync(f, "utf8")) as LabeledSet);
-if (!sets.length) throw new Error("usage: node scripts/tune.ts set.json ... [--parts marks,arrow,hit] [--out best.json]");
+if (!sets.length) throw new Error("usage: node scripts/tune.ts set.json ... [--parts marks,arrow,hit] [--out best.json] [--allow-synth]");
 
 const scenes = new Map<string, HitIndex>();
 const hitsFor = (name = "clowns") => {
@@ -37,6 +43,12 @@ type Case = { ex: Example; scene?: string };
 const cases: Case[] = sets.flatMap((s) => s.examples.map((ex) => ({ ex, scene: s.scene })));
 const train = cases.filter((_, i) => i % 4 !== 3);
 const held = cases.filter((_, i) => i % 4 === 3);
+const INK_PARTS = ["marks", "arrow", "hit", "link"];
+const synthetic = cases.filter((c) => c.ex.strokes?.some((s) => (s as { source?: string }).source === "synth")).length;
+if (synthetic && !allowSynth && parts.some((p) => INK_PARTS.includes(p))) {
+  console.error(`refused: ${synthetic} of ${cases.length} examples hold synthetic strokes (source "synth"); tuning ${parts.filter((p) => INK_PARTS.includes(p)).join(", ")} on them fits the synthesizer, not people. Pass --allow-synth to do it anyway.`);
+  process.exit(2);
+}
 
 function decide({ ex, scene }: Case, t: Tuning): string {
   if (ex.decision === "marks.arrow") return readArrow(ex.strokes.map((s) => s.points), t).arrow ? "arrow" : "not";

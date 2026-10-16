@@ -6,18 +6,18 @@ import board from "../../src/fixtures/board.ops.txt?raw";
 import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import grid from "../../src/fixtures/grid.ops.txt?raw";
 import messy from "../../src/fixtures/messy.ops.txt?raw";
-import { type OpResult, type Prompt, type SendResult, buildPrompt, cloneScene, run } from "../../src/core/draw.ts";
+import { type OpResult, type Prompt, type SendResult, cloneScene } from "../../src/core/draw.ts";
 import { type Stroke, attachInk } from "../../src/core/ink.ts";
 import { makeSet } from "../../src/core/labels.ts";
 import type { Word } from "../../src/core/link.ts";
 import { modelOf } from "../../src/core/model.ts";
 import { runScript } from "../../src/core/ops.ts";
-import { pictureFiller } from "../../src/core/picture.ts";
 import { render } from "../../src/core/render.ts";
 import type { Scene } from "../../src/core/scene.ts";
+import { send as sendScene } from "../../src/core/send.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { DEFAULTS, type Tuning, tuningId } from "../../src/core/tuning.ts";
-import { span, spanSync } from "../../src/core/trace.ts";
+import { span } from "../../src/core/trace.ts";
 import { SCREEN, type View, asPage, boardBounds, fitView, pageTop, pagesOf, union } from "../../src/core/board.ts";
 import { boardStage } from "../../src/boardStage.ts";
 import { $, download, fontsReady, shell, tuningPanel } from "../../src/ui.ts";
@@ -68,8 +68,8 @@ const sends: Send[] = [];
 let sending = false;
 
 const draw = () => render(canvas, scene, { tags: true, tuning, view: st.view() });
-/** The camera's last glide, so a send ends once the screen has arrived. */
-let gliding: Promise<void> = Promise.resolve();
+/** With ?record=1 each send is also posted to /api/eval/record: the owner's real sends, the eval's human benchmark (opt-in). */
+const record = new URLSearchParams(location.search).get("record") === "1";
 
 function clearInk() {
   strokes = [];
@@ -94,39 +94,45 @@ async function send() {
   // From pressing Send to the last op on screen, as one trace: the Latency modal shows its parts.
   await span(`send ${sends.length + 1}`, undefined, async (ctx) => {
     if (talking) await span("finish listening (Scribe)", ctx, () => stopTalking());
-    // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
-    const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
     const input = words.length ? words : typed;
-    const prompt = await buildPrompt(scene, strokes, input, tuning, ctx, st.view());
-    showPrompt(prompt);
-    undo.push(cloneScene(scene));
-    $<HTMLButtonElement>("#undo").disabled = false;
+    const view = st.view();
+    // The human benchmark's copy (spec §2.8), taken before the send changes the scene.
+    const human = record ? { input, strokes: [...strokes], scene: structuredClone(scene.toJSON()), view, at: new Date().toISOString() } : undefined;
     const model = modelOf(tuning["draw.model"]);
     const lines: string[] = [];
-    $("#opLog").textContent = "";
-    $("#sendStat").textContent = `Sending to ${model}…`;
-    const result = await run(scene, prompt, tuning, (r) => {
-      lines.push(logLine(r));
-      $("#opLog").textContent = lines.join("\n");
-      if (r.camera) gliding = st.setView(r.camera, tuning["camera.easeMs"]);
-      draw();
-      pictures?.kick();
-    }, undefined, undefined, ctx);
-    const sent = { n: sends.length + 1, request: prompt.transcript, prompt, result, strokes, model };
-    sends.push(sent);
-    const s = result.stats;
-    const okOps = result.ops.filter((o) => o.ok).length;
-    $("#sendStat").textContent = result.error
-      ? `✗ ${result.error}`
-      : `${model} · first text ${s?.firstMs ?? "-"} ms · first op ${result.firstOpMs ?? "-"} ms · done ${result.ms} ms · ${okOps}/${result.ops.length} ops applied · tokens in ${s?.inTokens ?? "?"} / out ${s?.outTokens ?? "?"}`;
-    if (result.error) $("#errors").textContent = result.error;
-    clearInk();
-    $<HTMLTextAreaElement>("#words").value = "";
-    const pics = await pictures?.finish();
+    let prompt: Prompt;
+    const { pics } = await sendScene(scene, { strokes, words: input }, tuning, {
+      parent: ctx,
+      draw,
+      setView: st.setView,
+      onPrompt: (p) => {
+        prompt = p;
+        showPrompt(p);
+        undo.push(cloneScene(scene));
+        $<HTMLButtonElement>("#undo").disabled = false;
+        $("#opLog").textContent = "";
+        $("#sendStat").textContent = `Sending to ${model}…`;
+      },
+      onOp: (r) => {
+        lines.push(logLine(r));
+        $("#opLog").textContent = lines.join("\n");
+      },
+      onReply: (result) => {
+        sends.push({ n: sends.length + 1, request: prompt.transcript, prompt, result, strokes, model });
+        const s = result.stats;
+        const okOps = result.ops.filter((o) => o.ok).length;
+        $("#sendStat").textContent = result.error
+          ? `✗ ${result.error}`
+          : `${model} · first text ${s?.firstMs ?? "-"} ms · first op ${result.firstOpMs ?? "-"} ms · done ${result.ms} ms · ${okOps}/${result.ops.length} ops applied · tokens in ${s?.inTokens ?? "?"} / out ${s?.outTokens ?? "?"}`;
+        if (result.error) $("#errors").textContent = result.error;
+        clearInk();
+        $<HTMLTextAreaElement>("#words").value = "";
+      },
+    }, view);
     if (pics && (pics.drawn || pics.failed.length)) $("#sendStat").textContent += ` · ${pics.drawn} pictures, all done ${pics.ms} ms after Send${pics.failed.length ? ` (${pics.failed.length} failed)` : ""}`;
-    spanSync("final redraw", ctx, () => draw());
-    await gliding;
     listSends();
+    // Fire and forget: the typed text or timed words, the ink, the scene before and the view.
+    if (human) void fetch("/api/eval/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(human) }).catch(() => {});
   });
   sending = false;
   $<HTMLButtonElement>("#send").disabled = false;

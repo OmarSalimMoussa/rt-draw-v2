@@ -119,7 +119,19 @@ export class Scene {
     return { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y };
   }
 
-  toJSON() {
-    return { width: this.width, height: this.height, shapes: this.stacked(), groups: Object.fromEntries(this.groups) };
+  /** v: the format, so a saved scene (the eval's banked before-scenes) is never read by a scene.ts that means something else by it. */
+  toJSON(): SceneJSON {
+    return { v: 1, width: this.width, height: this.height, shapes: this.stacked(), groups: Object.fromEntries(this.groups) };
+  }
+
+  /** The scene toJSON() saved, doodles and groups included. */
+  static fromJSON(j: SceneJSON): Scene {
+    if (j.v !== 1) throw new Error(`not a scene this code can read (v ${j.v})`);
+    const scene = new Scene(j.width, j.height);
+    for (const s of structuredClone(j.shapes)) scene.add(s);
+    for (const [g, members] of Object.entries(j.groups)) scene.groups.set(g, [...members]);
+    return scene;
   }
 }
+
+export type SceneJSON = { v: 1; width: number; height: number; shapes: Shape[]; groups: Record<string, string[]> };

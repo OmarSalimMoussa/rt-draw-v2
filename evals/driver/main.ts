@@ -10,7 +10,7 @@ import messy from "../../src/fixtures/messy.ops.txt?raw";
 import { type SendResult, buildPrompt, run } from "../../src/core/draw.ts";
 import { strokePath } from "../../src/core/ink.ts";
 import { pictureFiller } from "../../src/core/picture.ts";
-import { MODELS, type ModelName } from "../../src/core/model.ts";
+import { MODELS, type ModelName, callModel } from "../../src/core/model.ts";
 import { runScript } from "../../src/core/ops.ts";
 import { render } from "../../src/core/render.ts";
 import type { Scene } from "../../src/core/scene.ts";
@@ -20,7 +20,9 @@ import { DEFAULTS, tune, tuningId } from "../../src/core/tuning.ts";
 import { SCREEN, type View, asPage, boardBounds, fitView, pageTop, pagesOf } from "../../src/core/board.ts";
 import { boardStage } from "../../src/boardStage.ts";
 import { $, download, fontsReady, shell } from "../../src/ui.ts";
-import { type Behaviour, DRIVE, type Past, type Turn, describeStep, driverTurn, moveView, systemPrompt } from "../core/driver.ts";
+import { DRIVE_VIEW } from "../loop/config.ts";
+import { type Card, type Past, type Turn, describeMarks, describeMove, describeStep, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
+import { type Planned, plan } from "../core/scenarios.ts";
 import { PERSONAS, STYLES, type Style, TARGETS, randomStyle } from "../core/personas.ts";
 import { type Step, type Timeline, type Token, type Traits, type Voiced, isView, lineText, lines, rng, synthesize } from "../core/synth.ts";
 
@@ -101,7 +103,9 @@ type Record_ = {
 let scene: Scene = runScript(fixtures["Blank page"]).scene;
 let past: Past[] = [];
 let sends: Record_[] = [];
-let setup: { persona: string; target?: string; style: string; traits: Traits; behaviour: Behaviour; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
+let setup: { persona: string; target?: string; style: string; traits: Traits; card: Card; plans: Planned[]; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
+/** The screen at the last Enter with the ink, the driver's "before" picture. */
+let lastEnter: string | undefined;
 let stopAsked = false;
 let voiceOn = true;
 const spent = { bought: 0, cached: 0 };
@@ -123,13 +127,16 @@ function freshSetup() {
   const targetId = $<HTMLSelectElement>("#target").value;
   const target = persona.id === "first-timer" ? (targetId === "random" ? choose(TARGETS) : TARGETS.find((t) => t.id === targetId)) : undefined;
   if ($<HTMLSelectElement>("#style").value === "random") showStyle(randomStyle(pick));
-  const behaviour: Behaviour = { words: num("words"), clarity: num("clarity"), pen: num("pen"), patience: num("patience"), changeMind: num("changeMind"), bigThenSmall: $<HTMLInputElement>("#bigThenSmall").checked };
-  // The driver's screenshot size, so it can give positions in its own pixels.
-  const system = systemPrompt(persona, target, behaviour, screenW, Math.round((screenW * SCREEN.h) / SCREEN.w));
+  const style: Style = { mess: num("mess"), disfluency: num("disfluency"), words: num("words"), clarity: num("clarity"), pen: num("pen"), patience: num("patience"), changeMind: num("changeMind"), bigThenSmall: $<HTMLInputElement>("#bigThenSmall").checked };
+  // One shared system prompt; who and how go in each turn's message, with the seed's ask type and beat per send.
+  const system = systemPrompt();
+  const styleId = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value)?.id ?? "typical";
+  const start = $<HTMLSelectElement>("#fixture").value.startsWith("Toy shop") ? "toyshop-home" : "blank";
+  const plans = plan({ id: "demo", set: "fresh", persona: persona.id, style: styleId, target: target?.id, start, sends: Math.max(1, num("maxSends")), seed: num("seed") });
   $("#sys").textContent = system;
   const styleName = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value)?.name.split(":")[0] ?? $<HTMLSelectElement>("#style").value;
-  $("#who").textContent = `${persona.name}${target ? ` · ${target.name}` : ""} · ${styleName} · ${TRAITS.map((id) => `${id} ${num(id)}`).join(" · ")}${behaviour.bigThenSmall ? " · big then small" : ""}`;
-  return { persona: persona.id, target: target?.id, style: $<HTMLSelectElement>("#style").value, traits: { mess: num("mess"), disfluency: num("disfluency") }, behaviour, seed: num("seed"), maxSends: Math.max(1, num("maxSends")), model: $<HTMLSelectElement>("#model").value as ModelName, system, fixture: $<HTMLSelectElement>("#fixture").value };
+  $("#who").textContent = `${persona.name}${target ? ` · ${target.name}` : ""} · ${styleName} · ${TRAITS.map((id) => `${id} ${num(id)}`).join(" · ")}${style.bigThenSmall ? " · big then small" : ""}`;
+  return { persona: persona.id, target: target?.id, style: $<HTMLSelectElement>("#style").value, traits: { mess: num("mess"), disfluency: num("disfluency") }, card: { persona, style, target }, plans, seed: num("seed"), maxSends: Math.max(1, num("maxSends")), model: $<HTMLSelectElement>("#model").value as ModelName, system, fixture: $<HTMLSelectElement>("#fixture").value };
 }
 
 /** Each say step's line spoken by the voice (ElevenLabs, via the dev server), with its word times. */
@@ -163,7 +170,7 @@ async function play(tl: Timeline, speed: number, audio = new Map<number, HTMLAud
   ink!.replaceChildren();
   // Each move from where the last one left the camera.
   let v = st.view();
-  const views = tl.moves.map((m) => (v = moveView(m.move, v, tuning)));
+  const views = tl.moves.map((m) => (v = moveView(m.move, v)));
   const moved = new Set<number>();
   const glide = (t: number) => tl.moves.forEach((m, i) => {
     if (moved.has(i) || t < m.at) return;
@@ -222,7 +229,7 @@ function card(r: Record_) {
   return `<div class="card" data-n="${r.n}">
     <h2>Send ${r.n}</h2>
     ${r.looks.length ? `<div><b>Looked around first</b>: ${esc(r.looks.join(" → "))}</div>` : ""}
-    <div><b>Wants</b> <span class="muted">(private)</span>: ${esc(t.intent)}</div>
+    <div><b>Wants</b> <span class="muted">(private)</span>: ${esc(t.meant)}</div>
     <div><b>Says</b>: <span style="font:18px Excalifont, cursive">${esc(r.timeline.spoken || "(nothing)")}</span></div>
     <div><b>Does</b>: ${t.steps.map((s) => esc(describeStep(s as Step))).join(" → ")}</div>
     <div class="stat muted">the product got: ${esc(r.transcript || "(no words)")} · pictures: ${esc(r.views || "none")}</div>
@@ -249,8 +256,10 @@ async function oneSend(): Promise<boolean> {
     status(`Send ${n}: the driver looks at the screen…`);
     const v = st.view();
     shot = await takeShot(scene, [], userView, { inkNumbers: false, view: v, width: screenW });
-    const map = { x: v.x, y: v.y, k: v.w / shot.width };
-    ({ turn } = await span(`driver looks (send ${n}${look ? `, look ${look + 1}` : ""})`, undefined, (ctx) => driverTurn(setup!.model, setup!.system, setup!.behaviour, shot.dataUrl, past, setup!.maxSends - n + 1, map, looks, ctx)));
+    const planned = setup.plans[n - 1];
+    const user = userMessage(setup.card, past, planned?.beat, planned?.ask ?? "add", setup.maxSends - n + 1, looks);
+    const { text } = await span(`driver looks (send ${n}${look ? `, look ${look + 1}` : ""})`, undefined, (ctx) => callModel({ model: setup!.model, system: setup!.system, user, images: [lastEnter ?? shot.dataUrl, shot.dataUrl], from: "driver" }, undefined, undefined, ctx));
+    ({ turn } = parseTurn(text, v));
     // Its reaction is to the last send, given once; the first screen it saw after it is that send's after.
     const prev = sends.at(-1);
     if (prev && !prev.after) {
@@ -263,16 +272,16 @@ async function oneSend(): Promise<boolean> {
       showLog();
       return false;
     }
-    if (!turn.steps.every(isView)) break;
-    if (look >= DRIVE.looksPerSend) {
+    if (!isLook(turn)) break;
+    if (look >= DRIVE_VIEW.maxLooks) {
       lastReaction = turn;
       finished = "the driver only looked around";
       showLog();
       return false;
     }
     status(`Send ${n}: the driver moves the view…`);
-    looks.push(turn.steps.map((x) => describeStep(x)).join(", "));
-    await play(synthesize(turn.steps, setup.traits, setup.seed * 1000 + n * 10 + look), num("speed"));
+    looks.push(turn.steps.flatMap((x) => (isView(x) || "undo" in x ? [describeMove(x, v)] : [])).join(", "));
+    await play(synthesize(turn.steps, setup.traits, setup.seed * 1000 + n * 10 + look, { view: v }), num("speed"));
   }
   const seed = setup.seed * 1000 + n;
   let spoken: Awaited<ReturnType<typeof speak>> | undefined;
@@ -283,11 +292,13 @@ async function oneSend(): Promise<boolean> {
       return undefined;
     });
   }
-  const timeline = synthesize(turn.steps, setup.traits, seed, spoken?.voiced);
-  status(`Send ${n}: talking and drawing… (wants: ${turn.intent})`);
+  const drawnOn = st.view();
+  const timeline = synthesize(turn.steps, setup.traits, seed, { view: drawnOn, voiced: spoken?.voiced });
+  status(`Send ${n}: talking and drawing… (wants: ${turn.meant})`);
   await play(timeline, num("speed"), spoken?.audio);
   status(`Send ${n}: Enter. The product is answering…`);
   const camera = st.view();
+  lastEnter = (await takeShot(scene, timeline.strokes, userView, { inkNumbers: false, view: camera, width: screenW })).dataUrl;
   const result = await span(`send ${n}`, undefined, async (ctx) => {
     // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
     const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
@@ -308,7 +319,7 @@ async function oneSend(): Promise<boolean> {
   ink!.replaceChildren();
   draw();
   sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.res, pics: result.pics, before: shot.dataUrl, looks, camera, views: result.prompt.features.views });
-  past.push({ said: timeline.spoken, drew: turn.steps.filter((s) => "draw" in s).map((s) => describeStep(s)), intent: turn.intent });
+  past.push({ said: timeline.spoken, marks: describeMarks(turn.steps, drawnOn), meant: turn.meant });
   showLog();
   $<HTMLButtonElement>("#save").disabled = false;
   return !result.res.error;
@@ -336,6 +347,7 @@ async function go(once: boolean) {
 function reset() {
   scene = runScript(fixtures[$<HTMLSelectElement>("#fixture").value]).scene;
   past = [];
+  lastEnter = undefined;
   sends = [];
   setup = undefined;
   finished = "";
@@ -366,7 +378,7 @@ $("#save").addEventListener("click", () => {
   const record = {
     meta: { kind: "driver-session", at: new Date().toISOString(), tuningId: tuningId(tuning), ...setup, system: undefined, finished },
     system: setup?.system,
-    sends: sends.map((s) => ({ n: s.n, looks: s.looks, camera: s.camera, views: s.views, cameraOps: s.result.ops.filter((o) => o.camera).map((o) => o.line), intent: s.turn.intent, steps: s.turn.steps, spoken: s.timeline.spoken, words: s.timeline.words, strokes: s.timeline.strokes, transcript: s.transcript, ops: s.result.ops, reply: s.result.reply, ms: s.result.ms, firstOpMs: s.result.firstOpMs, error: s.result.error, satisfaction: s.n < sends.length ? sends[s.n].turn.satisfaction : lastReaction?.satisfaction, feeling: s.n < sends.length ? sends[s.n].turn.feeling : lastReaction?.feeling })),
+    sends: sends.map((s) => ({ n: s.n, looks: s.looks, camera: s.camera, views: s.views, cameraOps: s.result.ops.filter((o) => o.camera).map((o) => o.line), meant: s.turn.meant, steps: s.turn.steps, spoken: s.timeline.spoken, words: s.timeline.words, strokes: s.timeline.strokes, transcript: s.transcript, ops: s.result.ops, reply: s.result.reply, ms: s.result.ms, firstOpMs: s.result.firstOpMs, error: s.result.error, satisfaction: s.n < sends.length ? sends[s.n].turn.satisfaction : lastReaction?.satisfaction, feeling: s.n < sends.length ? sends[s.n].turn.feeling : lastReaction?.feeling })),
   };
   download(`driver-${setup?.persona}-${setup?.seed}-${record.meta.at.slice(0, 16).replace(/[:T]/g, "-")}.json`, JSON.stringify(record, null, 1));
 });

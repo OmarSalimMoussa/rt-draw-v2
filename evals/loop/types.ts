@@ -106,7 +106,12 @@ export type LoadSample = { at: number; load1: number; psiCpu: number; psiMemory:
 /** rows.jsonl: one per case; pairs are [A, B]. */
 export type Row = {
   case: string; cluster: string; affected: boolean; class: DecisionClass; s: -1 | 0 | 1; sCraft?: -1 | 0 | 1;
-  ttfc: Pair<number>; ttd: Pair<number>; work: Pair<number>; usd: Pair<number>; thought: Pair<boolean>; overuse: Pair<boolean>;
+  /** null: no lasting change on screen (a camera-only reply). */
+  ttfc: Pair<number | null>; ttd: Pair<number>; work: Pair<number>; usd: Pair<number>; thought: Pair<boolean>; overuse: Pair<boolean>;
+  /** Pictures drawn and failed, for the failed-picture veto (§1.4 item 5). */
+  pics: Pair<[drawn: number, failed: number]>;
+  /** The case's ask and beat, so the over-use rule can tell target cases from the rest (§1.4 item 8). */
+  ask: AskType; beat?: BeatId;
   firstArm: Arm; void?: string;
 };
 /** verdict.json: the decision (§1.3) with every look's Z and the vetoes. */

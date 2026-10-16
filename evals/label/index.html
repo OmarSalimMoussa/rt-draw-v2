@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rt-draw v2 · labels</title>
+  <style>
+    main.label { max-width: 1180px; margin: 0 auto; padding: 16px 20px; display: grid; gap: 12px; }
+    main.label figure { margin: 0; display: grid; gap: 4px; min-width: 0; }
+    main.label figure img { width: 100%; border: 1.5px solid var(--ink); border-radius: 8px; background: #fff; }
+    main.label figcaption { font: 17px Excalifont, cursive; }
+    main.label ul { margin: 0; padding-left: 18px; font-size: 13px; }
+    .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .before { max-width: 640px; }
+    .keys button { min-width: 44px; }
+    .keys kbd { font: 12px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-right: 4px; }
+    #sends:not([hidden]) { display: grid; gap: 12px; }
+    .send { display: grid; grid-template-columns: minmax(0, 360px) 1fr; gap: 12px; align-items: start; }
+    .send input { width: 100%; font: inherit; padding: 6px 8px; border: 1.5px solid var(--ink); border-radius: 8px; }
+    @media (max-width: 700px) { .sides, .send { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="label">
+    <div class="row"><button data-tab="pairs" class="primary">Pairs</button><button data-tab="sends">Your sends</button></div>
+    <section id="pairs"></section>
+    <section id="sends" hidden></section>
+  </main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
