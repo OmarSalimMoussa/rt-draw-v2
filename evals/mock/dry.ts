@@ -43,11 +43,14 @@ function drawReplies(): string[] {
   });
 }
 
-/** The stored driver replies predate `meant` (they say `intent`): renamed, or V6 voids every send as "meant is empty". */
+/**
+ * The stored driver replies predate `meant` (they say `intent`): renamed, or V6 voids every send as "meant is empty".
+ * None stops, so a rehearsal's sessions run their planned sends (8 of 80 stopped, and a smoke session ended after one).
+ */
 function meant(reply: string): string {
   try {
     const { intent, ...turn } = JSON.parse(reply);
-    return JSON.stringify(intent === undefined ? turn : { ...turn, meant: turn.meant ?? intent });
+    return JSON.stringify({ ...turn, meant: turn.meant ?? intent, stop: false });
   } catch {
     return reply; // prose around the object: parseTurn's job, as with a real reply
   }

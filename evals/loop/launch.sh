@@ -3,8 +3,10 @@
 #   bash evals/loop/launch.sh <command> [flags…]     e.g. ladder --max 4, smoke --cap 40
 #   bash evals/loop/launch.sh stop
 # Laptop: a systemd user unit (its cgroup holds Chrome, Vite and Claude, so one stop takes them all) under the
-# runs' CPU and memory limits, with the sleep inhibitor held around it from this terminal. PGX (aarch64): a
-# window `loop` in the tmux session `rt`.
+# runs' memory limit and a low CPU weight, with the sleep inhibitor held around it from this terminal. PGX
+# (aarch64): a window `loop` in the tmux session `rt`.
+# CPU is a weight (it yields to the owner's work), never a quota: under CPUQuota=600% a burst of Claude starts got
+# the whole unit throttled, and the gateway's event loop stalled 50-60 ms (V9 voids a case past 20 ms).
 # Neither sees this shell's variables (a unit gets the user manager's env, a tmux window the tmux server's), so
 # nothing goes through the env: run.ts reads the tokens file itself and takes the call cap only as --cap.
 set -euo pipefail
@@ -35,5 +37,5 @@ echo "$unit" > "$RT_EVAL_HOME/unit"
 # /usr/local/bin/node). Closing this terminal drops only the inhibitor and the piped output (run.ts also logs to
 # $RT_EVAL_HOME/logs/): the unit keeps running, and the heartbeat's suspend voids still apply.
 exec systemd-inhibit --what=sleep:idle:handle-lid-switch --why='rt eval' \
-  systemd-run --user --wait --collect --same-dir -P --unit "$unit" -p MemoryMax=10G -p CPUQuota=600% \
+  systemd-run --user --wait --collect --same-dir -P --unit "$unit" -p MemoryMax=10G -p CPUWeight=50 \
   --setenv=RT_EVAL_HOME="$RT_EVAL_HOME" --setenv=RT_EVAL_LAUNCHED=1 "${clean[@]}" "${run[@]}"
