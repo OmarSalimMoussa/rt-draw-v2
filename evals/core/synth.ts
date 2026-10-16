@@ -195,30 +195,77 @@ function strokesFor(step: DrawStep, t0: number, r: Rand, mess: number): Pt[][] {
   return out;
 }
 
-export type Timeline = { words: Word[]; strokes: Stroke[]; /** What was said, fillers and restarts included. */ spoken: string; ms: number };
+/** A word as the person says it, and whether they pause after it. */
+export type Token = { word: string; pause: boolean };
 
-/** The steps played out on one clock (ms from when the person starts). */
-export function synthesize(steps: Step[], traits: Traits, seed: number): Timeline {
+/**
+ * What each say step comes out as, fillers and restarts included: the same
+ * steps, traits and seed always give the same words (their own random stream,
+ * so timing them by a real voice instead changes nothing here).
+ */
+export function lines(steps: Step[], traits: Traits, seed: number): Map<number, Token[]> {
+  const r = rng(seed ^ 0x5bd1e995);
+  const out = new Map<number, Token[]>();
+  steps.forEach((step, i) => {
+    if (!("say" in step)) return;
+    const toks: Token[] = [];
+    for (const raw of step.say.split(/\s+/).filter(Boolean)) {
+      const pause = /(\.\.\.|…|—)$/.test(raw);
+      const w = raw.replace(/(\.\.\.|…|—)+/g, "");
+      if (w) {
+        if (r() < SYNTH.fillerRate * traits.disfluency) toks.push({ word: r() < 0.5 ? "um," : "uh,", pause: false });
+        if (r() < SYNTH.restartRate * traits.disfluency && w.length > 1) toks.push({ word: `${w},`, pause: false });
+        toks.push({ word: w, pause });
+      } else if (toks.length) toks.at(-1)!.pause = true;
+    }
+    out.set(i, toks);
+  });
+  return out;
+}
+
+/** A line as text for a voice: its pauses written as "...", which voices pause on. */
+export const lineText = (toks: Token[]) => toks.map((t) => `${t.word}${t.pause ? "..." : ""}`).join(" ");
+
+/** A say step spoken by a real voice: each word's start and end in its audio (seconds), and the audio's length. */
+export type Voiced = { words: { start: number; end: number }[]; ms: number };
+
+export type Timeline = {
+  words: Word[];
+  strokes: Stroke[];
+  /** What was said, fillers and restarts included. */
+  spoken: string;
+  ms: number;
+  /** Where each voiced line starts on the clock (by step index). */
+  clips: { step: number; at: number }[];
+};
+
+/**
+ * The steps played out on one clock (ms from when the person starts). Say
+ * steps given in `voiced` take their word times from the voice; the rest are
+ * timed at SYNTH's speaking pace.
+ */
+export function synthesize(steps: Step[], traits: Traits, seed: number, voiced?: Map<number, Voiced>): Timeline {
   const r = rng(seed);
+  const said = lines(steps, traits, seed);
   const words: Word[] = [];
   const strokes: Stroke[] = [];
+  const clips: Timeline["clips"] = [];
   let now = between(r, 300, 700);
-  const speak = (w: string) => {
-    const ms = 1000 / (SYNTH.wordsPerSec * between(r, 0.85, 1.15) * (1 - 0.3 * traits.disfluency)) + Math.max(0, w.length - 4) * SYNTH.msPerExtraChar;
-    words.push({ word: w, t0: Math.round(now), t1: Math.round(now + ms) });
-    now += ms + SYNTH.gapMs * between(r, 0.5, 1.5);
-  };
-  for (const step of steps) {
+  steps.forEach((step, i) => {
     if ("say" in step) {
-      for (const raw of step.say.split(/\s+/).filter(Boolean)) {
-        const pause = /(\.\.\.|…|—)$/.test(raw) || raw === "..." || raw === "—";
-        const w = raw.replace(/(\.\.\.|…|—)+/g, "");
-        if (w) {
-          if (r() < SYNTH.fillerRate * traits.disfluency) speak(r() < 0.5 ? "um," : "uh,");
-          if (r() < SYNTH.restartRate * traits.disfluency && w.length > 1) speak(`${w},`);
-          speak(w);
-        }
-        if (pause) now += SYNTH.pauseMs * between(r, 0.5, 1.5);
+      const toks = said.get(i) ?? [];
+      const v = voiced?.get(i);
+      if (v && v.words.length === toks.length) {
+        clips.push({ step: i, at: Math.round(now) });
+        toks.forEach((t, j) => words.push({ word: t.word, t0: Math.round(now + v.words[j].start * 1000), t1: Math.round(now + v.words[j].end * 1000) }));
+        now += v.ms + SYNTH.gapMs;
+        return;
+      }
+      for (const t of toks) {
+        const ms = 1000 / (SYNTH.wordsPerSec * between(r, 0.85, 1.15) * (1 - 0.3 * traits.disfluency)) + Math.max(0, t.word.length - 4) * SYNTH.msPerExtraChar;
+        words.push({ word: t.word, t0: Math.round(now), t1: Math.round(now + ms) });
+        now += ms + SYNTH.gapMs * between(r, 0.5, 1.5);
+        if (t.pause) now += SYNTH.pauseMs * between(r, 0.5, 1.5);
       }
     } else if ("pause" in step) {
       now += Math.max(0, Math.min(10, Number(step.pause) || 0)) * 1000;
@@ -229,7 +276,7 @@ export function synthesize(steps: Step[], traits: Traits, seed: number): Timelin
       const end = strokes.at(-1)?.t1 ?? t0;
       now = Math.max(now, t0 + (end - t0) * SYNTH.talkOverDraw);
     }
-  }
+  });
   const ms = Math.max(now, strokes.at(-1)?.t1 ?? 0, words.at(-1)?.t1 ?? 0);
-  return { words, strokes, spoken: words.map((w) => w.word).join(" "), ms: Math.round(ms) };
+  return { words, strokes, spoken: words.map((w) => w.word).join(" "), ms: Math.round(ms), clips };
 }

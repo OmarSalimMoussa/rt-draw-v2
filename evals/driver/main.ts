@@ -17,7 +17,7 @@ import { DEFAULTS, tune, tuningId } from "../../src/core/tuning.ts";
 import { $, download, fontsReady, shell, stage } from "../../src/ui.ts";
 import { type Behaviour, type Past, type Turn, describeStep, driverTurn, systemPrompt } from "../core/driver.ts";
 import { PERSONAS, TARGETS } from "../core/personas.ts";
-import { type Step, type Timeline, type Traits, synthesize } from "../core/synth.ts";
+import { type Step, type Timeline, type Token, type Traits, type Voiced, lineText, lines, synthesize } from "../core/synth.ts";
 
 shell("", "Driver demo: a model plays a user. It sees only the screen, talks and scribbles (synthesized into timed words and messy ink), presses Enter, and the real product answers. Each send is two or three calls on your Claude subscription: the driver, then the product (resolver and drawing model).");
 const { canvas, ink } = stage($("#left"), 1280, 800, true);
@@ -48,7 +48,8 @@ $("#side").innerHTML = `
     <label style="font-size:12px"><input type="checkbox" id="bigThenSmall"> asks for too much, then tones it down</label>
     <div class="row" style="font-size:12px">seed <input id="seed" type="number" value="1" style="width:70px"><button id="dice" title="a new seed">🎲</button> sends <input id="maxSends" type="number" min="1" max="20" value="6" style="width:50px"></div>
     <div class="row" style="font-size:12px">driver model <select id="model">${MODELS.map((m) => `<option${m === "sonnet" ? " selected" : ""}>${m}</option>`).join("")}</select> start <select id="fixture">${Object.keys(fixtures).map((k) => `<option>${k}</option>`).join("")}</select></div>
-    <div class="row" style="font-size:12px">playback <select id="speed"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="0">instant</option></select></div>
+    <div class="row" style="font-size:12px">playback <select id="speed"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="0">instant</option></select><button id="voice" class="primary" title="Speaks the driver's lines with ElevenLabs (eleven_v4), paid per character; each line is bought once and kept in .data/tts/. Its words then time the ink and the transcript.">voice: on</button><select id="voiceName"><option value="will">Will</option><option value="sarah">Sarah</option></select></div>
+    <div class="muted stat" id="voiceStat"></div>
     <div class="row"><button class="primary" id="run">Run</button><button id="step">One send</button><button id="stop" disabled>Stop after this send</button></div>
     <div class="row"><button id="reset">Reset</button><button id="save" disabled>Download the session record</button></div>
     <pre class="log bad" id="errors"></pre>
@@ -67,6 +68,8 @@ let past: Past[] = [];
 let sends: Record_[] = [];
 let setup: { persona: string; target?: string; traits: Traits; behaviour: Behaviour; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
 let stopAsked = false;
+let voiceOn = true;
+const spent = { bought: 0, cached: 0 };
 let busy = false;
 let finished = "";
 
@@ -88,8 +91,34 @@ function freshSetup() {
   return { persona: persona.id, target: target?.id, traits: { mess: num("mess"), disfluency: num("disfluency") }, behaviour, seed: num("seed"), maxSends: Math.max(1, num("maxSends")), model: $<HTMLSelectElement>("#model").value as ModelName, system, fixture: $<HTMLSelectElement>("#fixture").value };
 }
 
-/** Plays the person's words and ink on the stage, on their own clock (speed 0: all at once). */
-function play(tl: Timeline, speed: number): Promise<void> {
+/** Each say step's line spoken by the voice (ElevenLabs, via the dev server), with its word times. */
+async function speak(said: Map<number, Token[]>, voice: string) {
+  const voiced = new Map<number, Voiced>();
+  const audio = new Map<number, HTMLAudioElement>();
+  await Promise.all(
+    [...said].map(async ([i, toks]) => {
+      const text = lineText(toks);
+      if (!text) return;
+      const r = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, voice }) });
+      const j = (await r.json()) as { audio: string; words: { start: number; end: number }[]; cached: boolean; chars: number; error?: string };
+      if (!r.ok) throw new Error(j.error ?? `voice: HTTP ${r.status}`);
+      spent[j.cached ? "cached" : "bought"] += j.chars;
+      const a = new Audio(`data:audio/mpeg;base64,${j.audio}`);
+      await new Promise((ok) => {
+        a.onloadedmetadata = ok;
+        a.onerror = ok;
+      });
+      const last = j.words.at(-1)?.end ?? 0;
+      voiced.set(i, { words: j.words, ms: Math.round((Number.isFinite(a.duration) ? a.duration : last) * 1000) });
+      audio.set(i, a);
+    }),
+  );
+  $("#voiceStat").textContent = `voice this run: ${spent.bought} characters bought, ${spent.cached} replayed from the cache`;
+  return { voiced, audio };
+}
+
+/** Plays the person's words and ink on the stage, on their own clock (speed 0: all at once), with the voice's audio when there is some. */
+function play(tl: Timeline, speed: number, audio = new Map<number, HTMLAudioElement>()): Promise<void> {
   ink!.replaceChildren();
   const paths = tl.strokes.map(() => {
     const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -106,11 +135,21 @@ function play(tl: Timeline, speed: number): Promise<void> {
   };
   if (!speed) return Promise.resolve(show(Number.POSITIVE_INFINITY));
   const start = performance.now();
+  const started = new Set<number>();
   return new Promise((done) => {
     const frame = () => {
       const t = (performance.now() - start) * speed;
       show(t);
-      if (t >= tl.ms + 200) done();
+      for (const c of tl.clips) {
+        const a = audio.get(c.step);
+        if (!a || started.has(c.step) || t < c.at) continue;
+        started.add(c.step);
+        a.playbackRate = speed;
+        a.preservesPitch = true;
+        void a.play().catch(() => {});
+      }
+      const talking = [...started].some((i) => !audio.get(i)!.ended && !audio.get(i)!.paused);
+      if (t >= tl.ms + 200 && !talking) done();
       else requestAnimationFrame(frame);
     };
     frame();
@@ -160,9 +199,18 @@ async function oneSend(): Promise<boolean> {
     showLog();
     return false;
   }
-  const timeline = synthesize(turn.steps, setup.traits, setup.seed * 1000 + n);
+  const seed = setup.seed * 1000 + n;
+  let spoken: Awaited<ReturnType<typeof speak>> | undefined;
+  if (voiceOn && num("speed")) {
+    status(`Send ${n}: finding the driver's voice…`);
+    spoken = await speak(lines(turn.steps, setup.traits, seed), $<HTMLSelectElement>("#voiceName").value).catch((err) => {
+      $("#errors").textContent = `${err instanceof Error ? err.message : String(err)} (playing silently)`;
+      return undefined;
+    });
+  }
+  const timeline = synthesize(turn.steps, setup.traits, seed, spoken?.voiced);
   status(`Send ${n}: talking and drawing… (wants: ${turn.intent})`);
-  await play(timeline, num("speed"));
+  await play(timeline, num("speed"), spoken?.audio);
   status(`Send ${n}: Enter. The product is answering…`);
   const result = await span(`send ${n}`, undefined, async (ctx) => {
     const prompt = await buildPrompt(scene, timeline.strokes, timeline.words, tuning, ctx);
@@ -212,6 +260,11 @@ function reset() {
   draw();
 }
 
+$("#voice").addEventListener("click", () => {
+  voiceOn = !voiceOn;
+  $("#voice").textContent = `voice: ${voiceOn ? "on" : "off"}`;
+  $("#voice").classList.toggle("primary", voiceOn);
+});
 $("#run").addEventListener("click", () => void go(false));
 $("#step").addEventListener("click", () => void go(true));
 $("#stop").addEventListener("click", () => {
