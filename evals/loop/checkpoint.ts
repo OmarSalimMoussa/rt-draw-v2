@@ -228,8 +228,9 @@ export function checkpointTrees(champion: ArmSpec): string[] {
   const anchors = historyRead("anchors.json"), era = historyRead("eras.json").at(-1);
   const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
   const bridge = last && era && (benchHash() !== era.bench || measureHash() !== era.measureHash);
-  const shas = [anchors.at(-1)?.sha, ...(bridge ? [last.champion, anchors.find((a) => a.id === last.anchor)?.sha] : [])].filter((s): s is string => !!s);
-  return [...new Set([champion.tree, ...shas.map(treeOf)])];
+  // Checkpoint 0's anchor is the champion: its tree listed twice, so each arm gets its own Vite (openRig).
+  const shas = [anchors.at(-1)?.sha ?? champion.sha, ...(bridge ? [last.champion, anchors.find((a) => a.id === last.anchor)?.sha] : [])].filter((s): s is string => !!s);
+  return [champion.tree, ...new Set(shas.map(treeOf))];
 }
 
 /** The default runner: checkpointRun, live and unshared, judged by fidelity and craft on every case. */

@@ -326,7 +326,6 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-/** A local port nothing listens on: every request that isn't to the fake API dies there. */
 /** A local port nothing listens on: HTTPS_PROXY there makes any request past the fake API fail at once. */
 export async function closedPort(): Promise<number> {
   const s = netServer();

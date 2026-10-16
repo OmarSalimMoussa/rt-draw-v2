@@ -737,7 +737,7 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
   // A knob card is one tree with two tunings (§7.2).
   const champ: ArmSpec = { sha: base, tree: treeOf(base) };
   const arms: Arms = { A: champ, B: knob ? { sha: cand, tree: champ.tree, tuning: c.card.knobs } : { sha: cand, tree: tree! } };
-  const decided = await withRig(gw, [...new Set([arms.A.tree, arms.B.tree])], async (rig) => {
+  const decided = await withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
     // G1: the diffscan at 0 calls (a finished scan is read back on resume).
     const scanRun = run("scan");
     const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: banked(["tuning", "fresh", "heldout-gate"]) }));

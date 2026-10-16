@@ -60,9 +60,13 @@ export type Rig = {
   close(): Promise<void>;
 };
 
-/** Opens the rig a decision's runs share (scan, G2, G3): each tree's first bridge load warms its Vite before any timed case. */
+/**
+ * Opens the rig a decision's runs share (scan, G2, G3): each tree's first bridge load warms its Vite before any timed case.
+ * A tree listed twice is served twice, arm B's pages on the second copy: an A/A's arms get a Vite each, as an A/B's do
+ * (one Vite for both put B's requests behind A's, +31 ms on B's resolver call, and a dry checkpoint 0 failed its A/A on TTFC).
+ */
 export async function openRig(o: { trees: string[]; gateway: string; slots: number; port?: number }): Promise<Rig> {
-  const trees = [...new Set(o.trees)];
+  const trees = o.trees;
   const servers: ArmServer[] = [];
   const blocked: string[] = [];
   let chrome: Chrome | undefined;
@@ -79,7 +83,7 @@ export async function openRig(o: { trees: string[]; gateway: string; slots: numb
   }
   const tabs = new Map<string, Promise<Tab>>();
   async function open(slot: number, arm: Arm, tree: string): Promise<Tab> {
-    const server = servers[trees.indexOf(tree)];
+    const server = servers[arm === "B" ? trees.lastIndexOf(tree) : trees.indexOf(tree)];
     if (!server) throw new Error(`the rig doesn't serve ${tree}`);
     const page = await chrome!.newPage(server.url, { run: "-", case: "-", arm, slot });
     const tab: Tab = { page, errors: [] };
