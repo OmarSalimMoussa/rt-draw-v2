@@ -1,0 +1,17 @@
+[
+  { "said": "copy the shop's toy grid onto the about page", "from": "home", "ink": [], "need": ["shop-card-1", "shop-card-6", "about"] },
+  { "said": "make the page with the robot look more like the about page", "from": "home", "ink": [], "need": ["toy", "about"], "note": "the robot's page is never named" },
+  { "said": "put a checkout button like the one where you pay on this page", "from": "toy", "ink": [], "need": ["cart-checkout"], "note": "'where you pay' is the cart" },
+  { "said": "make this as big as that", "from": "all", "ink": [{ "loop": [24, 16, 48, 48] }, { "loop": [1680, 110, 800, 80] }], "need": ["logo", "shop-title"], "note": "both too small to read on screen" },
+  { "said": "move this over there", "from": "all", "ink": [{ "arrow": [[250, 950], [2200, 700]] }], "need": ["card-robot", "shop-card-4"], "note": "both readable on screen: nothing to add" },
+  { "said": "the footer here should match the shop's footer", "from": [0, 1000, 1280], "ink": [], "need": ["home-footer", "shop-footer"] },
+  { "said": "add a reviews section like the toy page's to the shop page", "from": "cart", "ink": [], "need": ["toy-reviews", "shop"] },
+  { "said": "make the cart total bigger", "from": "home", "ink": [], "need": ["cart-total"] },
+  { "said": "link this button to the cart", "from": "toy", "ink": [{ "tap": [4030, 595] }], "need": ["toy-add", "cart"] },
+  { "said": "make it pop", "from": "home", "ink": [], "need": [], "note": "nothing off screen is meant: the fewest tokens wins" },
+  { "said": "make the about photo round like the logo", "from": "shop", "ink": [], "need": ["about-photo", "logo"] },
+  { "said": "put the newsletter box from home on the cart page too", "from": "shop", "ink": [], "need": ["home-news", "cart"] },
+  { "said": "the three favourite toys should link to their toy pages", "from": "home", "ink": [], "need": ["card-robot", "card-teddy", "card-train", "toy"], "note": "the cards are just below the screen" },
+  { "said": "make where you pay look friendlier", "from": "home", "ink": [], "need": ["cart"] },
+  { "said": "make this card like the one on the shop page", "from": [0, 500, 1280], "ink": [{ "loop": [470, 740, 340, 420] }], "need": ["card-teddy", "shop-card-2"] }
+]

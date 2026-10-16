@@ -102,7 +102,7 @@ export type CameraCase = {
 };
 
 /** Where a case starts. */
-export function startView(c: CameraCase, scene: Scene): View {
+export function startView(c: { from: CameraCase["from"] }, scene: Scene): View {
   if (Array.isArray(c.from)) return { x: c.from[0], y: c.from[1], w: c.from[2], h: c.from[2] / ASPECT };
   if (c.from === "all") return fitView(union(pagesOf(scene).map((p) => p.box)), 0.03);
   const p = scene.get(c.from);

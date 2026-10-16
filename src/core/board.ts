@@ -5,6 +5,7 @@
 // whole board at the biggest zoom that holds every page, and the site map as
 // structured text.
 import type { Stroke } from "./ink.ts";
+import type { InkSpec } from "./resolve.ts";
 import { groupStrokes } from "./marks.ts";
 import type { Box, Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
@@ -126,42 +127,107 @@ export function siteMap(scene: Scene, t: Tuning = DEFAULTS): string {
   return out.join("\n");
 }
 
-export type NamedView = { name: string; why: string; view: View; width: number; tags: boolean };
+export type NamedView = { name: string; why: string; view: View; width: number; tags: boolean; /** Ids it's there to show. */ for?: string[] };
+
+/** A picture's height for a view drawn `width` pixels wide. */
+const heightOf = (v: NamedView) => Math.round((v.width * v.view.h) / v.view.w);
+/** Image tokens a view costs (about one per 750 pixels). */
+export const viewTokens = (v: NamedView) => Math.round((v.width * heightOf(v)) / 750);
+/** How big a box comes out in a view's picture: its larger side, in picture pixels. */
+export const pictureSize = (b: Box, v: NamedView) => (Math.max(norm(b).w, norm(b).h) * v.width) / v.view.w;
+/** When a picture shows a shape well enough to work with: big enough, its text tall enough to read, a page wide enough to make out its layout. */
+export type Legibility = { readablePx: number; textPx: number; pagePx: number };
+export const legibilityOf = (t: Tuning): Legibility => ({ readablePx: t["board.readablePx"], textPx: t["board.textPx"], pagePx: t["board.pageReadablePx"] });
+/** Whether a view's picture shows this shape (at least 80% of it) legibly. */
+export function legible(s: Shape, v: NamedView, l: Legibility): boolean {
+  if (insideShare(s.box, v.view) < 0.8) return false;
+  if (s.kind === "frame") return (s.box.w * v.width) / v.view.w >= l.pagePx;
+  if (pictureSize(s.box, v) < l.readablePx) return false;
+  return !s.text?.words || ((s.text.size ?? 20) * v.width) / v.view.w >= l.textPx;
+}
+
+/** A view of a whole page, in the page's own shape (a tall page isn't squeezed into a wide picture), for about the pixels of a camera picture. */
+function pageView(p: Shape, why: string, t: Tuning): NamedView {
+  const detailW = t["board.viewWidthPx"];
+  const aspect = Math.max(0.5, Math.min(2.5, p.box.w / p.box.h));
+  return { name: `page ${pageName(p)}`, why, view: fitView(p.box, 0.04, 0, aspect), width: Math.round(Math.sqrt(((detailW * detailW) / ASPECT) * aspect)), tags: true, for: [p.id] };
+}
 
 /**
- * The views worth showing a model for this send, in the order it gets them:
- * what you see (the camera), around each mark that the camera shows too small,
- * each page you named that the camera doesn't show, and the whole board.
+ * The pictures worth sending a model for this send, within board.imageBudget
+ * tokens and board.maxViews pictures: what you see first and the whole board
+ * last (both kept), and between them, in this order:
+ * - what you referred to (the resolver's answers, when given and
+ *   board.fromRefs is on) that what you see doesn't show readably: a page you
+ *   meant gets a page view; shapes get a close-up, one per page they're on
+ *   (the whole page when the close-up would be nearly as big both ways);
+ * - a close-up of each mark the camera shows too small;
+ * - without the resolver's answers: each page named in the words that's off screen.
  */
-export function autoViews(scene: Scene, camera: View, strokes: Stroke[], said: string, t: Tuning = DEFAULTS): NamedView[] {
-  const views: NamedView[] = [];
+export function pickViews(scene: Scene, camera: View, strokes: Stroke[], said: string, t: Tuning = DEFAULTS, refs?: { phrase: string; ids: string[] }[]): NamedView[] {
   const detailW = t["board.viewWidthPx"];
-  if (t["board.viewportShot"]) views.push({ name: "what you see", why: "the camera, as on screen", view: camera, width: detailW, tags: true });
+  const l = legibilityOf(t);
+  const first: NamedView[] = t["board.viewportShot"] ? [{ name: "what you see", why: "the camera, as on screen", view: camera, width: detailW, tags: true }] : [];
+  const middle: NamedView[] = [];
+  const shown = (s: Shape) => [...first, ...middle].some((v) => legible(s, v, l));
+
+  if (refs && t["board.fromRefs"]) {
+    // Each phrase's ids, by the page they're on, in the order they were said.
+    for (const ref of refs) {
+      const byPage = new Map<Shape | undefined, Shape[]>();
+      for (const id of ref.ids) {
+        const s = scene.get(id);
+        if (!s) continue;
+        const page = s.kind === "frame" ? s : pageOf(scene, s);
+        byPage.set(page, [...(byPage.get(page) ?? []), s]);
+      }
+      for (const [page, shapes] of byPage) {
+        if (page && shapes.includes(page)) {
+          // The page itself was meant: worth a picture unless one already shows its layout.
+          if (!shown(page)) middle.push(pageView(page, `you meant it ("${ref.phrase}") and ${insideShare(page.box, camera) < 0.8 ? "it's off screen" : "it's too small on screen"}`, t));
+          continue;
+        }
+        const missing = shapes.filter((s) => !shown(s));
+        if (!missing.length) continue;
+        const v = fitView(union(missing.map((s) => s.box)), t["board.markPadFrac"], t["board.markMinViewPx"]);
+        const ids = missing.map((s) => s.id);
+        if (page && v.w >= 0.7 * page.box.w && v.h >= 0.7 * page.box.h) middle.push({ ...pageView(page, `you meant ${ids.join(", ")} ("${ref.phrase}") on this page`, t), for: ids });
+        else middle.push({ name: `around ${ids.join(", ")}`, why: `you meant ${ids.length > 1 ? "them" : "it"} ("${ref.phrase}") and ${ids.length > 1 ? "they're" : "it's"} ${insideShare(union(missing.map((s) => s.box)), camera) < 0.8 ? "off screen" : "too small on screen"}`, view: v, width: detailW, tags: true, for: ids });
+      }
+    }
+  }
   if (t["board.markViews"])
     for (const m of groupStrokes(strokes, t)) {
       const v = fitView(m.box, t["board.markPadFrac"], t["board.markMinViewPx"]);
       // Only when it's a real close-up: the camera already shows the mark at about this zoom.
       if (v.w > camera.w * t["board.markZoomFrac"] && insideShare(m.box, camera) > 0.9) continue;
-      views.push({ name: `around [ink ${m.n}]`, why: `a close-up of mark ${m.n} and what it touches`, view: v, width: detailW, tags: true });
+      if (middle.some((x) => insideShare(m.box, x.view) > 0.9 && x.view.w <= v.w * 1.2)) continue;
+      middle.push({ name: `around [ink ${m.n}]`, why: `a close-up of mark ${m.n} and what it touches`, view: v, width: detailW, tags: true });
     }
-  if (t["board.pageViews"]) {
-    const text = ` ${said.toLowerCase()} `;
+  if (!(refs && t["board.fromRefs"]) && t["board.pageViews"]) {
+    const text = ` ${said.toLowerCase().replace(/[^a-z0-9' ]/g, " ")} `;
     for (const p of pagesOf(scene)) {
-      const name = pageName(p).toLowerCase();
-      if (!text.includes(` ${name} `) && !text.includes(` ${name}'`) && !text.includes(` ${name}.`) && !text.includes(` ${name},`)) continue;
-      if (insideShare(p.box, camera) > 0.6) continue;
-      // In the page's own shape (a tall page isn't squeezed into a wide picture), for about the same pixels.
-      const aspect = Math.max(0.5, Math.min(2.5, p.box.w / p.box.h));
-      views.push({ name: `page ${pageName(p)}`, why: `you named it and it's off screen`, view: fitView(p.box, 0.04, 0, aspect), width: Math.round(Math.sqrt(((detailW * detailW) / ASPECT) * aspect)), tags: true });
+      const named = [pageName(p), p.id].map((n) => n.toLowerCase()).some((n) => text.includes(` ${n} `) || text.includes(` ${n}'`));
+      if (!named || shown(p)) continue;
+      middle.push(pageView(p, "you named it and it's off screen", t));
     }
   }
-  // The camera and the whole board are kept; close-ups and pages fill what's left of board.maxViews.
-  const whole: NamedView[] = [];
-  if (t["board.overview"]) whole.push({ name: "the whole board", why: "the biggest zoom that holds every page", view: fitView(pagesOf(scene).length ? union(pagesOf(scene).map((p) => p.box)) : boardBounds(scene), 0.03), width: t["board.overviewWidthPx"], tags: !!t["board.overviewTags"] });
-  const fixed = (t["board.viewportShot"] ? 1 : 0) + whole.length;
-  const middle = views.slice(t["board.viewportShot"] ? 1 : 0, Math.max(0, t["board.maxViews"] - fixed) + (t["board.viewportShot"] ? 1 : 0));
-  return [...(t["board.viewportShot"] ? views.slice(0, 1) : []), ...middle, ...whole].slice(0, Math.max(t["board.maxViews"], fixed));
+  const last: NamedView[] = t["board.overview"]
+    ? [{ name: "the whole board", why: "the biggest zoom that holds every page", view: fitView(pagesOf(scene).length ? union(pagesOf(scene).map((p) => p.box)) : boardBounds(scene), 0.03), width: t["board.overviewWidthPx"], tags: !!t["board.overviewTags"] }]
+    : [];
+  // What you see and the whole board are kept; the rest fill the budget in order.
+  let tokens = [...first, ...last].reduce((a, v) => a + viewTokens(v), 0);
+  const kept: NamedView[] = [];
+  for (const v of middle) {
+    if (first.length + kept.length + last.length >= t["board.maxViews"] || tokens + viewTokens(v) > t["board.imageBudget"]) continue;
+    kept.push(v);
+    tokens += viewTokens(v);
+  }
+  return [...first, ...kept, ...last];
 }
+
+/** The rules alone: no resolver. */
+export const autoViews = (scene: Scene, camera: View, strokes: Stroke[], said: string, t: Tuning = DEFAULTS) => pickViews(scene, camera, strokes, said, t);
 
 export type BoardShot = NamedView & { shot: Shot };
 
@@ -179,4 +245,20 @@ export async function boardShots(scene: Scene, strokes: Stroke[], views: NamedVi
     );
     return { shots, ms: Math.round(performance.now() - t0), sumMs: Math.round(shots.reduce((a, s) => a + s.shot.ms.total, 0)) };
   }, { views: views.length });
+}
+
+// ---- Cases: which pictures a send needs, scored by what they show legibly and what they cost.
+
+/** A hand-written case: where the camera is, what's said and drawn there, and what must come out legible in some picture. */
+export type ViewCase = { said: string; from: string | number[]; ink: InkSpec[]; need: string[]; note?: string };
+
+/** Scoring's own legibility, fixed (the knobs' defaults at the time), so tuning the picker can't move the goal. */
+export const SCORE_LEGIBILITY: Legibility = { readablePx: 40, textPx: 9, pagePx: 400 };
+
+export function scoreViews(c: ViewCase, views: NamedView[], scene: Scene): { ok: boolean; covered: string[]; missed: string[]; tokens: number } {
+  const covered = c.need.filter((id) => {
+    const s = scene.get(id);
+    return !!s && views.some((v) => legible(s, v, SCORE_LEGIBILITY));
+  });
+  return { ok: covered.length === c.need.length, covered, missed: c.need.filter((id) => !covered.includes(id)), tokens: views.reduce((a, v) => a + viewTokens(v), 0) };
 }

@@ -9,13 +9,15 @@ import { DEICTIC, type Word, linkInk } from "./link.ts";
 import { type Mark, type Reading, readMark } from "./marks.ts";
 import { type ModelStats, callModel, modelOf } from "./model.ts";
 import type { Scene } from "./scene.ts";
+import { pageName, pageOf, pagesOf } from "./board.ts";
 import { takeShot } from "./shot.ts";
 import type { Tuning } from "./tuning.ts";
 
 export const RESOLVE_SYSTEM = `You work out which shapes on a canvas a person means.
 You get: the shapes that could be meant (id, kind, box as x y w h in pixels, and a description), what the person said with [ink n] at the moment they drew mark n, and what each mark is (a loop around shapes, an arrow from one place to another, a tap on a shape, a line).
 Return only JSON, no prose: {"refs": [{"phrase": "this headline", "ids": ["hero-title"]}]}
-One entry per phrase that refers to shapes on the canvas ("this", "that one", "the photo", "these three", "over there"), with every id it means. Use only ids from the list. Ink settles which one; words settle how many and what kind. Leave out phrases that refer to nothing on the canvas.`;
+One entry per phrase that refers to shapes on the canvas ("this", "that one", "the photo", "these three", "over there"), with every id it means. Use only ids from the list. Ink settles which one; words settle how many and what kind. Leave out phrases that refer to nothing on the canvas.
+On a board of pages (frames), a phrase about a whole page ("the shop page", "where you pay", "the other page") means its frame id, and a part of a page means that part's id.`;
 
 /** Plural pointing words: a loop around several shapes means all of them. */
 const PLURAL = new Set(["these", "those"]);
@@ -62,7 +64,9 @@ export function plan(words: Word[], marks: Mark[], scene: Scene, hits: HitIndex,
     return [...want].filter((w) => have.has(w)).length;
   };
   const rest = scene.stacked().map((s) => s.id).filter((id) => !fromInk.includes(id)).map((id) => ({ id, score: overlap(id) })).sort((a, b) => b.score - a.score);
-  const candidates = [...fromInk, ...rest.map((r) => r.id)].slice(0, t["resolve.maxCandidates"]);
+  // On a board, every page is offered too: there are few, and "where you pay" may share no word with the cart page.
+  const pages = pagesOf(scene).map((p) => p.id).filter((id) => !fromInk.includes(id));
+  const candidates = [...fromInk, ...rest.map((r) => r.id).filter((id) => !pages.includes(id))].slice(0, t["resolve.maxCandidates"]).concat(pages);
   const features: Record<string, number | string> = { marks: marks.length, deictic: deictic.length, plural: plural ? 1 : 0, inkHits: fromInk.length, topOverlap: rest[0]?.score ?? 0, candidates: candidates.length, readings: readings.map((r) => r.how).join(" ") };
 
   // Ink first: pointing words, and every mark clearly on its shape(s).
@@ -83,7 +87,8 @@ export function prompt(p: Plan, scene: Scene): string {
   const shapes = p.candidates.map((id) => {
     const s = scene.get(id)!;
     const { x, y, w, h } = s.box;
-    return `- ${id} (${s.kind}, ${Math.round(x)} ${Math.round(y)} ${Math.round(w)} ${Math.round(h)}): ${s.description}`;
+    const page = s.kind === "frame" ? ` page "${pageName(s)}"` : pageOf(scene, s) ? ` on page ${pageOf(scene, s)!.id}` : "";
+    return `- ${id} (${s.kind === "frame" ? "page" : s.kind}, ${Math.round(x)} ${Math.round(y)} ${Math.round(w)} ${Math.round(h)})${page}: ${s.description}`;
   });
   const ink = p.readings.map((r, i) => {
     const what = r.how === "arrow" ? `arrow from ${r.from ?? "empty space"} to ${typeof r.to === "string" ? r.to : r.to ? `empty space at ${Math.round(r.to.x)} ${Math.round(r.to.y)}` : "?"}` : r.how === "loop" ? `loop around ${r.targets.join(", ") || "nothing"}` : r.how === "tap" ? `tap on ${r.targets[0] ?? "empty space"}` : `${r.how}${r.targets.length ? ` over ${r.targets.join(", ")}` : ""}${r.inside ? ` inside ${r.inside}` : ""}`;
