@@ -11,6 +11,7 @@
 // and no other service's key.
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Query, type SDKMessage, type SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
@@ -71,6 +72,22 @@ export type ProcOpts = EnvOpts & { token: string; effort?: Effort };
 // The prompt Claude Code adds names its working directory: one fixed folder keeps it the same for every call.
 const CWD = join(tmpdir(), "rt-draw-v2-claude");
 
+/**
+ * The SDK's native CLI, found once the way the SDK finds it. Left to itself the SDK looks it up on every
+ * query() with process.report.getReport(), which walks every open handle: 3–30 ms of a blocked event loop
+ * per process start in a busy gateway (V9 voids a case past 20 ms).
+ */
+const CLI = (() => {
+  if (process.platform !== "linux") return undefined;
+  const musl = (process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined)?.header?.glibcVersionRuntime === undefined;
+  const pkg = `@anthropic-ai/claude-agent-sdk-linux-${process.arch}`;
+  const req = createRequire(import.meta.url);
+  for (const p of musl ? [`${pkg}-musl`, pkg] : [pkg, `${pkg}-musl`])
+    try {
+      return req.resolve(`${p}/claude`);
+    } catch {}
+})();
+
 export function startProcess(model: string, system: string, o: ProcOpts): Proc {
   let give!: (c: Content) => void;
   const first = new Promise<Content>((r) => (give = r));
@@ -81,7 +98,7 @@ export function startProcess(model: string, system: string, o: ProcOpts): Proc {
   mkdirSync(o.configDir, { recursive: true });
   const q = query({
     prompt: prompt(),
-    options: { model, systemPrompt: system, tools: [], settingSources: [], persistSession: false, includePartialMessages: true, thinking: { type: "disabled" }, effort: o.effort ?? "low", maxTurns: 1, cwd: CWD, env: childEnv(o.token, { ...o, model }) },
+    options: { model, systemPrompt: system, tools: [], settingSources: [], persistSession: false, includePartialMessages: true, thinking: { type: "disabled" }, effort: o.effort ?? "low", maxTurns: 1, cwd: CWD, env: childEnv(o.token, { ...o, model }), ...(CLI ? { pathToClaudeCodeExecutable: CLI } : {}) },
   });
   const p: Proc = { q, give, up: false, born: Date.now(), ready: Promise.resolve() };
   // Never bill an API key by accident: the process must be on the subscription's token.
