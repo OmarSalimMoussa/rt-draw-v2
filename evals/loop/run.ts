@@ -250,7 +250,7 @@ async function init() {
   // Trees key on the harness too, so the old harness's are never served again: aside, or R1 counts them stale.
   if (before && before !== tag && existsSync(join(p.home, "trees"))) {
     mkdirSync(join(p.home, "trees-old"), { recursive: true });
-    renameSync(join(p.home, "trees"), join(p.home, "trees-old", before));
+    renameSync(join(p.home, "trees"), join(p.home, "trees-old", `${before}-${stampNow()}`));
   }
   openHistory();
   importHistory();
