@@ -141,6 +141,31 @@ export const KNOBS: Knob[] = [
   K("picture.parallel", 3, 1, 8, 1, "pictures drawn at the same time after a send"),
   K("picture.fill", 0.9, 0.5, 1, 0.05, "a picture fills this share of its shape"),
 
+  // Board: what a model is shown of an infinite board.
+  B("board.viewportShot", 1, "what you see", "on: send the camera's view, as on screen"),
+  B("board.markViews", 1, "close-ups of marks", "on: send a close-up around each mark the camera shows too small"),
+  B("board.pageViews", 1, "named pages", "on: send each page you named that's off screen"),
+  B("board.overview", 1, "whole board", "on: send the whole board at the biggest zoom that holds every page"),
+  B("board.overviewTags", 0, "tags on the whole board", "on: id tags on the whole-board picture too (many, small)"),
+  K("board.maxViews", 4, 1, 8, 1, "pictures sent at most: what you see and the whole board are kept, close-ups then named pages fill the rest"),
+  K("board.viewWidthPx", 960, 320, 1600, 32, "width of the camera, close-up and page pictures", "px"),
+  K("board.overviewWidthPx", 1280, 320, 2000, 32, "width of the whole-board picture", "px"),
+  K("board.markPadFrac", 0.3, 0, 3, 0.05, "a close-up shows this much around its mark, as a share of the mark's size"),
+  K("board.markMinViewPx", 480, 100, 2000, 20, "a close-up shows at least this much of the board across", "px"),
+  K("board.markZoomFrac", 0.6, 0.2, 1, 0.05, "skip a close-up unless it's at most this share of the camera's width (zoomed in enough to add something)"),
+  K("board.linkSnapPx", 60, 0, 200, 5, "an arrow end this close to a page counts as on it, for links", "px"),
+  K("board.mapDepth", 2, 0, 5, 1, "site map: levels of each page's content listed (0: pages and links only)"),
+  K("board.mapWords", 10, 0, 40, 1, "site map: words of each shape's description (0: ids only)"),
+
+  // Camera: the model moves the view when asked ("zoom out", "go to the shop page").
+  K("camera.model", 0, 0, 2, 1, "model that moves the camera (0 haiku, 1 sonnet, 2 opus)"),
+  B("camera.sendMap", 1, "send site map", "on: send the site map as text"),
+  B("camera.sendView", 1, "send what you see", "on: send a picture of the current view"),
+  B("camera.sendOverview", 0, "send whole board", "on: send a picture of the whole board"),
+  K("camera.padFrac", 0.06, 0, 0.5, 0.01, "framing shapes by id leaves this margin, as a share of their size"),
+  K("camera.minViewPx", 160, 40, 800, 20, "the camera never shows less than this much of the board across", "px"),
+  K("camera.easeMs", 450, 0, 2000, 50, "the camera glides to its new view over this long", "ms"),
+
   // Router: fast lane (small model, no picture) vs full lane.
   K("router.fastMaxWords", 12, 1, 40, 1, "a send this short can take the fast lane"),
   K("router.fastMaxMarks", 1, 0, 5, 1, "with at most this many marks"),

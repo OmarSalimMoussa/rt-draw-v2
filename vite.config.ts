@@ -4,7 +4,7 @@ import { modelApi } from "./dev/model-plugin.ts";
 import { ttsApi } from "./dev/tts-plugin.ts";
 import { sttToken } from "./playgrounds/speech/token-plugin.ts";
 
-const pages = ["render", "ops", "ink", "hittest", "marks", "speech", "link", "shot", "coords", "tidy", "describe", "resolve", "draw", "picture", "router"];
+const pages = ["render", "ops", "ink", "hittest", "marks", "speech", "link", "shot", "coords", "tidy", "describe", "resolve", "draw", "picture", "router", "board", "camera"];
 
 export default defineConfig({
   plugins: [sttToken(), modelApi(), ttsApi()],

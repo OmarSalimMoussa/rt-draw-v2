@@ -3,8 +3,9 @@
 
 import type { El } from "./picture.ts";
 export type Box = { x: number; y: number; w: number; h: number };
-export type Kind = "rect" | "round" | "circle" | "pill" | "line" | "arrow";
-export const KINDS: Kind[] = ["rect", "round", "circle", "pill", "line", "arrow"];
+/** "frame" is a page (or app screen) on the board: its text is its name, shown above it, and the shapes inside it are its content. */
+export type Kind = "rect" | "round" | "circle" | "pill" | "line" | "arrow" | "frame";
+export const KINDS: Kind[] = ["rect", "round", "circle", "pill", "line", "arrow", "frame"];
 
 export type Style = {
   fill?: string;

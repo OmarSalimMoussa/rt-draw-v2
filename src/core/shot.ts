@@ -22,7 +22,14 @@ export type Shot = {
   features: { marks: number; shapes: number; tags: boolean; grid: number; scale: number };
 };
 
-export type ShotOptions = { inkNumbers?: boolean; inkColor?: string };
+export type ShotOptions = {
+  inkNumbers?: boolean;
+  inkColor?: string;
+  /** Part of the board to capture, in board pixels; the whole scene when unset. */
+  view?: { x: number; y: number; w: number; h: number };
+  /** Picture width in pixels (height follows the view); the view at shot.scale when unset. */
+  width?: number;
+};
 
 const NS = "http://www.w3.org/2000/svg";
 const el = (name: string, attrs: Record<string, string | number> = {}) => {
@@ -74,13 +81,16 @@ function tags(svg: SVGSVGElement, scene: Scene, px: number) {
 
 export async function takeShot(scene: Scene, strokes: Stroke[], t: Tuning = DEFAULTS, opts: ShotOptions = {}): Promise<Shot> {
   const t0 = performance.now();
-  const scale = t["shot.scale"];
-  const width = Math.round(scene.width * scale);
-  const height = Math.round(scene.height * scale);
+  const view = opts.view ?? { x: 0, y: 0, w: scene.width, h: scene.height };
+  const width = Math.round(opts.width ?? view.w * t["shot.scale"]);
+  const height = Math.round((width * view.h) / view.w);
+  /** Picture pixels per board pixel: tags and numbers are sized for the picture, not the board. */
+  const k = width / view.w;
+  const scale = Math.round(k * 1000) / 1000;
   const color = opts.inkColor ?? "#e03131";
 
   const svg = el("svg", { xmlns: NS, width, height }) as SVGSVGElement;
-  render(svg, scene, { tuning: t });
+  render(svg, scene, { tuning: t, view: opts.view });
   svg.setAttribute("width", String(width));
   svg.setAttribute("height", String(height));
   const style = el("style");
@@ -89,19 +99,19 @@ export async function takeShot(scene: Scene, strokes: Stroke[], t: Tuning = DEFA
 
   const cell = t["shot.gridCellPx"];
   if (cell > 0) grid(svg, scene, cell);
-  if (t["shot.tagPx"] > 0) tags(svg, scene, t["shot.tagPx"]);
+  if (t["shot.tagPx"] > 0) tags(svg, scene, t["shot.tagPx"] / k);
   for (const s of strokes) svg.append(el("path", { d: strokePath(s.points, t["ink.size"], t), fill: color }));
   const marks = groupStrokes(strokes, t);
   if (opts.inkNumbers !== false) {
-    const px = t["shot.inkNumberPx"];
+    const px = t["shot.inkNumberPx"] / k;
     for (const m of marks) {
       // Beside the mark's own ink, not its box's corner (far from a loop or a diagonal): the ink
       // point furthest up and right, nudged out by shot.inkNumberGapPx. Kept on the canvas; a white
       // halo keeps it readable over anything.
       const gap = t["shot.inkNumberGapPx"];
       const [ax, ay] = m.strokes.flatMap((s) => s.points).reduce((best, p) => (p[0] - p[1] > best[0] - best[1] ? p : best));
-      const x = Math.max(0, Math.min(scene.width - px * 2, ax + gap));
-      const y = Math.max(px, Math.min(scene.height - 2, ay - gap));
+      const x = Math.max(view.x, Math.min(view.x + view.w - px * 2, ax + gap / k));
+      const y = Math.max(view.y + px, Math.min(view.y + view.h - 2, ay - gap / k));
       const n = el("text", { x, y, "font-size": px, "font-family": FONT, fill: color, stroke: "#fff", "stroke-width": px / 6, "paint-order": "stroke", "font-weight": 700 });
       n.textContent = `[${m.n}]`;
       svg.append(n);

@@ -21,7 +21,12 @@ export type RenderOptions = {
   highlight?: Map<string, string>;
   /** The look's knobs (render.*); defaults unless a playground is tuning them. */
   tuning?: Tuning;
+  /** The part of the board to show (the camera), in board pixels; the whole scene when unset. */
+  view?: { x: number; y: number; w: number; h: number };
 };
+
+/** The board behind pages, so a page's white edge shows. */
+export const BOARD = "#f1f0ec";
 
 const el = <K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string, string | number> = {}) => {
   const e = document.createElementNS(NS, name);
@@ -79,6 +84,14 @@ function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shap
     fillStyle: st.fillStyle ?? "solid",
   };
   let body: SVGGElement;
+  if (s.kind === "frame") {
+    // A page: white, with its name above its top-left corner, sized for a board seen from afar.
+    g.append(rc.rectangle(x, y, w, h, { ...opts, fill: st.fill ?? "#ffffff", roughness: Math.min(opts.roughness ?? 1, 0.6) }));
+    const name = el("text", { x, y: y - 14, "font-family": FONT, "font-size": Math.max(24, Math.min(64, w / 28)), fill: "#495057" });
+    name.textContent = s.text?.words ?? s.id;
+    g.append(name);
+    return g;
+  }
   if (s.kind === "circle") body = rc.ellipse(x + w / 2, y + h / 2, w, h, opts);
   else if (s.kind === "round" || s.kind === "pill") body = rc.path(outline(s), opts);
   else if (s.kind === "line" || s.kind === "arrow") {
@@ -176,8 +189,15 @@ function drawTag(svg: SVGSVGElement, s: Shape, color = "#e8590c") {
 export function render(svg: SVGSVGElement, scene: Scene, opts: RenderOptions = {}): number {
   const t0 = performance.now();
   svg.replaceChildren(el("defs"));
-  svg.setAttribute("viewBox", `0 0 ${scene.width} ${scene.height}`);
-  svg.append(el("rect", { x: 0, y: 0, width: scene.width, height: scene.height, fill: "#ffffff" }));
+  const v = opts.view;
+  if (v) {
+    // A camera on the board: pages are white on the board's color.
+    svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+    svg.append(el("rect", { x: v.x, y: v.y, width: v.w, height: v.h, fill: BOARD }));
+  } else {
+    svg.setAttribute("viewBox", `0 0 ${scene.width} ${scene.height}`);
+    svg.append(el("rect", { x: 0, y: 0, width: scene.width, height: scene.height, fill: "#ffffff" }));
+  }
   const rc = rough.svg(svg);
   for (const s of scene.stacked()) svg.append(drawShape(rc, svg, s, opts.tuning ?? DEFAULTS));
   if (opts.grid) drawGrid(svg, scene, opts.grid);

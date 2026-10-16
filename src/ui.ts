@@ -21,6 +21,8 @@ export const PLAYGROUNDS = [
   ["draw", "Drawing model"],
   ["picture", "Pictures"],
   ["router", "Router"],
+  ["board", "Board shots"],
+  ["camera", "Camera"],
 ] as const;
 
 export function shell(current: string, blurb: string) {
