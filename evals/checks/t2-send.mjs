@@ -149,7 +149,7 @@ check(recorded[1]?.scene?.shapes?.some((s) => s.id === "sale-badge"), "the secon
 check(typed.log === now.log, "the recorded page's op log differs");
 
 const n = c.counts();
-check(n.seen === n.stubbed && n["/api/eval/record"] === 2, `seen ${n.seen} != stubbed ${n.stubbed} (${JSON.stringify(n)})`);
+check(n.seen === n.stubbed && n["/api/eval/record"] === 2, `requests seen ${n.seen}, stubbed ${n.stubbed}, records ${n["/api/eval/record"]}`);
 check(!c.errors.length, `page errors: ${c.errors.join(" | ")}`);
 const left = await c.close();
 check(left === 0, `${left} Chrome processes left`);
