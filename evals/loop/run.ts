@@ -561,7 +561,13 @@ async function calib() {
   await withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
     await runAB(rig, { run, kind: "calib", arms: { A: champ, B: { ...champ, tuning: { [knob]: Number(value) } } }, mode: "live", share: true, seed: run, judge: judging(run, { seed: run, craft: "none" }), cases: ids });
     const page = (await rig.tab(0, "A", champ.tree)).page;
-    const shot = async (scene: SceneJSON, camera: View) => (await loadPage(page, run, "calib-shot", scene, camera), capture(page, { width: LOOP.judgePx, quality: LOOP.judgeQuality }));
+    // One page: assemble() asks for its probes' captures at once, and two loads racing on one page never finished.
+    let busy: Promise<unknown> = Promise.resolve();
+    const shot = (scene: SceneJSON, camera: View) => {
+      const r = busy.then(async () => (await loadPage(page, run, "calib-shot", scene, camera), capture(page, { width: LOOP.judgePx, quality: LOOP.judgeQuality })));
+      busy = r.catch(() => {});
+      return r;
+    };
     const pairs = await assemble({ aa: ck0.run, contrast: run, seed: run, capture: shot });
     say(`calib: ${pairs.length} pairs in labels/pairs.json: label them at /evals/label/ (60 clear fidelity, 30 craft), then rte calib --check`);
   }));
