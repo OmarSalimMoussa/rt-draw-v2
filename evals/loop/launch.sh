@@ -29,6 +29,14 @@ if [ "$(uname -m)" = aarch64 ]; then
 fi
 
 mkdir -p "$RT_EVAL_HOME"
+# Without the user's systemd manager (ssh without lingering, cron, sudo) or the right to hold the inhibitor, the unit
+# can't start: say so plainly instead of systemd's "Failed to connect to bus".
+if ! systemctl --user show-environment >/dev/null 2>&1 || ! systemd-inhibit --what=sleep --why='rt eval probe' true 2>/dev/null; then
+  echo "launch.sh: no systemd user manager or sleep inhibitor from this shell (XDG_RUNTIME_DIR or the user bus missing, or polkit refused)." >&2
+  echo "  Run it from a desktop terminal, or run the step bare from here (no unit limits, no inhibitor; keep the laptop awake):" >&2
+  echo "  RT_EVAL_HOME=$RT_EVAL_HOME node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts $*" >&2
+  exit 1
+fi
 [ "$1" = stop ] && exec systemctl --user stop "$(cat "$RT_EVAL_HOME/unit")"
 unit="rt-eval-$(date +%s)-$$" # never collides, and --collect unloads even a failed one
 echo "$unit" > "$RT_EVAL_HOME/unit"
