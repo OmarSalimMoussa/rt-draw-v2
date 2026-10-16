@@ -1096,7 +1096,10 @@ async function gc() {
   const keep = new Set([championSha(), ...historyRead("anchors.json").map((a) => a.sha), ...(readState()?.cards.flatMap((c) => (c.cand ? [c.cand] : [])) ?? [])].map((s) => p.tree(contentHash(s))));
   const all = existsSync(join(p.home, "trees")) ? readdirSync(join(p.home, "trees")).map((d) => join(p.home, "trees", d)) : [];
   for (const d of all.filter((d) => !keep.has(d))) rmSync(d, { recursive: true, force: true });
-  say(`gc: ${all.filter((d) => !keep.has(d)).length} trees removed, ${all.filter((d) => keep.has(d)).length} kept`);
+  // An old harness's trees (init --refresh moved them aside): nothing serves them again.
+  const old = existsSync(join(p.home, "trees-old")) ? readdirSync(join(p.home, "trees-old")).length : 0;
+  rmSync(join(p.home, "trees-old"), { recursive: true, force: true });
+  say(`gc: ${all.filter((d) => !keep.has(d)).length} trees removed, ${all.filter((d) => keep.has(d)).length} kept${old ? `, ${old} old harness's tree folders cleared` : ""}`);
 }
 
 const COMMANDS: Record<string, () => Promise<number | void>> = {

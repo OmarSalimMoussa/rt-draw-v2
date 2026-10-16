@@ -78,7 +78,8 @@ const L = await fakeLoop({ port: 5325 });
   check(lines(join(hist, "health.jsonl")).some((h) => h.kind === "aa" && h.detail.checkpoint === "ck-00"), "checkpoint 0's A/A isn't in health.jsonl");
   check(!git("-C", hist, "status", "--porcelain") && git("-C", hist, "log", "--format=%s").includes("ck-00: share"), "checkpoint 0 wasn't committed on eval/history");
   check(json(join(hist, "runs", "ck-00.json")).rows.length === 8, "runs/ck-00.json doesn't hold checkpoint 0's rows");
-  check(JSON.stringify(C.checkpointTrees(champ)) === JSON.stringify([champ.tree]), `checkpointTrees() after checkpoint 0: ${C.checkpointTrees(champ).join(", ")}`);
+  // The anchor is the champion: its tree twice, so each arm gets its own Vite.
+  check(JSON.stringify(C.checkpointTrees(champ)) === JSON.stringify([champ.tree, champ.tree]), `checkpointTrees() after checkpoint 0: ${C.checkpointTrees(champ).join(", ")}`);
 
   // ---- U1 from recorded sends: two with a meant (one typed, one spoken with a mark), one without, one blank.
   const toy = L.tuning.find((id) => json(join(p.bankCase(id), "case.json")).start === "toyshop-home");

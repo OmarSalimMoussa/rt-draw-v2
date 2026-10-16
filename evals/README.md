@@ -109,7 +109,7 @@ as eval/history-import), then `rte init --refresh` there.
 | `runs/<run>/` | every run's cases, rows, verdict; run ids `<stamp>-e<E>-h<n>-{g0,scan,ab}` |
 | `cache/replies/`, `cache/blobs/` | model replies by request hash, images |
 | `meter/calls.jsonl`, `meter/slots.json` | one line per model call (slot numbers only), each slot's window and week |
-| `wt/`, `trees/` | engineer worktrees; served arm trees by content hash |
+| `wt/`, `trees/`, `trees-old/` | engineer worktrees; served arm trees by content hash (and the harness); an old harness's trees after a re-pin, until `gc --trees` |
 | `state.json`, `loop.lock`, `heartbeat.json` | the coordinator's cursor, one loop at a time, suspend detection |
 | `logs/` | every `run.ts` line (`run-<date>.log`), arm servers |
 | `machine.json`, `ready/`, `labels/`, `human/`, `out/` | the ladder's slots, readiness runs, calibration labels, the owner's sends, baked pictures |
