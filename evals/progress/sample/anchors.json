@@ -1,0 +1,35 @@
+[
+ {
+  "id": "A0",
+  "sha": "41edd74d0cfc15a048c48098abdd3d6e2d40702e",
+  "Q": 0,
+  "latency": {
+   "ttfcP50": 3420,
+   "ttfcP75": 4480,
+   "ttdP50": 9150,
+   "ttdP75": 11800
+  }
+ },
+ {
+  "id": "A1",
+  "sha": "2a2202db56a6ada6000582bb6146b2ad7e1b1f8b",
+  "Q": 0.915,
+  "latency": {
+   "ttfcP50": 2202,
+   "ttfcP75": 2915,
+   "ttdP50": 7160,
+   "ttdP75": 8754
+  }
+ },
+ {
+  "id": "A2",
+  "sha": "72ec0953b5acdaef7e205561c7ddce05fc4e7760",
+  "Q": 1.889,
+  "latency": {
+   "ttfcP50": 1746,
+   "ttfcP75": 2282,
+   "ttdP50": 5922,
+   "ttdP75": 7529
+  }
+ }
+]
