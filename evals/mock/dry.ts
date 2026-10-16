@@ -94,6 +94,7 @@ if (import.meta.main) {
   const i = process.argv.indexOf("--port");
   const dir = join(paths().home, "dry");
   const { replies, latency, tokens } = writeDry(dir);
-  const api = await startFakeApi({ port: i > 0 ? Number(process.argv[i + 1]) : 0, replies, latency });
+  // Replies by prompt, not in turn: in turn, two arms sending one prompt got alternate replies, and a dry draw.noThink read 6% slower.
+  const api = await startFakeApi({ port: i > 0 ? Number(process.argv[i + 1]) : 0, replies, latency, pick: "hash" });
   console.log(`READY ${api.url} (tokens ${tokens}, latency ${latency})`);
 }

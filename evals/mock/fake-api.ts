@@ -11,6 +11,8 @@
 // --replies <dir>: files named <role>.<sha12>.txt (one reply) or .json (an array, served in turn),
 //   where sha12 is the first 12 hex of sha256(the caller's system prompt); the role (the "role
 //   marker") is logged with each request it answers. Unmatched requests get "ok" and role "?".
+//   pick "hash" (dry.ts) answers from a list by the first user message's hash instead of in turn, so two
+//   arms sending the same prompt get the same reply whatever their order.
 //   A reply "!limit", "!overload" or "!auth" fails that one request (429, 529, 401).
 // --script <file>: a JSON array of assistant turns [{content: [blocks], stop_reason?, usage?}],
 //   text and tool_use blocks; a request's turn is the number of assistant messages it carries.
@@ -25,7 +27,7 @@ import { join } from "node:path";
 
 export type FakeMode = "ok" | "slow" | "limit" | "overload" | "auth" | "maxtokens" | "thinking";
 export type FakeOpts = {
-  port?: number; mode?: FakeMode; replies?: string; script?: string; latency?: string;
+  port?: number; mode?: FakeMode; replies?: string; script?: string; latency?: string; pick?: "turn" | "hash";
   /** Five-hour and seven-day utilization (0–1) in the rate-limit headers, and the status they send. */
   util5h?: number; util7d?: number; status?: "allowed" | "allowed_warning" | "rejected";
   /** Unix seconds; default an hour from start. Each token (by first appearance) gets its own: +60 s per token. */
@@ -123,7 +125,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
     if (script.length) turn = script[rec.assistantTurns] ?? { content: [{ type: "text", text: "done" }] };
     else {
       const hit = rec.systemSha.map((s) => replies.get(s)).find(Boolean);
-      const n = hit ? (served.get(hit.role) ?? 0) : 0;
+      const n = !hit ? 0 : o.pick === "hash" ? parseInt(sha12(rec.firstUser), 16) : (served.get(hit.role) ?? 0);
       if (hit) served.set(hit.role, n + 1);
       rec.role = hit?.role ?? (o.replies ? "?" : undefined);
       turn = { content: [{ type: "text", text: hit ? hit.texts[n % hit.texts.length] : "ok" }] };

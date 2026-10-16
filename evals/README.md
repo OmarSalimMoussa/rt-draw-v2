@@ -53,9 +53,10 @@ battery) and writes each to the owner list. Mornings: `/evals/progress/`, `owner
 
 ## Rehearsing at 0 calls
 
-The whole chain, small, on a fake API that answers every role (`evals/mock/dry.ts`: canned replies by system prompt,
-v2's median call timings per role, three fake tokens). Run from a new `RT_EVAL_HOME` outside any repo, never `~/rt-eval`;
-it takes about 45 minutes on the laptop and makes no real call (`HTTPS_PROXY` points at a closed port).
+The whole chain, small, on a fake API that answers every role (`evals/mock/dry.ts`: canned replies by system prompt and
+prompt, v2's median call timings per role, the resolver's thinking-off pilot, three fake tokens). Run from a new
+`RT_EVAL_HOME` outside any repo, never `~/rt-eval`; it takes about an hour on the laptop and makes no real call
+(`HTTPS_PROXY` points at a closed port). The judge always ties, so verdicts come from latency alone.
 
 ```bash
 export RT_EVAL_HOME=/tmp/rt-eval-dry      # new and empty
@@ -64,16 +65,16 @@ rte ready --stub --mock-api
 node --import ./evals/loop/node-hooks.mjs evals/mock/dry.ts --port 5400 &   # READY http://127.0.0.1:5400
 F="--tokens $RT_EVAL_HOME/dry/tokens.env --mock-api http://127.0.0.1:5400"
 bash evals/loop/launch.sh ladder --max 4 --latency $RT_EVAL_HOME/dry/latency.jsonl
-bash evals/loop/launch.sh smoke --cap 50 $F        # U3 (first text < 2 s) and the session line fail here: replayed timings, canned driver
+bash evals/loop/launch.sh smoke --cap 50 $F
 bash evals/loop/launch.sh bake --cap 36 $F
 cp $RT_EVAL_HOME/out/pictures.json evals/fixtures/ && git commit -qm "dry: baked pictures" -- evals/fixtures/pictures.json   # in the clone only
 rte init --refresh && rte ready --stub --mock-api
-bash evals/loop/launch.sh bank build --tuning 4 --heldout-gate 2 --heldout-chart 2 --cap 300 $F   # REFUSED by the §2.3 gates: a 36-send bank is too small, as it should be
+bash evals/loop/launch.sh bank build --tuning 8 --heldout-gate 2 --heldout-chart 2 --cap 450 $F   # REFUSED by the §2.3 gates: a 56-send bank is too small, as it should be
 rte aa --shared --cases 12
 rte bench freeze --heldout 8 --tuning 8            # smaller than B1's 32 + 32, for the rehearsal only
 bash evals/loop/launch.sh checkpoint --zero --cap 200 $F
 bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200 $F
-rte calib --fake-labels --mock-api http://127.0.0.1:5400 && rte calib --check   # the judge's own verdicts as labels: "more" (too few clear ones)
+rte calib --fake-labels --mock-api http://127.0.0.1:5400; rte calib --check   # the judge's own verdicts (ties) as labels: "more"
 bash evals/loop/launch.sh loop --epochs 1 --seed-cards evals/optimizer/seed-cards.json $F
 ```
 
