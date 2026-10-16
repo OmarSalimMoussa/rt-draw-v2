@@ -42,9 +42,14 @@ export function openHistory(): string {
   if (existsSync(join(history, ".git"))) return history;
   if (!existsSync(join(repo, ".git"))) throw new Error(`no loop clone at ${repo}: run init first`);
   if (tryGit(repo, "rev-parse", "--verify", "-q", `refs/heads/${BRANCH}`) === undefined) {
-    // An orphan: the record shares no history with the product's.
-    const empty = execFileSync("git", ["-C", repo, "mktree"], { input: "", encoding: "utf8" }).trim();
-    git(repo, "branch", BRANCH, git(repo, ...who(repo), "commit-tree", empty, "-m", "eval/history: the loop's record (spec §3.5)"));
+    // An orphan: the record shares no history with the product's. Its root is the same commit on every machine
+    // (fixed identity and date), so another machine's `export` imports as a fast-forward; rows appended on two
+    // machines merge by union.
+    const git0 = (args: string[], input: string, env = process.env) => execFileSync("git", ["-C", repo, ...args], { input, env, encoding: "utf8" }).trim();
+    const tree = git0(["mktree"], `100644 blob ${git0(["hash-object", "-w", "--stdin"], "*.jsonl merge=union\n*.md merge=union\n")}\t.gitattributes\n`);
+    const id = { NAME: "rt-eval loop", EMAIL: "rt-eval@localhost", DATE: "2026-10-16T00:00:00Z" };
+    const env = { ...process.env, ...Object.fromEntries(["AUTHOR", "COMMITTER"].flatMap((r) => Object.entries(id).map(([k, v]) => [`GIT_${r}_${k}`, v]))) };
+    git(repo, "branch", BRANCH, git0(["commit-tree", tree, "-m", "eval/history: the loop's record (spec §3.5)"], "", env));
   }
   // Judge ids or a hand-made bench may predate the worktree: set aside, then copied in and committed.
   const before = existsSync(history) ? voidPath(history) : undefined;

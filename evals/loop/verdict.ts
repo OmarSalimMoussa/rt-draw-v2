@@ -122,7 +122,7 @@ function untrusted(all: Row[], live: Row[], i: DecideInput): string[] {
     out.push(`position flips on ${i.flips.flipped} of ${i.flips.audited} audited cases`);
   const firstA = live.filter((r) => r.firstArm === "A").length / live.length;
   if (live.length >= LOOP.looks[0] && (firstA < LOOP.dispatchBand[0] || firstA > LOOP.dispatchBand[1])) out.push(`A dispatched first on ${(100 * firstA).toFixed(0)}% of cases`);
-  if (i.cold && Math.abs(i.cold[0] - i.cold[1]) > LOOP.coldAsymMax) out.push(`cold starts A ${(100 * i.cold[0]).toFixed(0)}% vs B ${(100 * i.cold[1]).toFixed(0)}%`);
+  if (live.length >= LOOP.looks[0] && i.cold && Math.abs(i.cold[0] - i.cold[1]) > LOOP.coldAsymMax) out.push(`cold starts A ${(100 * i.cold[0]).toFixed(0)}% vs B ${(100 * i.cold[1]).toFixed(0)}%`);
   if (i.invariants) out.push(`${i.invariants} per-case invariants tripped`);
   return out;
 }
