@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { SCREEN } from "../../src/core/board.ts";
 import { PROMPTS } from "../../src/core/prompts.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
-import { systemPrompt } from "../core/driver.ts";
+import { HEDGE, systemPrompt } from "../core/driver.ts";
 import { SYSTEM as JUDGE_SYSTEM } from "../judge/prompts.ts";
 import { paths } from "../loop/paths.ts";
 import { stubReply } from "../loop/stubs.ts";
@@ -45,7 +45,8 @@ function drawReplies(): string[] {
 
 /**
  * The stored driver replies predate `meant` (they say `intent`): renamed, or V6 voids every send as "meant is empty".
- * None stops, so a rehearsal's sessions run their planned sends (8 of 80 stopped, and a smoke session ended after one).
+ * None stops, so a rehearsal's sessions run their planned sends (8 of 80 stopped, and a smoke session ended after one),
+ * and hedged ones are left out (V5 voids them in held-out sets, so the small yardstick's size would vary run to run).
  */
 function meant(reply: string): string {
   try {
@@ -68,7 +69,8 @@ export function writeDry(dir: string) {
   for (const v of PROMPTS.draw) put("draw", v.system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), drawReplies());
   for (const v of PROMPTS.resolve) put("draw-refs", v.system, ['{"refs": []}']);
   for (const v of PROMPTS.picture) put("picture", v.system(DEFAULTS), [stubReply("picture")]);
-  put("driver", systemPrompt(), readFileSync(DRIVER_REPLIES, "utf8").split("\n").filter(Boolean).map((l) => meant((JSON.parse(l) as { reply: string }).reply)));
+  const driver = readFileSync(DRIVER_REPLIES, "utf8").split("\n").filter(Boolean).map((l) => meant((JSON.parse(l) as { reply: string }).reply));
+  put("driver", systemPrompt(), driver.filter((r) => !HEDGE.test(JSON.parse(r).meant ?? "")));
   put("judge", JUDGE_SYSTEM, judgeReplies());
   put("failure", FAILURE_SYSTEM, ["[]"]);
   put("analyst", ANALYST_SYSTEM, ["dry run: nothing to propose"]);
