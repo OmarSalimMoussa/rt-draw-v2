@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [sttToken(), modelApi()],
   build: {
     rollupOptions: {
-      input: Object.fromEntries([["index", resolve(import.meta.dirname, "index.html")], ...pages.map((p) => [p, resolve(import.meta.dirname, `playgrounds/${p}/index.html`)])]),
+      input: Object.fromEntries([["index", resolve(import.meta.dirname, "index.html")], ...pages.map((p) => [p, resolve(import.meta.dirname, `playgrounds/${p}/index.html`)]), ["evals-driver", resolve(import.meta.dirname, "evals/driver/index.html")]]),
     },
   },
 });
