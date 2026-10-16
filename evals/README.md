@@ -34,8 +34,8 @@ accounts. `run.ts` reads it itself and never prints a token; one or two tokens w
 | clone, tag, champion, history | `rte init --from ~/projects/rt-draw-v2` (then `cd ~/rt-eval/repo`) | 0 |
 | readiness | `rte ready --stub --mock-api` | 0 |
 | concurrency knee | `bash evals/loop/launch.sh ladder --max 4` (`--max 12` on the PGX) | 0 |
-| smoke | `bash evals/loop/launch.sh smoke --cap 40` | ≤ 40 |
-| fixture doodles | `bash evals/loop/launch.sh bake --cap 36`, review, commit only `evals/fixtures/pictures.json` on master, `rte init --refresh` | ≤ 36 |
+| smoke | `bash evals/loop/launch.sh smoke --cap 50` (§11's 40 is what a full smoke makes: 39–41 in the rehearsal) | ≤ 50 |
+| fixture doodles | `bash evals/loop/launch.sh bake --cap 36`, review, commit only `evals/fixtures/pictures.json` on master, `rte init --refresh && rte ready --stub --mock-api` (a new harness tag needs its own readiness before the loop) | ≤ 36 |
 | bank | `bash evals/loop/launch.sh bank build --tuning 32 --heldout-gate 8 --heldout-chart 8 --cap 1900` | ~1,520 |
 | shared A/A, yardstick | `rte aa --shared --cases 16`, `rte bench freeze` | 0 |
 | checkpoint 0 | `bash evals/loop/launch.sh checkpoint --zero --cap 750` | ~600 |
@@ -50,6 +50,35 @@ funnel), `rte checkpoint --cap n`, `rte human freeze` (U1 from the owner's recor
 A loop stops on §6.7's rules (night cap, weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration, a
 sync conflict, a blocked request), pauses on others (all slots past 0.90 until the earliest reset, overloads, disk,
 battery) and writes each to the owner list. Mornings: `/evals/progress/`, `owner-list.md`, `budget.jsonl`.
+
+## Rehearsing at 0 calls
+
+The whole chain, small, on a fake API that answers every role (`evals/mock/dry.ts`: canned replies by system prompt,
+v2's median call timings per role, three fake tokens). Run from a new `RT_EVAL_HOME` outside any repo, never `~/rt-eval`;
+it takes about 45 minutes on the laptop and makes no real call (`HTTPS_PROXY` points at a closed port).
+
+```bash
+export RT_EVAL_HOME=/tmp/rt-eval-dry      # new and empty
+rte init --from ~/projects/rt-draw-v2 && cd $RT_EVAL_HOME/repo
+rte ready --stub --mock-api
+node --import ./evals/loop/node-hooks.mjs evals/mock/dry.ts --port 5400 &   # READY http://127.0.0.1:5400
+F="--tokens $RT_EVAL_HOME/dry/tokens.env --mock-api http://127.0.0.1:5400"
+bash evals/loop/launch.sh ladder --max 4 --latency $RT_EVAL_HOME/dry/latency.jsonl
+bash evals/loop/launch.sh smoke --cap 50 $F        # U3 (first text < 2 s) and the session line fail here: replayed timings, canned driver
+bash evals/loop/launch.sh bake --cap 36 $F
+cp $RT_EVAL_HOME/out/pictures.json evals/fixtures/ && git commit -qm "dry: baked pictures" -- evals/fixtures/pictures.json   # in the clone only
+rte init --refresh && rte ready --stub --mock-api
+bash evals/loop/launch.sh bank build --tuning 4 --heldout-gate 2 --heldout-chart 2 --cap 300 $F   # REFUSED by the §2.3 gates: a 36-send bank is too small, as it should be
+rte aa --shared --cases 12
+rte bench freeze --heldout 8 --tuning 8            # smaller than B1's 32 + 32, for the rehearsal only
+bash evals/loop/launch.sh checkpoint --zero --cap 200 $F
+bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200 $F
+rte calib --fake-labels --mock-api http://127.0.0.1:5400 && rte calib --check   # the judge's own verdicts as labels: "more" (too few clear ones)
+bash evals/loop/launch.sh loop --epochs 1 --seed-cards evals/optimizer/seed-cards.json $F
+```
+
+Then `./node_modules/.bin/vite --config evals/pages.vite.config.ts --port 5181` and `/evals/progress/` shows the
+rehearsal's history. The fake API's `GET /_log` lists every request it answered, with its role.
 
 ## The owner's commits and merging back
 

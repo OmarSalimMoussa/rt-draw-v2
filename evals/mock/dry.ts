@@ -21,13 +21,15 @@ import { stubReply } from "../loop/stubs.ts";
 import { ANALYST_SYSTEM, FAILURE_SYSTEM } from "../optimizer/prompts.ts";
 import { startFakeApi } from "./fake-api.ts";
 
-/** Median ms, first-text ms and output tokens per role: CONTEXT.md's logged v2 calls, §6.1 where none were logged. */
+/**
+ * Median ms, first-text ms and output tokens per role: CONTEXT.md's logged v2 calls, §6.1 where none were logged, and the
+ * resolver with thinking off from §6.5's real pilot (first text 1.2 s). One line each, no spread: in turn, a spread
+ * handed the two arms different draws of it, and a no-op read 1.2× slower.
+ */
 const MEDIANS: Record<string, [number, number, number]> = {
-  draw: [5060, 2935, 388], "draw-refs": [3576, 2927, 454], picture: [6911, 2176, 662], driver: [3759, 2900, 189],
+  draw: [5060, 2935, 388], "draw-refs": [3576, 2927, 454], "draw-refs:off": [1850, 1200, 454], picture: [6911, 2176, 662], driver: [3759, 2900, 189],
   judge: [2900, 2200, 210], failure: [12000, 3000, 800], analyst: [12000, 3000, 800], probe: [900, 700, 2],
 };
-/** Spread around each median, so paired latencies vary as real ones do. */
-const SPREAD = [0.7, 0.85, 1, 1.2, 1.5];
 
 const sha12 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 const DRIVER_REPLIES = fileURLToPath(new URL("../checks/data/driver-replies.jsonl", import.meta.url));
@@ -57,10 +59,13 @@ function meant(reply: string): string {
   }
 }
 
-/** One reply for every judge role (they share a system prompt): a verdict, an expectation and a miss check. */
+/**
+ * One reply for every judge role (they share a system prompt): a verdict, an expectation and a miss check. Always a tie:
+ * canned left/right picks can't follow the arms when the second order swaps them, so they flipped on half the audited
+ * cases and voided checkpoint 0.
+ */
 const judgeReplies = () =>
-  ["left", "right", "left", "tie", "right", "left", "right"].map((winner, i) =>
-    JSON.stringify({ winner, confidence: [2, 3, 1, 2, 3, 2, 3][i], why: `dry ${winner}`, should: ["the asked change is made"], mustNot: ["nothing else moves"], met: ["yes", "partly", "no", "yes"][i % 4] }));
+  ["yes", "partly", "no", "yes"].map((met) => JSON.stringify({ winner: "tie", confidence: 2, why: "dry: both alike", should: ["the asked change is made"], mustNot: ["nothing else moves"], met }));
 
 export function writeDry(dir: string) {
   const replies = join(dir, "replies");
@@ -76,7 +81,10 @@ export function writeDry(dir: string) {
   put("analyst", ANALYST_SYSTEM, ["dry run: nothing to propose"]);
   put("probe", "Answer with one word.", ["ready"]);
   const latency = join(dir, "latency.jsonl");
-  writeFileSync(latency, Object.entries(MEDIANS).flatMap(([from, [ms, firstMs, outTokens]]) => SPREAD.map((k) => JSON.stringify({ from, ms: Math.round(ms * k), firstMs: Math.round(firstMs * k), outTokens, waitMs: 0 }))).join("\n") + "\n");
+  writeFileSync(latency, Object.entries(MEDIANS).map(([role, [ms, firstMs, outTokens]]) => {
+    const [from, off] = role.split(":");
+    return JSON.stringify({ from, ...(off ? { thinking: "off" } : {}), ms, firstMs, outTokens, waitMs: 0 });
+  }).join("\n") + "\n");
   const tokens = join(dir, "tokens.env");
   writeFileSync(tokens, [1, 2, 3].map((n) => `RT_EVAL_TOKEN_${n}=sk-ant-oat01-dry-run-${n}-${randomBytes(6).toString("hex")}`).join("\n") + "\n", { mode: 0o600 });
   return { replies, latency, tokens };

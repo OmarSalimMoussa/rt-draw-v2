@@ -313,7 +313,7 @@ function readyOk(): boolean {
 function medianTimings(log: string, out: string): string {
   const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
   const by = new Map<string, { first: number[]; rest: number[]; out: number[] }>();
-  for (const r of readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.from && r.firstMs != null && !r.error)) {
+  for (const r of readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.from && r.firstMs != null && !r.error && r.thinking !== "off")) {
     const b = by.get(r.from) ?? by.set(r.from, { first: [], rest: [], out: [] }).get(r.from)!;
     b.first.push(r.firstMs - (r.waitMs ?? 0)), b.rest.push(r.ms - r.firstMs), b.out.push(r.outTokens ?? 40);
   }
