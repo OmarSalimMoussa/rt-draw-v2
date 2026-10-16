@@ -24,7 +24,7 @@ import { type IncomingMessage, type ServerResponse, createServer } from "node:ht
 import { createServer as netServer } from "node:net";
 import { type IntervalHistogram, monitorEventLoopDelay } from "node:perf_hooks";
 import { join } from "node:path";
-import { CallError, type CallStats, EFFORTS, type Effort, MODEL_IDS, type MockApi, Pool, SDK_VERSION, type Thinking, keepOf, keyOf, startProcess, streamCall, toContent } from "../../dev/claude.ts";
+import { CallError, type CallStats, EFFORTS, type Effort, MODEL_IDS, type MockApi, Pool, type Proc, SDK_VERSION, type Thinking, keepOf, keyOf, startProcess, streamCall, toContent } from "../../dev/claude.ts";
 import { type Chunk, Flights, type Req, readReply, replay, replyName, reqHash, standIn, storeImages, writeReply } from "./cache.ts";
 import { listUsd, meterCall } from "./meter.ts";
 import { type Paths, paths } from "./paths.ts";
@@ -39,6 +39,12 @@ const MAX_WARM = 4;
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 const LOOP_RESOLUTION_MS = 10;
+/**
+ * Starting a Claude process blocks this loop ~6–12 ms: every start goes through one queue, this far apart, so
+ * the starts of two arms and several slots never stack into a stall past V9's 20 ms. A call that has no
+ * waiting process is served first; pool top-ups, the page's warm requests and eval roles wait their turn.
+ */
+const SPAWN_GAP_MS = 25;
 
 export type RunMode = "live" | "replay" | "scan";
 type Ask = {
@@ -76,6 +82,23 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
 
   const start = (r: Req, slot: SlotN) => () =>
     startProcess(r.model, r.system, { token: tokenOf(slot), effort: r.effort as Effort, thinking: r.thinking as Thinking, configDir: p.claudeConfig, maxRetries: MAX_RETRIES, mockApi: o.mockApi });
+  const spawnQueue: (() => void)[] = [];
+  let lastSpawn = -Infinity;
+  let spawnTimer: ReturnType<typeof setTimeout> | undefined;
+  const pump = () => {
+    if (spawnTimer || !spawnQueue.length) return;
+    const wait = lastSpawn + SPAWN_GAP_MS - performance.now();
+    if (wait > 0) return void (spawnTimer = setTimeout(() => ((spawnTimer = undefined), pump()), wait));
+    spawnQueue.shift()!();
+    lastSpawn = performance.now();
+    pump();
+  };
+  const later = (f: () => void, first = false) => (first ? spawnQueue.unshift(f) : spawnQueue.push(f), pump());
+  const queued = (s: () => Proc, first = false) => new Promise<Proc>((r) => later(() => r(s()), first));
+  /** Tops a pool key up to `keep` waiting processes, one start per turn. */
+  const topUp = (key: string, keep: number, s: () => Proc) => {
+    for (let k = 1; k <= Math.min(keep, MAX_WARM); k++) later(() => pool.warm(key, k, s));
+  };
   const poolKey = (a: Pick<Ask, "arm" | "slot" | "req">, slot: SlotN) => `${a.arm ?? "-"}|${a.slot ?? "-"}|t${slot}|${keyOf(a.req.model, a.req.system, a.req.effort as Effort, a.req.thinking as Thinking)}`;
 
   /** A case's first request is a case boundary: new processes may move to the next token there. */
@@ -109,7 +132,9 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     calls++;
     if (!a.page) await evalTurn();
     const token = a.token ?? (a.page ? slots.current : (slots.boundary() ?? slots.current));
-    const taken = a.page ? pool.take(poolKey(a, token), keepOf(a.warm, MAX_WARM), start(a.req, token)) : { proc: start(a.req, token)(), waiting: false, readyAtTake: false };
+    const key = poolKey(a, token);
+    const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token), a.page), waiting: false, readyAtTake: false };
+    if (a.page) topUp(key, keepOf(a.warm, MAX_WARM), start(a.req, token));
     const timer = setTimeout(() => taken.proc.q.close(), TIMEOUT_MS);
     const chunks: Chunk[] = [];
     let waitMs: number | undefined;
@@ -212,8 +237,10 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!r) return json(res, 400, { error });
     const c = base.case ? caseOf(base.run, base.case) : undefined;
     if (b.user === undefined) {
+      // A scan or replay serves every reply from the cache: a process warmed for it would never be used.
+      if ((runs.get(base.run)?.mode ?? "live") !== "live") return json(res, 200, { warming: 0 });
       const keep = keepOf(b.warm, MAX_WARM);
-      pool.warm(poolKey({ ...base, req: r }, slots.current), keep, start(r, slots.current));
+      topUp(poolKey({ ...base, req: r }, slots.current), keep, start(r, slots.current));
       return json(res, 200, { warming: keep });
     }
     const ordKey = `${base.arm}|${base.role}`;
@@ -275,6 +302,8 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   return {
     url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     close() {
+      clearTimeout(spawnTimer);
+      spawnQueue.length = 0;
       pool.closeAll();
       server.closeAllConnections();
       server.close();
