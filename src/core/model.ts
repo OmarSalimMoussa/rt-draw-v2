@@ -22,6 +22,20 @@ export type ModelStats = {
   waitMs?: number;
   /** Whether a process was already started and waiting. */
   warm?: boolean;
+  /** Whether that waiting process had finished starting (warm alone may still have waited for it). */
+  readyAtTake?: boolean;
+  /** The model id the API says served it. */
+  served?: string;
+  /** Thinking the model did anyway (output tokens it spent thinking). */
+  thinkingTokens?: number;
+  /** Cache writes by lifetime: 1-hour writes cost 2× input against 1.25× for 5-minute ones. */
+  write5m?: number;
+  write1h?: number;
+  stopReason?: string;
+  /** API retries Claude Code made. */
+  retries?: number;
+  /** The subscription's limits after this call: utilization 0–1, resetsAt in unix seconds. */
+  rateLimit?: { status: string; fiveHour?: number; sevenDay?: number; resetsAt?: number };
   /** How the call was made: transport, thinking, caching, limits (dev/model-plugin.ts). */
   settings?: Record<string, string | number>;
   error?: string;
@@ -33,13 +47,23 @@ export type ModelRequest = {
   user: string;
   images?: string[];
   from?: string;
+  /** Free label, logged with the call. */
+  tag?: string;
   /** Calls with this prompt made side by side: the server keeps this many processes waiting for it. */
   warm?: number;
+  /** Default low. */
+  effort?: Effort;
+  /** "off" asks the API not to think; default "auto" (the model's own choice). */
+  thinking?: "auto" | "off";
 };
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Starts `n` processes for this model and prompt now, so calls about to come don't wait for one. Not a model call. */
-export function warmModel(model: ModelName, system: string, n = 1) {
-  void fetch("/api/model", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, system, warm: n }) }).catch(() => {});
+/**
+ * Starts `n` processes for this model and prompt now, so calls about to come don't wait for one. Not a model call.
+ * A process fixes its effort and thinking when it starts: pass the ones the calls will use.
+ */
+export function warmModel(model: ModelName, system: string, n = 1, opts: { effort?: Effort; thinking?: "auto" | "off" } = {}) {
+  void fetch("/api/model", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, system, warm: n, ...opts }) }).catch(() => {});
 }
 
 /** Every call made from this page, newest last, exactly as sent: what the Model calls drawer shows. */
