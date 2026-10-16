@@ -10,6 +10,7 @@
 // patches.<model>, OFF by default: the model as it comes is the baseline, and a
 // patch is only turned on once it's shown to beat that. Read a patch knob with
 // patchValue(), which gives the neutral value (or undefined: don't send) when off.
+import { PROMPTS } from "./prompts.ts";
 
 export type Knob = {
   /** "part.name", e.g. "arrow.coneMaxDeg". */
@@ -34,6 +35,8 @@ const K = (key: string, value: number, min: number, max: number, step: number, d
 const B = (key: string, value: 0 | 1, name: string, doc: string): Knob => ({ key, value, min: 0, max: 1, step: 1, doc, name });
 /** A patch on a purpose-built model's output (see the top of this file). */
 const patch = (model: string, k: Knob, neutral?: number): Knob => ({ ...k, patches: model, neutral });
+/** Which of a role's prompt texts it is asked with (src/core/prompts.ts; 0 is the shipped text). */
+const P = (role: keyof typeof PROMPTS): Knob => K(`${role}.prompt`, 0, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
 
 export const KNOBS: Knob[] = [
   // Ink: how strokes are drawn and when a stroke is a dot.
@@ -107,7 +110,7 @@ export const KNOBS: Knob[] = [
   K("tidy.gapTolPx", 10, 0, 40, 1, "gaps between siblings this close become equal", "px"),
   K("tidy.maxMovePx", 24, 0, 80, 1, "never move a shape further than this", "px"),
 
-  // Model choice knobs are an index: 0 haiku, 1 sonnet, 2 opus (src/core/model.ts).
+  // Model choice knobs are an index: 0 haiku, 1 sonnet, 2 opus (src/core/model.ts). Prompt knobs are an index into src/core/prompts.ts.
 
   // Describe: the detailed id map, one description per shape from its crop.
   K("describe.model", 0, 0, 2, 1, "model that writes descriptions (0 haiku, 1 sonnet, 2 opus)"),
@@ -116,12 +119,15 @@ export const KNOBS: Knob[] = [
   K("describe.minWords", 6, 1, 30, 1, "a description must have at least this many words"),
   K("describe.maxWords", 30, 6, 80, 1, "and at most this many"),
   B("describe.batch", 1, "all shapes in one call", "on: all shapes in one call (crops numbered); off: one call per shape"),
+  P("describe"),
 
   // Resolve: "this headline" + ink → shape ids.
   K("resolve.model", 0, 0, 2, 1, "model that resolves references (0 haiku, 1 sonnet, 2 opus)"),
   K("resolve.maxCandidates", 8, 1, 30, 1, "shapes offered to the model: the ink's hits first, then the rest by word overlap"),
   B("resolve.inkFirst", 0, "ink-only shortcut", "on: when every mark clearly points at its shapes (tap, loop, arrow) and you said this/that/these, use those shapes without asking the model; off: always ask the model"),
   B("resolve.sendScreenshot", 0, "send screenshot", "on: also send the model screenshot"),
+  P("resolve"),
+  B("resolve.noThink", 0, "no thinking", "on: ask the API not to think (it thinks on nearly every resolver call, which delays its first text); off: the model decides"),
 
   // Draw: one send → ops.
   K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
@@ -134,6 +140,9 @@ export const KNOBS: Knob[] = [
   K("draw.mapDepth", 5, 0, 5, 1, "on a board, the site map the drawing model gets lists this many levels of each page's content (the id map is that map there)"),
   K("draw.mapWords", 40, 0, 60, 1, "and this many words of each shape's description"),
   B("draw.mapBoxes", 1, "boxes in the site map", "on: the drawing model's site map gives each shape's box in board pixels, so it can copy, align and move what no picture shows"),
+  K("draw.mapMaxShapes", 0, 0, 500, 10, "the id map (on a board, the site map) lists at most this many shapes, in map order, and counts the rest (0: every shape)"),
+  P("draw"),
+  B("draw.noThink", 0, "no thinking", "on: ask the API not to think (thinking delays the first op); off: the model decides"),
   B("draw.fillPictures", 1, "fill pictures", "on: the picture model draws every new or changed picture (one call each), each starting as its drawing() op lands, before the send is done; off: pictures stay placeholders"),
 
   // Picture: a doodle inside a shape.
@@ -143,6 +152,9 @@ export const KNOBS: Knob[] = [
   K("picture.roughness", 1.4, 0, 3, 0.1, "wobble applied to the doodle's paths"),
   K("picture.parallel", 3, 1, 8, 1, "pictures drawn at the same time after a send"),
   K("picture.fill", 0.9, 0.5, 1, 0.05, "a picture fills this share of its shape"),
+  K("picture.timeoutMs", 120000, 5000, 300000, 5000, "a picture call still going after this long is stopped and counts as failed (its shape stays a placeholder)", "ms"),
+  P("picture"),
+  B("picture.noThink", 0, "no thinking", "on: ask the API not to think; off: the model decides"),
 
   // Board: what a model is shown of an infinite board.
   B("board.viewportShot", 1, "what you see", "on: send the camera's view, as on screen"),
