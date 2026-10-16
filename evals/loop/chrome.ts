@@ -1,7 +1,7 @@
 // One headless Chrome per run, driven over a pipe (spec §7.4, fix F13): when the
 // harness dies the pipe closes and Chrome exits with it, where port mode left 13–14
-// processes behind in v1. Every page gets focus emulation (a background tab
-// otherwise ran at 0 rAF/s and one timer tick a second) and a Fetch allowlist: its
+// processes behind in v1. Every page gets a window of its own and focus emulation (a
+// background tab ran at 0 rAF/s and one timer tick a second) and a Fetch allowlist: its
 // arm's origin, with /api/model the only /api/ route, labelled with x-rt-* headers
 // for the gateway. Any other request is failed and aborts the run (onBlocked).
 // No screencasts or video: v1 paid a core per Chrome for them.
@@ -26,6 +26,8 @@ export type Page = {
   reload(): Promise<void>;
   /** Runs an expression in the page (promises awaited) and returns its JSON value. */
   eval<T = unknown>(expression: string): Promise<T>;
+  /** This page's CDP events (enable their domain first), e.g. Runtime.exceptionThrown. */
+  on(method: string, fn: (params: any) => void): void;
   close(): Promise<void>;
 };
 
@@ -34,7 +36,7 @@ export type Chrome = { pid: number; newPage(origin: string, labels: Labels): Pro
 /** Starts Chrome with its profile in `dir` (under the run). `onBlocked` gets every request the allowlist failed. */
 export async function launchChrome(o: { dir: string; onBlocked: (url: string, labels: Labels) => void }): Promise<Chrome> {
   const flags = ["--headless=new", "--disable-gpu", "--no-sandbox", "--remote-debugging-pipe", `--user-data-dir=${o.dir}`, "--no-first-run", "--disable-background-networking",
-    // Belt and braces with focus emulation: 16 tabs share one window, and only one of them is in front.
+    // Belt and braces with focus emulation and a window per page: no slot may be throttled as background.
     "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"];
   // fds 3 and 4 carry CDP. Its own process group, so close() takes the renderers too. Chrome puts its singleton
   // socket under TMPDIR and dies when that path passes 108 bytes (a deep work dir does), hence /tmp.
@@ -82,13 +84,15 @@ export async function launchChrome(o: { dir: string; onBlocked: (url: string, la
 
   async function newPage(origin: string, labels: Labels): Promise<Page> {
     const allowed = new URL(origin).origin;
-    const { targetId } = await send("Target.createTarget", { url: "about:blank", newWindow: true }); // its own window: no tab is ever in the background
+    const { targetId } = await send("Target.createTarget", { url: "about:blank", newWindow: true }); // in a shared window only the front tab paints: a capture of another never returned
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
     let loaded: (() => void) | undefined;
     const load = () => new Promise<void>((r) => (loaded = r));
+    const subscribed: [string, (params: any) => void][] = [];
     listeners.set(sessionId, (method, params) => {
       if (method === "Fetch.requestPaused") paused(params).catch(() => {}); // a page closing mid-request: nothing to answer
       else if (method === "Page.loadEventFired") loaded?.();
+      for (const [m, fn] of subscribed) if (m === method) fn(params);
     });
 
     async function paused({ requestId, request }: { requestId: string; request: { url: string; headers: Record<string, string> } }) {
@@ -123,6 +127,7 @@ export async function launchChrome(o: { dir: string; onBlocked: (url: string, la
         if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
         return r.result.value;
       },
+      on: (method, fn) => void subscribed.push([method, fn]),
       async close() {
         listeners.delete(sessionId);
         await send("Target.closeTarget", { targetId });

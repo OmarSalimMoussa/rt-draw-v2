@@ -9,10 +9,10 @@
 // the arm server's own middleware stack, in process.
 //   TMPDIR=<work dir> node --import ./evals/loop/node-hooks.mjs evals/checks/t7-infra.mjs
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, copyFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromeCount } from "./cdp.mjs";
 import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
@@ -224,6 +224,12 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
   check(blocked.length === 2 && blocked[0].labels.arm === "A" && blocked[1].url.endsWith("/api/other"), `blocked: ${JSON.stringify(blocked.map((b) => b.url))} (want exactly the two forbidden requests)`);
   check(calls.length === before + 2, `the gateway got ${calls.length - before} requests from the pages (want 2)`);
 
+  const thrown = [];
+  pa.on("Runtime.exceptionThrown", (e) => thrown.push(e.exceptionDetails.exception?.description ?? ""));
+  await pa.send("Runtime.enable");
+  await pa.eval('setTimeout(() => { throw new Error("t7-boom"); }); new Promise((r) => setTimeout(r, 50))');
+  check(thrown.some((t) => t.includes("t7-boom")), "page.on() didn't deliver the page's exception");
+
   // Captures: the stage clip as JPEG at the driver's and the judges' widths, decoded by the page itself.
   const look = (buf) =>
     pa.eval(`(async () => {
@@ -315,8 +321,8 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
   check([true, false, undefined].includes(onAC()), `onAC(): ${onAC()}`);
   check(inFactorySlice() === false, "this check thinks it runs in the factory slice");
 
-  // ---- launch.sh for real: a systemd user unit around a probe run.ts.
-  if (process.arch !== "x64") fail(`launch.sh is checked here as a systemd unit only (this is ${process.arch}: check the tmux window by hand)`);
+  // ---- launch.sh for real: a systemd user unit around a probe run.ts (and the tmux path with a fake tmux).
+  if (process.arch !== "x64") fail(`launch.sh's unit is checked on the laptop (this is ${process.arch}: run this check there)`);
   const layout = join(home, "launch");
   mkdirSync(join(layout, "evals/loop"), { recursive: true });
   for (const f of ["launch.sh", "node-hooks.mjs"]) copyFileSync(join(ROOT, "evals/loop", f), join(layout, "evals/loop", f));
@@ -371,6 +377,23 @@ await new Promise((r) => setTimeout(r, process.argv.includes("--long") ? 60_000 
   execFileSync("bash", [launchSh, "stop"], { env, stdio: "ignore" });
   const stopped = await Promise.race([long.done, sleep(10_000).then(() => undefined)]);
   check(stopped !== undefined && unitState(unit3) === "not-found", `launch.sh stop didn't stop the running probe (${unitState(unit3)})`);
+
+  // The PGX's path (aarch64, a tmux window), as far as this laptop can check it: a uname that says aarch64 and a
+  // tmux that records what it was asked.
+  const bin = join(home, "fake-bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "uname"), '#!/bin/sh\n[ "$1" = -m ] && echo aarch64 || exec /usr/bin/uname "$@"\n', { mode: 0o755 });
+  writeFileSync(join(bin, "tmux"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${home}/tmux-$1.args"\n`, { mode: 0o755 });
+  const fakeEnv = { ...env, PATH: `${bin}:${env.PATH}` };
+  execFileSync("bash", [launchSh, "first", "--cap", "7"], { cwd: home, env: fakeEnv, stdio: "ignore" });
+  execFileSync("bash", [launchSh, "stop"], { cwd: home, env: fakeEnv, stdio: "ignore" });
+  const tmuxArgs = (verb) => (existsSync(join(home, `tmux-${verb}.args`)) ? readFileSync(join(home, `tmux-${verb}.args`), "utf8").trim().split("\n") : []);
+  const win = tmuxArgs("new-window");
+  const nodeAt = win.indexOf(callerNode);
+  check(win.slice(0, 12).join(" ") === `new-window -t rt -n loop -c ${layout} -e RT_EVAL_HOME=${home} -e RT_EVAL_LAUNCHED=1 /usr/bin/env`, `tmux new-window got: ${win.slice(0, 12).join(" ")}`);
+  check(["RT_EVAL_TOKEN_1", "RT_EVAL_TOKEN_2", "RT_EVAL_TOKEN_3", "CLAUDE_CODE_OAUTH_TOKEN"].every((k) => win.slice(12, nodeAt).includes(k)), `the tmux window keeps a token: env ${win.slice(12, nodeAt).join(" ")}`);
+  check(nodeAt > 0 && win.slice(nodeAt).join(" ") === `${callerNode} --import ./evals/loop/node-hooks.mjs evals/loop/run.ts first --cap 7`, `the tmux window runs: ${win.slice(nodeAt).join(" ")}`);
+  check(tmuxArgs("send-keys").join(" ") === "send-keys -t rt:loop C-c", `launch.sh stop on aarch64 sent: ${tmuxArgs("send-keys").join(" ")}`);
 
   // Inside emberhub-factory.slice (a transient one of this check's own, removed after): refused, and load.ts agrees.
   const slice = `rtcheck${process.pid}`;
