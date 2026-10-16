@@ -602,6 +602,14 @@ async function sync(gw: string, st: State): Promise<"merged" | "nothing" | "paus
     return block(`master ${master.slice(0, 12)} conflicts with the champion in ${files || "?"}: resolve it on master, then rte sync`);
   }
   const merged = git(wt, "rev-parse", "HEAD");
+  // Commits that change no product file (evals/, docs, the bake's pictures.json) leave every arm's tree as it was:
+  // the champion takes them without a checkpoint, which would measure the same product again (~600 calls).
+  if (contentHash(merged) === contentHash(base)) {
+    git(p.repo, "branch", "-f", "loop/champion", merged);
+    if (st.blocked?.startsWith("sync:")) (st.blocked = undefined), saveState(st);
+    say(`sync: master ${master.slice(0, 12)} changes no product file: the champion takes it without a checkpoint`);
+    return "merged";
+  }
   // G0's build checks only: the path, UX and lint gates bind the loop's own candidates, not the owner.
   let tree: string;
   try {

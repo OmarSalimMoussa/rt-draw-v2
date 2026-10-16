@@ -46,7 +46,9 @@ export const FIXTURES: Fixture[] = STARTS.map(([id, ops, view, heldoutOnly]) => 
 /** A baked doodle in the picture model's own w × h space (render scales it to the shape). */
 export type Baked = { w: number; h: number; els: El[] };
 export type Pictures = Record<string, Baked>;
-export const PICTURES = baked as Pictures;
+// Through unknown: a baked file's inferred element types (optional attrs read as undefined) never overlap El's, so
+// a direct cast fails tsc (TS2352) the moment `bake` fills the file, and with it every G0 typecheck.
+export const PICTURES = baked as unknown as Pictures;
 
 /** A doodle's key: a changed subject or box size is a different picture, left for the product to draw. */
 export const pictureKey = (s: Shape) => `${s.id}|${s.drawing}|${Math.round(s.box.w)}|${Math.round(s.box.h)}`;
