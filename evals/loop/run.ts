@@ -229,6 +229,7 @@ function pin(): string {
 
 async function init() {
   const p = paths();
+  const before = o.f.refresh ? tryGit(p.repo, "describe", "--tags", "--abbrev=0", "--match", "eval-harness-*", "HEAD") : undefined;
   if (o.f.refresh) {
     // Re-pins only the harness: the champion takes the owner's master through `sync` alone.
     if (!existsSync(join(p.repo, ".git"))) throw new Error(`no loop clone at ${p.repo}: init --from <repo> first`);
@@ -246,6 +247,11 @@ async function init() {
   }
   modules();
   const tag = pin();
+  // Trees key on the harness too, so the old harness's are never served again: aside, or R1 counts them stale.
+  if (before && before !== tag && existsSync(join(p.home, "trees"))) {
+    mkdirSync(join(p.home, "trees-old"), { recursive: true });
+    renameSync(join(p.home, "trees"), join(p.home, "trees-old", before));
+  }
   openHistory();
   importHistory();
   say(`init: ${p.repo} at ${tag}, champion ${championSha().slice(0, 12)}, history at ${p.history}`);
