@@ -8,6 +8,7 @@
 //   move(id, box)                      a shape, or a group by the same offset
 //   group(id, [a, b, ...])
 //   remove(id)
+//   camera(x y w h) | camera(id, ...)  moves the screen on a board (the caller does it, not the scene)
 // A box is pixels "x y w h" or grid cells "C2-J7" (columns A, B, ... rows 1, 2, ...).
 // Style args are key:value (fill:#fde, stroke:none, opacity:0.6, size:xl, color:white).
 import { type Box, KINDS, type Kind, Scene, type Style, type TextStyle } from "./scene.ts";
@@ -17,7 +18,7 @@ export type Arg = { key?: string; value: string; quoted: boolean; list?: string[
 export type Op = { name: string; args: Arg[]; line: string };
 export type Parsed = { ok: true; op: Op } | { ok: false; line: string; error: string } | { ok: "skip" };
 
-export const NAMES = ["shape", "text", "drawing", "layer", "move", "group", "remove"];
+export const NAMES = ["shape", "text", "drawing", "layer", "move", "group", "remove", "camera"];
 export const DEFAULT_CELL = DEFAULTS["ops.cellPx"];
 
 /** A description shorter than ops.minDescriptionWords says too little to find the shape by later. */
@@ -166,6 +167,7 @@ const need = (scene: Scene, id: string) => {
 /** Applies one op. Throws with a short reason when it can't. */
 export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
   const cell = t["ops.cellPx"];
+  if (op.name === "camera") throw new Error("camera(...) moves the screen: only a send on a board can");
   const pos = op.args.filter((a) => !a.key);
   const id = pos[0]?.value;
   if (!id) throw new Error("missing id");

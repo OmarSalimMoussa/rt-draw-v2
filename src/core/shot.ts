@@ -105,6 +105,9 @@ export async function takeShot(scene: Scene, strokes: Stroke[], t: Tuning = DEFA
   if (opts.inkNumbers !== false) {
     const px = t["shot.inkNumberPx"] / k;
     for (const m of marks) {
+      // A mark outside this picture gets no number (it would be pinned to the edge, pointing at nothing).
+      const b = m.box;
+      if (b.x > view.x + view.w || b.x + b.w < view.x || b.y > view.y + view.h || b.y + b.h < view.y) continue;
       // Beside the mark's own ink, not its box's corner (far from a loop or a diagonal): the ink
       // point furthest up and right, nudged out by shot.inkNumberGapPx. Kept on the canvas; a white
       // halo keeps it readable over anything.

@@ -131,6 +131,9 @@ export const KNOBS: Knob[] = [
   B("draw.sendRefs", 1, "send references", "on: resolve the references first (the Resolver: \"this toy\" → toy-l1) and send the answers; one extra model call unless the ink settles it"),
   B("draw.sendOps", 0, "send scene as ops", "on: also send the scene as op lines (its exact boxes)"),
   K("draw.gridCellPx", 0, 0, 160, 10, "grid on the screenshot, so the model can name cells (0: none)", "px"),
+  K("draw.mapDepth", 5, 0, 5, 1, "on a board, the site map the drawing model gets lists this many levels of each page's content (the id map is that map there)"),
+  K("draw.mapWords", 40, 0, 60, 1, "and this many words of each shape's description"),
+  B("draw.mapBoxes", 1, "boxes in the site map", "on: the drawing model's site map gives each shape's box in board pixels, so it can copy, align and move what no picture shows"),
   B("draw.fillPictures", 1, "fill pictures", "on: the picture model draws every new or changed picture (one call each), each starting as its drawing() op lands, before the send is done; off: pictures stay placeholders"),
 
   // Picture: a doodle inside a shape.
@@ -148,6 +151,7 @@ export const KNOBS: Knob[] = [
   B("board.overview", 1, "whole board", "on: send the whole board at the biggest zoom that holds every page"),
   B("board.overviewTags", 0, "tags on the whole board", "on: id tags on the whole-board picture too (many, small)"),
   B("board.fromRefs", 1, "pictures from the resolver", "on: picture what you referred to (the resolver's answers: a page you meant, shapes off screen or too small), so \"the page with the robot\" gets its picture; off: page names in the words only"),
+  B("board.earlyShots", 1, "capture early", "on: while the resolver thinks, capture the pictures that don't wait on its answers (what you see, mark close-ups, the whole board), so only the ones its answers add come after it; off: every picture waits for the resolver"),
   K("board.maxViews", 6, 1, 10, 1, "pictures sent at most: what you see and the whole board are kept, the rest fill what's left in order"),
   K("board.imageBudget", 4500, 500, 15000, 100, "image tokens sent at most (about one per 750 pixels)", "tokens"),
   K("board.readablePx", 40, 10, 200, 2, "a shape counts as shown when its larger side is at least this big in a picture", "px"),

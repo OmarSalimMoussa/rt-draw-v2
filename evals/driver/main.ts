@@ -2,7 +2,9 @@
 // the site a first-timer has in mind), how messy and patient it is, and a seed.
 // Each turn the driver looks at the screen, says how the last send went, then
 // talks and draws (synthesized into timed words and messy ink, played back
-// here), presses Enter, and the real product answers.
+// here), presses Enter, and the real product answers. The product is a board:
+// the driver sees the screen's part of it and can scroll and zoom by hand.
+import board from "../../src/fixtures/board.ops.txt?raw";
 import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import messy from "../../src/fixtures/messy.ops.txt?raw";
 import { type SendResult, buildPrompt, run } from "../../src/core/draw.ts";
@@ -15,18 +17,24 @@ import type { Scene } from "../../src/core/scene.ts";
 import { takeShot } from "../../src/core/shot.ts";
 import { span } from "../../src/core/trace.ts";
 import { DEFAULTS, tune, tuningId } from "../../src/core/tuning.ts";
-import { $, download, fontsReady, shell, stage } from "../../src/ui.ts";
-import { type Behaviour, type Past, type Turn, describeStep, driverTurn, systemPrompt } from "../core/driver.ts";
+import { SCREEN, type View, asPage, boardBounds, fitView, pageTop, pagesOf } from "../../src/core/board.ts";
+import { boardStage } from "../../src/boardStage.ts";
+import { $, download, fontsReady, shell } from "../../src/ui.ts";
+import { type Behaviour, DRIVE, type Past, type Turn, describeStep, driverTurn, moveView, systemPrompt } from "../core/driver.ts";
 import { PERSONAS, STYLES, type Style, TARGETS, randomStyle } from "../core/personas.ts";
-import { type Step, type Timeline, type Token, type Traits, type Voiced, lineText, lines, rng, synthesize } from "../core/synth.ts";
+import { type Step, type Timeline, type Token, type Traits, type Voiced, isView, lineText, lines, rng, synthesize } from "../core/synth.ts";
 
-shell("", "Driver demo: a model plays a user. It sees only the screen, talks and scribbles (synthesized into timed words and messy ink), presses Enter, and the real product answers. Each send is two or three calls on your Claude subscription: the driver, then the product (resolver and drawing model).");
-const { canvas, ink } = stage($("#left"), 1280, 800, true);
+shell("", "Driver demo: a model plays a user. It sees only its screen (part of the board), scrolls and zooms by hand, talks and scribbles (synthesized into timed words and messy ink), presses Enter, and the real product answers. Each send is a few calls on your Claude subscription: the driver, then the product (resolver, drawing model, pictures).");
+const fixtures: Record<string, string> = { "Blank page": asPage("", "page", "Home"), "Toy shop (5 pages)": board, "Clowns.com": asPage(clowns, "page", "Home"), "Messy shop": asPage(messy, "page", "Home") };
+/** Where the camera starts: the top of the first page. */
+const startOf = (sc: Scene): View => (pagesOf(sc)[0] ? pageTop(pagesOf(sc)[0]) : fitView(boardBounds(sc)));
+const st = boardStage($("#left"), startOf(runScript(fixtures["Blank page"]).scene));
+const { canvas, ink } = st;
 const INK = "#e03131";
 const tuning = DEFAULTS;
-/** What the driver sees: the canvas as a user sees it, no id tags or grid. */
+/** What the driver sees: the screen as a user sees it, no id tags or grid. */
 const userView = tune({ "shot.tagPx": 0, "shot.gridCellPx": 0 }, tuning);
-const fixtures: Record<string, string> = { "Empty canvas": "", "Clowns.com": clowns, "Messy shop": messy };
+const screenW = Math.round(SCREEN.w * userView["shot.scale"]);
 
 const now = document.createElement("div");
 now.className = "card";
@@ -85,8 +93,12 @@ $("#persona").addEventListener("change", syncTarget);
 syncTarget();
 $("#dice").addEventListener("click", () => ($<HTMLInputElement>("#seed").value = String(Math.floor(Math.random() * 10000))));
 
-type Record_ = { n: number; turn: Turn; timeline: Timeline; transcript: string; result: SendResult; pics?: { drawn: number; failed: string[]; ms: number }; before: string; after?: string };
-let scene: Scene = runScript("").scene;
+type Record_ = {
+  n: number; turn: Turn; timeline: Timeline; transcript: string; result: SendResult; pics?: { drawn: number; failed: string[]; ms: number }; before: string; after?: string;
+  /** View moves by hand before this send, the camera at Enter, the pictures the product sent its model. */
+  looks: string[]; camera: View; views: string;
+};
+let scene: Scene = runScript(fixtures["Blank page"]).scene;
 let past: Past[] = [];
 let sends: Record_[] = [];
 let setup: { persona: string; target?: string; style: string; traits: Traits; behaviour: Behaviour; seed: number; maxSends: number; model: ModelName; system: string; fixture: string } | undefined;
@@ -96,7 +108,7 @@ const spent = { bought: 0, cached: 0 };
 let busy = false;
 let finished = "";
 
-const draw = () => render(canvas, scene, { tuning });
+const draw = () => render(canvas, scene, { tuning, view: st.view() });
 const status = (s: string) => ($("#status").textContent = s);
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const num = (id: string) => Number($<HTMLInputElement>(`#${id}`).value);
@@ -113,9 +125,7 @@ function freshSetup() {
   if ($<HTMLSelectElement>("#style").value === "random") showStyle(randomStyle(pick));
   const behaviour: Behaviour = { words: num("words"), clarity: num("clarity"), pen: num("pen"), patience: num("patience"), changeMind: num("changeMind"), bigThenSmall: $<HTMLInputElement>("#bigThenSmall").checked };
   // The driver's screenshot size, so it can give positions in its own pixels.
-  const w = Math.round(scene.width * userView["shot.scale"]);
-  const h = Math.round(scene.height * userView["shot.scale"]);
-  const system = systemPrompt(persona, target, behaviour, w, h);
+  const system = systemPrompt(persona, target, behaviour, screenW, Math.round((screenW * SCREEN.h) / SCREEN.w));
   $("#sys").textContent = system;
   const styleName = STYLES.find((x) => x.id === $<HTMLSelectElement>("#style").value)?.name.split(":")[0] ?? $<HTMLSelectElement>("#style").value;
   $("#who").textContent = `${persona.name}${target ? ` · ${target.name}` : ""} · ${styleName} · ${TRAITS.map((id) => `${id} ${num(id)}`).join(" · ")}${behaviour.bigThenSmall ? " · big then small" : ""}`;
@@ -148,9 +158,24 @@ async function speak(said: Map<number, Token[]>, voice: string) {
   return { voiced, audio };
 }
 
-/** Plays the person's words and ink on the stage, on their own clock (speed 0: all at once), with the voice's audio when there is some. */
-function play(tl: Timeline, speed: number, audio = new Map<number, HTMLAudioElement>()): Promise<void> {
+/** Plays the person's words, ink and view moves on the stage, on their own clock (speed 0: all at once), with the voice's audio when there is some. */
+async function play(tl: Timeline, speed: number, audio = new Map<number, HTMLAudioElement>()): Promise<void> {
   ink!.replaceChildren();
+  // Each move from where the last one left the camera.
+  let v = st.view();
+  const views = tl.moves.map((m) => (v = moveView(m.move, v, tuning)));
+  const moved = new Set<number>();
+  const glide = (t: number) => tl.moves.forEach((m, i) => {
+    if (moved.has(i) || t < m.at) return;
+    moved.add(i);
+    void st.setView(views[i], speed ? m.ms / speed : 0);
+  });
+  await playOn(tl, speed, audio, glide);
+  // Settled where the hand left it before Enter.
+  if (views.length) await st.setView(views.at(-1)!);
+}
+
+function playOn(tl: Timeline, speed: number, audio: Map<number, HTMLAudioElement>, glide: (t: number) => void): Promise<void> {
   const paths = tl.strokes.map(() => {
     const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
     p.setAttribute("fill", INK);
@@ -164,13 +189,14 @@ function play(tl: Timeline, speed: number, audio = new Map<number, HTMLAudioElem
     });
     $("#caption").textContent = tl.words.filter((w) => w.t0 <= t).map((w) => w.word).join(" ");
   };
-  if (!speed) return Promise.resolve(show(Number.POSITIVE_INFINITY));
+  if (!speed) return Promise.resolve((glide(Number.POSITIVE_INFINITY), show(Number.POSITIVE_INFINITY)));
   const start = performance.now();
   const started = new Set<number>();
   return new Promise((done) => {
     const frame = () => {
       const t = (performance.now() - start) * speed;
       show(t);
+      glide(t);
       for (const c of tl.clips) {
         const a = audio.get(c.step);
         if (!a || started.has(c.step) || t < c.at) continue;
@@ -195,10 +221,11 @@ function card(r: Record_) {
   const reaction = next?.turn ?? (finished && r === sends.at(-1) ? lastReaction : undefined);
   return `<div class="card" data-n="${r.n}">
     <h2>Send ${r.n}</h2>
+    ${r.looks.length ? `<div><b>Looked around first</b>: ${esc(r.looks.join(" → "))}</div>` : ""}
     <div><b>Wants</b> <span class="muted">(private)</span>: ${esc(t.intent)}</div>
     <div><b>Says</b>: <span style="font:18px Excalifont, cursive">${esc(r.timeline.spoken || "(nothing)")}</span></div>
     <div><b>Does</b>: ${t.steps.map((s) => esc(describeStep(s as Step))).join(" → ")}</div>
-    <div class="stat muted">the product got: ${esc(r.transcript || "(no words)")}</div>
+    <div class="stat muted">the product got: ${esc(r.transcript || "(no words)")} · pictures: ${esc(r.views || "none")}</div>
     <div class="stat">${r.result.error ? `<span class="bad">✗ ${esc(r.result.error)}</span>` : `${ok} ops applied${bad ? `, <span class="bad">${bad} failed</span>` : ""} · first op ${r.result.firstOpMs ?? "-"} ms · done ${r.result.ms} ms`}${r.pics?.drawn || r.pics?.failed.length ? ` · ${r.pics.drawn} picture${r.pics.drawn === 1 ? "" : "s"} in ${r.pics.ms} ms${r.pics.failed.length ? ` <span class="bad">(${r.pics.failed.length} failed)</span>` : ""}` : ""}</div>
     <div class="row" style="align-items:start"><figure style="margin:0;flex:1"><img src="${r.before}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="muted stat">before</figcaption></figure>${r.after ? `<figure style="margin:0;flex:1"><img src="${r.after}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="muted stat">after</figcaption></figure>` : ""}</div>
     ${reaction?.satisfaction ? `<div><b>Then</b>: <span style="color:var(--accent)">${stars(reaction.satisfaction)}</span> ${esc(reaction.feeling ?? "")}<div class="muted">saw: ${esc(reaction.saw ?? "")}</div></div>` : ""}
@@ -214,21 +241,38 @@ async function oneSend(): Promise<boolean> {
     finished = "out of sends";
     return false;
   }
-  status(`Send ${n}: the driver looks at the screen…`);
-  const shot = await takeShot(scene, [], userView, { inkNumbers: false });
-  const k = scene.width / shot.width;
-  const { turn } = await span(`driver looks (send ${n})`, undefined, (ctx) => driverTurn(setup!.model, setup!.system, setup!.behaviour, shot.dataUrl, past, setup!.maxSends - n + 1, k, ctx));
-  // Its reaction is to the last send; the screen it saw is that send's after.
-  const prev = sends.at(-1);
-  if (prev) {
-    prev.after = shot.dataUrl;
-    Object.assign(past.at(-1)!, { satisfaction: turn.satisfaction, feeling: turn.feeling });
-  }
-  if (turn.stop || !turn.steps.length) {
-    lastReaction = turn;
-    finished = turn.stop ? "the driver stopped" : "the driver had nothing to do";
-    showLog();
-    return false;
+  // Turns of only moving the view by hand come first, until the driver acts (or has looked enough).
+  const looks: string[] = [];
+  let shot: Awaited<ReturnType<typeof takeShot>>;
+  let turn: Turn;
+  for (let look = 0; ; look++) {
+    status(`Send ${n}: the driver looks at the screen…`);
+    const v = st.view();
+    shot = await takeShot(scene, [], userView, { inkNumbers: false, view: v, width: screenW });
+    const map = { x: v.x, y: v.y, k: v.w / shot.width };
+    ({ turn } = await span(`driver looks (send ${n}${look ? `, look ${look + 1}` : ""})`, undefined, (ctx) => driverTurn(setup!.model, setup!.system, setup!.behaviour, shot.dataUrl, past, setup!.maxSends - n + 1, map, looks, ctx)));
+    // Its reaction is to the last send, given once; the first screen it saw after it is that send's after.
+    const prev = sends.at(-1);
+    if (prev && !prev.after) {
+      prev.after = shot.dataUrl;
+      Object.assign(past.at(-1)!, { satisfaction: turn.satisfaction, feeling: turn.feeling });
+    }
+    if (turn.stop || !turn.steps.length) {
+      lastReaction = turn;
+      finished = turn.stop ? "the driver stopped" : "the driver had nothing to do";
+      showLog();
+      return false;
+    }
+    if (!turn.steps.every(isView)) break;
+    if (look >= DRIVE.looksPerSend) {
+      lastReaction = turn;
+      finished = "the driver only looked around";
+      showLog();
+      return false;
+    }
+    status(`Send ${n}: the driver moves the view…`);
+    looks.push(turn.steps.map((x) => describeStep(x)).join(", "));
+    await play(synthesize(turn.steps, setup.traits, setup.seed * 1000 + n * 10 + look), num("speed"));
   }
   const seed = setup.seed * 1000 + n;
   let spoken: Awaited<ReturnType<typeof speak>> | undefined;
@@ -243,22 +287,27 @@ async function oneSend(): Promise<boolean> {
   status(`Send ${n}: talking and drawing… (wants: ${turn.intent})`);
   await play(timeline, num("speed"), spoken?.audio);
   status(`Send ${n}: Enter. The product is answering…`);
+  const camera = st.view();
   const result = await span(`send ${n}`, undefined, async (ctx) => {
     // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
     const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
-    const prompt = await buildPrompt(scene, timeline.strokes, timeline.words, tuning, ctx);
-    const res = await run(scene, prompt, tuning, () => {
+    const prompt = await buildPrompt(scene, timeline.strokes, timeline.words, tuning, ctx, camera);
+    let gliding: Promise<void> = Promise.resolve();
+    const res = await run(scene, prompt, tuning, (r) => {
+      // The product moves the screen when its model says camera(...).
+      if (r.camera) gliding = st.setView(r.camera, tuning["camera.easeMs"]);
       draw();
       pictures?.kick();
     }, undefined, undefined, ctx);
     // The product isn't done until its pictures are drawn: the driver looks at what a user would see.
     status(`Send ${n}: finishing the pictures…`);
     const pics = await pictures?.finish();
+    await gliding;
     return { prompt, res, pics };
   });
   ink!.replaceChildren();
   draw();
-  sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.res, pics: result.pics, before: shot.dataUrl });
+  sends.push({ n, turn, timeline, transcript: result.prompt.transcript, result: result.res, pics: result.pics, before: shot.dataUrl, looks, camera, views: result.prompt.features.views });
   past.push({ said: timeline.spoken, drew: turn.steps.filter((s) => "draw" in s).map((s) => describeStep(s)), intent: turn.intent });
   showLog();
   $<HTMLButtonElement>("#save").disabled = false;
@@ -296,6 +345,7 @@ function reset() {
   $("#caption").textContent = "";
   $<HTMLButtonElement>("#save").disabled = true;
   status("Pick a driver and press Run.");
+  void st.setView(startOf(scene));
   draw();
 }
 
@@ -316,7 +366,7 @@ $("#save").addEventListener("click", () => {
   const record = {
     meta: { kind: "driver-session", at: new Date().toISOString(), tuningId: tuningId(tuning), ...setup, system: undefined, finished },
     system: setup?.system,
-    sends: sends.map((s) => ({ n: s.n, intent: s.turn.intent, steps: s.turn.steps, spoken: s.timeline.spoken, words: s.timeline.words, strokes: s.timeline.strokes, transcript: s.transcript, ops: s.result.ops, reply: s.result.reply, ms: s.result.ms, firstOpMs: s.result.firstOpMs, error: s.result.error, satisfaction: s.n < sends.length ? sends[s.n].turn.satisfaction : lastReaction?.satisfaction, feeling: s.n < sends.length ? sends[s.n].turn.feeling : lastReaction?.feeling })),
+    sends: sends.map((s) => ({ n: s.n, looks: s.looks, camera: s.camera, views: s.views, cameraOps: s.result.ops.filter((o) => o.camera).map((o) => o.line), intent: s.turn.intent, steps: s.turn.steps, spoken: s.timeline.spoken, words: s.timeline.words, strokes: s.timeline.strokes, transcript: s.transcript, ops: s.result.ops, reply: s.result.reply, ms: s.result.ms, firstOpMs: s.result.firstOpMs, error: s.result.error, satisfaction: s.n < sends.length ? sends[s.n].turn.satisfaction : lastReaction?.satisfaction, feeling: s.n < sends.length ? sends[s.n].turn.feeling : lastReaction?.feeling })),
   };
   download(`driver-${setup?.persona}-${setup?.seed}-${record.meta.at.slice(0, 16).replace(/[:T]/g, "-")}.json`, JSON.stringify(record, null, 1));
 });

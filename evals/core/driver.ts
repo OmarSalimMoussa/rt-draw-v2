@@ -1,11 +1,39 @@
 // The driver: a model playing a user. Each turn it looks at the screen (as a
 // user sees it: no id tags, no numbers, no grid), says how the last send went
-// for it, and decides what to say and draw next. It writes its private intent
-// down before Enter, so judges can later compare the result with what it meant.
+// for it, and decides what to say and draw next, or moves the view by hand to
+// look somewhere else first. It writes its private intent down before Enter, so
+// judges can later compare the result with what it meant.
+import { type View, fitView } from "../../src/core/board.ts";
 import { type ModelName, callModel } from "../../src/core/model.ts";
 import type { TraceContext } from "../../src/core/trace.ts";
+import type { Tuning } from "../../src/core/tuning.ts";
 import type { Persona } from "./personas.ts";
-import type { DrawStep, Step } from "./synth.ts";
+import type { DrawStep, Step, ViewStep } from "./synth.ts";
+
+/** The harness's numbers for moving the view, by name. Frozen for the optimizer, like SYNTH. */
+export const DRIVE = {
+  /** A zoom step by hand: this many times closer or further. */
+  zoomStep: 2,
+  /** Zooming in on a box leaves this share of it around it. */
+  lookPadFrac: 0.05,
+  /** Turns of only moving the view before a send, at most. */
+  looksPerSend: 3,
+};
+
+/** Where the driver's screenshot sits on the board: board = x + px·k. */
+export type ScreenMap = { x: number; y: number; k: number };
+
+/** The view after a move by hand (the move in board pixels). */
+export function moveView(m: ViewStep, v: View, t: Tuning): View {
+  if ("scroll" in m) return { ...v, x: v.x + (m.scroll[0] ?? 0), y: v.y + (m.scroll[1] ?? 0) };
+  if ("zoom" in m) {
+    const w = m.zoom === "in" ? v.w / DRIVE.zoomStep : v.w * DRIVE.zoomStep;
+    const k = w / v.w;
+    return { x: v.x + (v.w * (1 - k)) / 2, y: v.y + (v.h * (1 - k)) / 2, w, h: v.h * k };
+  }
+  const [x, y, w, h] = m.look;
+  return fitView({ x, y, w, h }, DRIVE.lookPadFrac, t["camera.minViewPx"]);
+}
 
 /** How the person behaves, each 0 to 1 (mess and disfluency only shape the ink and words, in synth.ts). */
 export type Behaviour = {
@@ -55,7 +83,9 @@ How you behave:
 - You talk like a person thinking out loud: casual, short, sometimes vague, with "..." where you pause. No stage directions, no lists, no markdown.
 - You point with the pen the way people do: circle a thing while saying "this", draw an arrow to move something, tap a spot, scribble a thing out, sketch a box where something should go.
 
-Each turn you see a screenshot of the canvas, ${w}×${h} pixels. Give every position in the screenshot's pixels. Reply with ONLY one JSON object, no prose around it:
+The product is an infinite board: pages sit side by side on it, and your screen shows part of it. You move the view by hand, like on a trackpad: {"scroll": [dx, dy]} moves what you see by that many screenshot pixels (positive to see what's right of or below the screen), {"zoom": "out"} or {"zoom": "in"} goes twice as far or close, {"look": [x, y, w, h]} zooms in on that part of the screenshot. Or you ask the product out loud ("show me the cart page"). To look at something you can't see yet, only move the view that turn, nothing else: you don't press Enter, and you get the new screen next turn.
+
+Each turn you see a screenshot of your screen, ${w}×${h} pixels. Give every position in that screenshot's pixels, even after you move the view in the same turn. Reply with ONLY one JSON object, no prose around it:
 {
   "saw": "after an earlier send: one line on what changed on screen, in your words",
   "satisfaction": 1-5 for your last send (1 not at all what I meant, 5 exactly), omitted on your first turn,
@@ -65,6 +95,7 @@ Each turn you see a screenshot of the canvas, ${w}×${h} pixels. Give every posi
     {"say": "okay so... make this"}, {"draw": "circle", "around": [x, y, w, h]}, {"say": "a lot bigger"},
     other drawings: {"draw": "arrow", "from": [x, y], "to": [x, y]}, {"draw": "line", "from": [x, y], "to": [x, y]}, {"draw": "tap", "at": [x, y]},
     {"draw": "box", "box": [x, y, w, h]} (sketching where something goes), {"draw": "cross", "box": [x, y, w, h]} (scribbling it out), {"draw": "underline", "box": [x, y, w, h]},
+    {"scroll": [dx, dy]}, {"zoom": "in" | "out"}, {"look": [x, y, w, h]},
     {"pause": seconds} ],
   "stop": true only when you are done or have given up
 }
@@ -78,16 +109,22 @@ function phase(b: Behaviour, sent: number): string {
   return " First rate the last result honestly. If it gave you what you asked for, stay ambitious and keep building on your big idea. If it disappointed you, scale back one step only: a little smaller or simpler than your last ask, not straight to the minimum, as you slowly realize what it can and can't do. Each further disappointment takes you one more step down.";
 }
 
-export function userMessage(past: Past[], sendsLeft: number, b: Behaviour): string {
+/** `looked`: the view moves made by hand since the last send, without pressing Enter. */
+export function userMessage(past: Past[], sendsLeft: number, b: Behaviour, looked: string[] = []): string {
   const lines = past.map((t, i) => `${i + 1}. You said: "${t.said}"${t.drew.length ? `, and drew: ${t.drew.join("; ")}` : ""}. You wanted: ${t.intent}${t.satisfaction ? ` You rated it ${t.satisfaction}/5: ${t.feeling ?? ""}` : ""}`);
-  return `${past.length ? `Your sends so far:\n${lines.join("\n")}\n\nThe screenshot shows the canvas now, after send ${past.length}.` : "This is the canvas as you open the product."} You have at most ${sendsLeft} more send${sendsLeft === 1 ? "" : "s"} before you have to leave. What do you do next?${phase(b, past.length)}`;
+  const now = past.length ? `Your sends so far:\n${lines.join("\n")}\n\nThe screenshot shows your screen now, after send ${past.length}` : "This is your screen as you open the product";
+  const moved = looked.length ? `, after you moved the view without pressing Enter (${looked.join("; ")}).${past.at(-1)?.satisfaction ? ` You've already rated send ${past.length}.` : ""}${looked.length >= DRIVE.looksPerSend ? " You've looked around enough: act on what you see now, or stop." : ""}` : ".";
+  return `${now}${moved} You have at most ${sendsLeft} more send${sendsLeft === 1 ? "" : "s"} before you have to leave. What do you do next?${phase(b, past.length)}`;
 }
 
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
-const pts = (a: unknown, n: number, k: number) => (Array.isArray(a) && a.length >= n && a.slice(0, n).every((v) => num(v) !== undefined) ? a.slice(0, n).map((v) => (v as number) * k) : undefined);
+const nums = (a: unknown, n: number) => (Array.isArray(a) && a.length >= n && a.slice(0, n).every((v) => num(v) !== undefined) ? (a.slice(0, n) as number[]) : undefined);
 
-/** The model's reply as a Turn, positions moved from screenshot pixels to canvas pixels (×k). */
-export function parseTurn(text: string, k: number): Turn {
+/** The model's reply as a Turn, positions moved from screenshot pixels to board pixels. */
+export function parseTurn(text: string, m: ScreenMap): Turn {
+  const { k } = m;
+  // A point or a box's corner lands on the board where the screenshot showed it; sizes and scrolls only scale.
+  const pts = (a: unknown, n: number) => nums(a, n)?.map((v, i) => (i < 2 ? (i ? m.y : m.x) + v * k : v * k));
   const json = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
   const o = JSON.parse(json) as Record<string, unknown>;
   const steps: Step[] = [];
@@ -96,17 +133,19 @@ export function parseTurn(text: string, k: number): Turn {
     else if (num(s.pause) !== undefined) steps.push({ pause: s.pause as number });
     else if (typeof s.draw === "string") {
       const d = s.draw;
-      const box = pts(s.around ?? s.box, 4, k);
-      const from = pts(s.from, 2, k);
-      const to = pts(s.to, 2, k);
-      const at = pts(s.at, 2, k);
+      const box = pts(s.around ?? s.box, 4);
+      const from = pts(s.from, 2);
+      const to = pts(s.to, 2);
+      const at = pts(s.at, 2);
       let step: DrawStep | undefined;
       if (d === "circle" && box) step = { draw: "circle", around: box };
       else if ((d === "box" || d === "cross" || d === "underline") && box) step = { draw: d, box };
       else if ((d === "arrow" || d === "line") && from && to) step = { draw: d, from, to };
       else if (d === "tap" && at) step = { draw: "tap", at };
       if (step) steps.push(step);
-    }
+    } else if (nums(s.scroll, 2)) steps.push({ scroll: nums(s.scroll, 2)!.map((v) => v * k) });
+    else if (s.zoom === "in" || s.zoom === "out") steps.push({ zoom: s.zoom });
+    else if (pts(s.look, 4)) steps.push({ look: pts(s.look, 4)! });
   }
   const sat = num(o.satisfaction);
   return {
@@ -124,13 +163,16 @@ export function describeStep(s: Step): string {
   const r = (a: number[]) => a.map(Math.round).join(", ");
   if ("say" in s) return `says "${s.say}"`;
   if ("pause" in s) return `pauses ${s.pause} s`;
+  if ("scroll" in s) return `scrolls by [${r(s.scroll)}]`;
+  if ("zoom" in s) return `zooms ${s.zoom}`;
+  if ("look" in s) return `zooms in on [${r(s.look)}]`;
   if (s.draw === "circle") return `circles [${r(s.around)}]`;
   if (s.draw === "arrow" || s.draw === "line") return `${s.draw} from [${r(s.from)}] to [${r(s.to)}]`;
   if (s.draw === "tap") return `taps [${r(s.at)}]`;
   return `${s.draw === "box" ? "sketches a box" : s.draw === "cross" ? "scribbles out" : "underlines"} [${r(s.box)}]`;
 }
 
-export async function driverTurn(model: ModelName, system: string, b: Behaviour, screenshot: string, past: Past[], sendsLeft: number, k: number, parent?: TraceContext): Promise<{ turn: Turn; reply: string }> {
-  const { text } = await callModel({ model, system, user: userMessage(past, sendsLeft, b), images: [screenshot], from: "driver" }, undefined, undefined, parent);
-  return { turn: parseTurn(text, k), reply: text };
+export async function driverTurn(model: ModelName, system: string, b: Behaviour, screenshot: string, past: Past[], sendsLeft: number, m: ScreenMap, looked: string[] = [], parent?: TraceContext): Promise<{ turn: Turn; reply: string }> {
+  const { text } = await callModel({ model, system, user: userMessage(past, sendsLeft, b, looked), images: [screenshot], from: "driver" }, undefined, undefined, parent);
+  return { turn: parseTurn(text, m), reply: text };
 }

@@ -1,5 +1,8 @@
-// Drawing model playground: draw on the page, say (or type) what you want, press
-// Send or Enter. The ops stream back and land on the canvas one by one.
+// Drawing model playground: the product's send on an infinite board. Move
+// around (scroll, ctrl-scroll, space-drag), draw, say (or type) what you want,
+// press Send or Enter. The model gets the pictures picked for the send and the
+// site map; its ops stream back and land one by one, camera(...) lines glide the screen.
+import board from "../../src/fixtures/board.ops.txt?raw";
 import clowns from "../../src/fixtures/clowns.ops.txt?raw";
 import grid from "../../src/fixtures/grid.ops.txt?raw";
 import messy from "../../src/fixtures/messy.ops.txt?raw";
@@ -15,11 +18,16 @@ import type { Scene } from "../../src/core/scene.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { DEFAULTS, type Tuning, tuningId } from "../../src/core/tuning.ts";
 import { span, spanSync } from "../../src/core/trace.ts";
-import { $, download, fontsReady, shell, stage, tuningPanel } from "../../src/ui.ts";
+import { SCREEN, type View, asPage, boardBounds, fitView, pageTop, pagesOf, union } from "../../src/core/board.ts";
+import { boardStage } from "../../src/boardStage.ts";
+import { $, download, fontsReady, shell, tuningPanel } from "../../src/ui.ts";
 
-shell("draw", "Draw on the page, then say or type what you want and press Send (or Enter). The model gets your words with [ink n] markers, a screenshot with your numbered ink and the id map, and its ops land on the canvas as each line arrives. Each send is one model call on your Claude subscription.");
-const fixtures: Record<string, string> = { "Clowns.com": clowns, "Settings screen (grid)": grid, "Messy shop": messy, "Empty canvas": "" };
-const { canvas, ink } = stage($("#left"), 1280, 800, true);
+shell("draw", "The product's send, on an infinite board: scroll to pan, ctrl-scroll to zoom, hold space and drag to pan. Draw, then say or type what you want and press Send (or Enter). The model gets your words with [ink n] markers, the pictures picked for this send (what you see, what you referred to, the whole board) and the site map; its ops land as each line arrives, and camera(...) lines move the screen. Each send is a resolver call and a drawing call on your Claude subscription, plus one per picture.");
+const fixtures: Record<string, string> = { "Toy shop (5 pages)": board, "Clowns.com": asPage(clowns, "page", "Home"), "Settings screen (grid)": asPage(grid, "page", "Settings"), "Messy shop": asPage(messy, "page", "Home"), "Blank page": asPage("", "page", "Home") };
+/** Where the camera starts on a board: the top of its first page. */
+const startOf = (sc: Scene): View => (pagesOf(sc)[0] ? pageTop(pagesOf(sc)[0]) : fitView(boardBounds(sc)));
+const st = boardStage($("#left"), startOf(runScript(fixtures[Object.keys(fixtures)[0]]).scene));
+const { canvas, ink } = st;
 const INK = "#e03131";
 
 const logCard = document.createElement("div");
@@ -33,7 +41,8 @@ $("#side").innerHTML = `
     <h2>Send</h2>
     <div class="row"><select id="fixture">${Object.keys(fixtures).map((k) => `<option>${k}</option>`).join("")}</select><button id="reset">Reset scene</button></div>
     <textarea id="words" rows="3" placeholder="type what you want (draw first), or press Talk… e.g. make this toy bigger"></textarea>
-    <div class="row"><button class="primary" id="send">Send (Enter)</button><button id="talk">Talk (Scribe, paid)</button><button id="clearInk">Clear ink</button><button id="undo" disabled>Undo send</button></div>
+    <div class="row"><button class="primary" id="send">Send (Enter)</button><button id="talk">Talk (Scribe, paid)</button><button id="clearInk">Clear ink</button><button id="undo" disabled>Undo send</button><button id="fit">Show everything</button></div>
+    <div class="stat" id="camera"></div>
     <div class="muted" id="interim" style="font:17px Excalifont, cursive;min-height:22px"></div>
     <pre class="log bad" id="errors"></pre>
   </div>
@@ -42,7 +51,7 @@ $("#side").innerHTML = `
     <div class="stat" id="anatomy">Send to see the prompt.</div>
     <details><summary class="muted">system prompt</summary><pre class="log" id="sys"></pre></details>
     <details><summary class="muted">user message</summary><pre class="log" id="usr"></pre></details>
-    <details><summary class="muted">screenshot</summary><img id="shotImg" alt="" style="max-width:100%;border:1px solid var(--line);border-radius:6px"></details>
+    <details><summary class="muted">pictures</summary><div id="pics" style="display:grid;gap:8px"></div></details>
   </div>
   <div class="card"><h2>Sends</h2><table class="marks"><thead><tr><th>#</th><th>send</th><th>you say</th></tr></thead><tbody id="sends"></tbody></table><div class="row"><button id="save" disabled>Save set</button></div></div>`;
 
@@ -58,7 +67,9 @@ type Send = { n: number; request: string; prompt: Prompt; result: SendResult; st
 const sends: Send[] = [];
 let sending = false;
 
-const draw = () => render(canvas, scene, { tags: true, tuning });
+const draw = () => render(canvas, scene, { tags: true, tuning, view: st.view() });
+/** The camera's last glide, so a send ends once the screen has arrived. */
+let gliding: Promise<void> = Promise.resolve();
 
 function clearInk() {
   strokes = [];
@@ -86,7 +97,7 @@ async function send() {
     // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
     const pictures = tuning["draw.fillPictures"] ? pictureFiller(scene, tuning, () => draw(), undefined, ctx) : undefined;
     const input = words.length ? words : typed;
-    const prompt = await buildPrompt(scene, strokes, input, tuning, ctx);
+    const prompt = await buildPrompt(scene, strokes, input, tuning, ctx, st.view());
     showPrompt(prompt);
     undo.push(cloneScene(scene));
     $<HTMLButtonElement>("#undo").disabled = false;
@@ -97,6 +108,7 @@ async function send() {
     const result = await run(scene, prompt, tuning, (r) => {
       lines.push(logLine(r));
       $("#opLog").textContent = lines.join("\n");
+      if (r.camera) gliding = st.setView(r.camera, tuning["camera.easeMs"]);
       draw();
       pictures?.kick();
     }, undefined, undefined, ctx);
@@ -113,6 +125,7 @@ async function send() {
     const pics = await pictures?.finish();
     if (pics && (pics.drawn || pics.failed.length)) $("#sendStat").textContent += ` · ${pics.drawn} pictures, all done ${pics.ms} ms after Send${pics.failed.length ? ` (${pics.failed.length} failed)` : ""}`;
     spanSync("final redraw", ctx, () => draw());
+    await gliding;
     listSends();
   });
   sending = false;
@@ -121,12 +134,12 @@ async function send() {
 
 function showPrompt(p: Prompt) {
   const f = p.features;
-  $("#anatomy").textContent = `system ${p.system.length} chars · user ${p.user.length} chars · ~${Math.round(f.chars / 4)} text tokens · ${f.screenshot ? `screenshot ${p.shot!.width}×${p.shot!.height}, ${Math.round(p.shot!.bytes / 1024)} KB, ~${f.imageTokens} tokens` : "no screenshot"} · ${f.idMap} ids · ${f.ops} op lines · ${f.marks} marks (${f.marksSent ? "described" : "not described"}) · references: ${f.refs === "off" ? "off" : `${f.refs === "ink" ? "from the ink" : "resolver call"}, ${f.resolveMs} ms before the drawing call`}`;
+  const pics = f.pictures ? `${f.pictures} picture${f.pictures === 1 ? "" : "s"}, ~${f.imageTokens} tokens${f.board ? ` (${f.earlyShots} captured while the resolver thought${f.unusedShots ? `, ${f.unusedShots} not kept` : ""}; all in ${f.shotsMs} ms)` : ""}` : "no pictures";
+  $("#anatomy").textContent = `system ${p.system.length} chars · user ${p.user.length} chars · ~${Math.round(f.chars / 4)} text tokens · ${pics} · ${f.board ? `site map ${f.mapChars} chars` : `${f.idMap} ids`} · ${f.ops} op lines · ${f.marks} marks (${f.marksSent ? "described" : "not described"}) · references: ${f.refs === "off" ? "off" : f.refs === "ink" ? "from the ink" : `resolver call, ${f.resolveMs} ms`}`;
   $("#sys").textContent = p.system;
   $("#usr").textContent = p.user;
-  const img = $<HTMLImageElement>("#shotImg");
-  img.src = p.shot?.dataUrl ?? "";
-  img.style.display = p.shot ? "block" : "none";
+  const shots = p.shots ?? (p.shot ? [{ name: "screenshot", why: "the canvas", shot: p.shot }] : []);
+  $("#pics").innerHTML = shots.map((s, i) => `<figure style="margin:0"><img src="${s.shot.dataUrl}" style="width:100%;border:1px solid var(--line);border-radius:6px"><figcaption class="stat muted">${i + 1}. ${esc(s.name)} · ${s.shot.width}×${s.shot.height} · ${esc(s.why)}</figcaption></figure>`).join("");
 }
 
 function listSends() {
@@ -188,8 +201,11 @@ const reset = () => {
   undo.length = 0;
   $<HTMLButtonElement>("#undo").disabled = true;
   clearInk();
+  void st.setView(startOf(scene));
   draw();
 };
+$("#fit").addEventListener("click", () => void st.setView(fitView(pagesOf(scene).length ? union(pagesOf(scene).map((p) => p.box)) : boardBounds(scene), 0.03), tuning["camera.easeMs"]));
+st.onMove((v) => ($("#camera").textContent = `camera ${Math.round(v.x)},${Math.round(v.y)} · ${Math.round(v.w)}×${Math.round(v.h)} board px · zoom ${(SCREEN.w / v.w).toFixed(2)}×`));
 $("#fixture").addEventListener("change", reset);
 $("#reset").addEventListener("click", reset);
 
@@ -232,7 +248,7 @@ async function stopTalking() {
 }
 $("#talk").addEventListener("click", () => void (talking ? stopTalking() : talk()));
 
-tuningPanel($("#side"), ["draw", "picture", "shot", "link", "speech"], (t) => {
+tuningPanel($("#side"), ["draw", "board", "resolve", "picture", "shot", "camera", "link", "speech"], (t) => {
   tuning = t;
   draw();
 });

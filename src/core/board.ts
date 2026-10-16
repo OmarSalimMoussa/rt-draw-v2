@@ -5,7 +5,7 @@
 // whole board at the biggest zoom that holds every page, and the site map as
 // structured text.
 import type { Stroke } from "./ink.ts";
-import type { InkSpec } from "./resolve.ts";
+import type { InkSpec, Ref } from "./resolve.ts";
 import { groupStrokes } from "./marks.ts";
 import type { Box, Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
@@ -14,8 +14,10 @@ import { DEFAULTS, type Tuning, tune } from "./tuning.ts";
 
 /** A rectangle of the board the camera shows, in board pixels. */
 export type View = Box;
+/** The screen a view fills, in pixels. */
+export const SCREEN = { w: 1280, h: 800 };
 /** The screen's shape: a view keeps it, so it fills the screen. */
-export const ASPECT = 1280 / 800;
+export const ASPECT = SCREEN.w / SCREEN.h;
 
 /** A box with its width and height made positive (arrows can point left or up). */
 export const norm = (b: Box): Box => ({ x: Math.min(b.x, b.x + b.w), y: Math.min(b.y, b.y + b.h), w: Math.abs(b.w), h: Math.abs(b.h) });
@@ -49,6 +51,10 @@ export function fitView(box: Box, padFrac = 0.06, minW = 0, aspect = ASPECT): Vi
 
 export const pagesOf = (scene: Scene) => scene.stacked().filter((s) => s.kind === "frame");
 export const pageName = (p: Shape) => p.text?.words ?? p.id;
+/** A single-canvas script as one page of a board: a screen-sized frame behind it. */
+export const asPage = (script: string, id: string, name: string) => `shape(${id}, frame, 0 0 ${SCREEN.w} ${SCREEN.h}, "the ${name} page, the one page of this site so far")\ntext(${id}, "${name}")\n${script}`;
+/** The camera on a page: its top, the page's full width, its name showing above it. */
+export const pageTop = (p: Shape): View => ({ x: p.box.x, y: p.box.y - 60, w: p.box.w, h: p.box.w / ASPECT });
 
 /** The smallest page holding this point, or within `pad` of its edge. */
 function pageAt(scene: Scene, p: [number, number], pad = 0): Shape | undefined {
@@ -81,23 +87,25 @@ const words = (s: string, n: number) => {
   return w.length > n ? `${w.slice(0, n).join(" ")}…` : w.join(" ");
 };
 
+/** How much of each page the site map lists: levels of content, words of each description, and each shape's box. */
+export type MapDetail = { depth: number; words: number; boxes: boolean };
+
 /**
  * The site map as text: every page in reading order (top to bottom, left to
  * right) with its links, then its content as a tree (a shape sits under the
  * smallest shape around it), board.mapDepth levels deep, descriptions cut to
- * board.mapWords words.
+ * board.mapWords words (or as `detail` says).
  */
-export function siteMap(scene: Scene, t: Tuning = DEFAULTS): string {
+export function siteMap(scene: Scene, t: Tuning = DEFAULTS, detail: MapDetail = { depth: t["board.mapDepth"], words: t["board.mapWords"], boxes: false }): string {
   const pages = pagesOf(scene).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
   const links = linksOf(scene, t);
   const linkIds = new Set(links.map((l) => l.via.id));
-  const depth = t["board.mapDepth"];
-  const nWords = t["board.mapWords"];
+  const { depth, words: nWords } = detail;
   const r = (n: number) => Math.round(n);
   const line = (s: Shape) => {
-    const bits = [s.id];
+    const bits = [detail.boxes ? `${s.id} (${r(s.box.x)} ${r(s.box.y)} ${r(s.box.w)} ${r(s.box.h)})` : s.id];
     if (nWords > 0) bits.push(`: ${words(s.description, nWords)}`);
-    if (s.text?.words) bits.push(` text "${words(s.text.words.replace(/\s+/g, " "), 8)}"`);
+    if (s.text?.words) bits.push(` text "${words(s.text.words.replace(/\s+/g, " "), Math.max(8, nWords))}"`);
     if (s.drawing) bits.push(` picture "${s.drawing}"`);
     return bits.join("");
   };
@@ -231,20 +239,54 @@ export const autoViews = (scene: Scene, camera: View, strokes: Stroke[], said: s
 
 export type BoardShot = NamedView & { shot: Shot };
 
+/** Takes a view's picture once: the same view asked for again gets the same capture. */
+function capturer(scene: Scene, strokes: Stroke[], t: Tuning, ctx: TraceContext) {
+  const taken = new Map<string, Promise<Shot>>();
+  const shoot = (v: NamedView) => {
+    const key = [v.view.x, v.view.y, v.view.w, v.view.h].map(Math.round).concat(v.width, Number(v.tags)).join(" ");
+    let p = taken.get(key);
+    if (!p) {
+      const s0 = performance.now();
+      p = takeShot(scene, strokes, v.tags ? t : tune({ "shot.tagPx": 0 }, t), { view: v.view, width: v.width }).then((shot) => {
+        timed(ctx, `shot: ${v.name}`, s0, performance.now(), { width: shot.width, height: shot.height, kb: Math.round(shot.bytes / 1024) });
+        return shot;
+      });
+      taken.set(key, p);
+    }
+    return p;
+  };
+  return { shoot, taken };
+}
+
 /** Captures views side by side: drawing each one is quick, so their rasterizing and encoding overlap. */
 export async function boardShots(scene: Scene, strokes: Stroke[], views: NamedView[], t: Tuning = DEFAULTS, parent?: TraceContext): Promise<{ shots: BoardShot[]; ms: number; sumMs: number }> {
   return span("board screenshots", parent, async (ctx) => {
     const t0 = performance.now();
-    const shots = await Promise.all(
-      views.map(async (v) => {
-        const s0 = performance.now();
-        const shot = await takeShot(scene, strokes, v.tags ? t : tune({ "shot.tagPx": 0 }, t), { view: v.view, width: v.width });
-        timed(ctx, `shot: ${v.name}`, s0, performance.now(), { width: shot.width, height: shot.height, kb: Math.round(shot.bytes / 1024) });
-        return { ...v, shot };
-      }),
-    );
+    const { shoot } = capturer(scene, strokes, t, ctx);
+    const shots = await Promise.all(views.map(async (v) => ({ ...v, shot: await shoot(v) })));
     return { shots, ms: Math.round(performance.now() - t0), sumMs: Math.round(shots.reduce((a, s) => a + s.shot.ms.total, 0)) };
   }, { views: views.length });
+}
+
+/**
+ * A send's pictures on a board. The resolver's answers (`refs`, still coming)
+ * pick them when board.fromRefs is on, but most don't depend on them: with
+ * board.earlyShots on, the rules' pick (what you see, close-ups of marks, the
+ * whole board) is captured while the resolver thinks, so only the pictures its
+ * answers add wait for it. Early captures the answers don't keep are dropped.
+ */
+export async function sendShots(scene: Scene, camera: View, strokes: Stroke[], said: string, t: Tuning, refs?: Promise<Ref[] | undefined>, parent?: TraceContext): Promise<{ shots: BoardShot[]; early: number; unused: number; ms: number }> {
+  return span("board screenshots", parent, async (ctx) => {
+    const t0 = performance.now();
+    const { shoot, taken } = capturer(scene, strokes, t, ctx);
+    const byRefs = !!refs && !!t["board.fromRefs"];
+    if (byRefs && t["board.earlyShots"]) pickViews(scene, camera, strokes, said, t).forEach(shoot);
+    const early = taken.size;
+    const answers = byRefs ? await refs : undefined;
+    const views = pickViews(scene, camera, strokes, said, t, answers);
+    const shots = await Promise.all(views.map(async (v) => ({ ...v, shot: await shoot(v) })));
+    return { shots, early, unused: taken.size - views.length, ms: Math.round(performance.now() - t0) };
+  });
 }
 
 // ---- Cases: which pictures a send needs, scored by what they show legibly and what they cost.

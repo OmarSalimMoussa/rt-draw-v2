@@ -1,7 +1,12 @@
 // The drawing model: one send (your words with [ink n] markers, the screenshot
 // with your numbered ink, the id map) → op lines, streamed back and applied the
-// moment each line completes. buildPrompt hides nothing, so a playground can
-// show exactly what was sent; run records when each op landed.
+// moment each line completes. On a board (a camera given), the screenshot is the
+// pictures picked for the send (what you see, what you referred to, the whole
+// board) and the id map is the site map; camera(...) lines move the screen.
+// buildPrompt hides nothing, so a playground can show exactly what was sent;
+// run records when each op landed.
+import { type BoardShot, SCREEN, type View, pagesOf, sendShots, siteMap } from "./board.ts";
+import { parseCamera } from "./camera.ts";
 import type { Stroke } from "./ink.ts";
 import { type Word, linkInk } from "./link.ts";
 import { HitIndex } from "./hittest.ts";
@@ -14,8 +19,13 @@ import { type Shot, takeShot } from "./shot.ts";
 import { type TraceContext, mark, span, spanSync, timed } from "./trace.ts";
 import { DEFAULTS, type Tuning, tune } from "./tuning.ts";
 
-/** The op manual, short on purpose: v1's long manual is not carried over. {W} {H} {CELL} are filled in. */
-export const SYSTEM = `You edit a drawing canvas of {W}×{H} pixels (x right, y down, origin top-left). Shapes sit in layers like a slide; nothing is laid out for you: a shape is drawn exactly where its box says.
+/** The op manual, short on purpose: v1's long manual is not carried over. On a board it speaks of board pixels, pages and the camera. */
+export function systemPrompt(board: boolean, w: number, h: number, cell: number): string {
+  const intro = board
+    ? "You edit an infinite board of web pages and app screens, in board pixels (x right, y down). A page is a frame shape: its text is its name, shown above it, and the shapes inside its box are its content."
+    : `You edit a drawing canvas of ${w}×${h} pixels (x right, y down, origin top-left).`;
+  const cells = !board && cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "";
+  return `${intro} Shapes sit in layers like a slide; nothing is laid out for you: a shape is drawn exactly where its box says.
 
 Reply ONLY with op lines, one per line: no prose, no code fences. Each line is applied the moment it is complete, so put the most visible change first.
 
@@ -23,28 +33,33 @@ shape(id, kind, box, "description", style...)   add a shape, or change only what
 text(id, "words", size:s|m|l|xl, color:..., align:left|center|right, weight:bold)
 drawing(id, "what the picture shows", fade:0-1)  a doodle picture inside a shape
 layer(id, front | back | above:other | below:other)
-move(id, box)      remove(id)      group(id, [a, b, ...])
+move(id, box)      remove(id)      group(id, [a, b, ...])${board ? `
+camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look ("zoom out", "show me the cart"), or, as your last line, onto what you made if it's off screen` : ""}
 
-kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right).
-box: x y w h in canvas pixels{CELL}, written bare, never in quotes. Quotes are only for descriptions and words.
+kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page: a new page goes beside the others without overlapping them, ${SCREEN.w} wide for a website)` : ""}.
+box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
 Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
 style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).
 Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
 A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
 
-The user's words carry [ink n] markers: n is the red ink mark labeled [n] in the screenshot, drawn while they said that word. Their ink points at things or sketches a shape and place; it is never part of the page, so don't copy it unless they ask you to draw what they sketched. If the request is unclear, make the most likely change.`;
+The user's words carry [ink n] markers: n is the red ink mark labeled [n] in the ${board ? "pictures" : "screenshot"}, drawn while they said that word. Their ink points at things or sketches a shape and place; it is never part of the page, so don't copy it unless they ask you to draw what they sketched. If the request is unclear, make the most likely change.`;
+}
 
 export type Prompt = {
   system: string;
   user: string;
   images: string[];
-  /** The screenshot as sent, when it was. */
+  /** The screenshot as sent, when it was (on a board, the first picture: what you see). */
   shot?: Shot;
+  /** On a board: every picture sent, in order, and where the camera was. */
+  shots?: BoardShot[];
+  camera?: View;
   /** The transcript with its [ink n] markers. */
   transcript: string;
   /** The resolver's answers, when they were sent. */
   refs?: Resolution;
-  features: { marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number };
+  features: { marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number; board: number; pictures: number; views: string; earlyShots: number; unusedShots: number; shotsMs: number; mapChars: number };
 };
 
 /** The scene as op lines: its exact boxes and styles, for when the model should see numbers. */
@@ -104,15 +119,20 @@ export function typedWords(text: string, marks: Mark[]): Word[] {
   });
 }
 
-/** What the model gets for this send. Words are spoken (with times) or typed (a string). */
-export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS, parent?: TraceContext): Promise<Prompt> {
+const r0 = (n: number) => Math.round(n);
+const fmtBox = (v: View) => `${r0(v.x)} ${r0(v.y)} ${r0(v.w)} ${r0(v.h)}`;
+
+/**
+ * What the model gets for this send. Words are spoken (with times) or typed (a
+ * string). With a camera, the scene is a board seen through it.
+ */
+export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS, parent?: TraceContext, camera?: View): Promise<Prompt> {
   return span("build the prompt", parent, async (ctx) => {
     const marks = spanSync("group strokes into marks", ctx, () => groupStrokes(strokes, t), { strokes: strokes.length });
     const transcript = spanSync("link words to ink", ctx, () => (typeof words === "string" ? typedTranscript(words, marks.length) : linkInk(words, marks, t).text));
-    const cell = t["draw.gridCellPx"];
-    const system = SYSTEM.replace("{W}", String(scene.width))
-      .replace("{H}", String(scene.height))
-      .replace("{CELL}", cell > 0 ? `, or grid cells like C2-J7 (bare) as labeled on the screenshot (${cell} px cells, columns A, B, ... rows 1, 2, ...)` : "");
+    // A board has no grid: cells name places on one fixed canvas.
+    const cell = camera ? 0 : t["draw.gridCellPx"];
+    const system = systemPrompt(!!camera, scene.width, scene.height, cell);
 
     // What the ink is, read from its geometry: free, and the screenshot only shows it as pixels.
     const { hits, readings } = spanSync("read marks (hit-test, arrows)", ctx, () => {
@@ -120,11 +140,15 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
       return { hits, readings: marks.map((m) => readMark(m, hits, t)) };
     }, { marks: marks.length });
 
-    // The screenshot and the resolver don't need each other: run them side by side.
     const said = typeof words === "string" ? (words.trim() ? typedWords(words, marks) : []) : words;
-    const r0 = performance.now();
-    const [shot, refs] = await Promise.all([
-      t["draw.sendScreenshot"]
+    const r0t = performance.now();
+    // Which shapes the words and ink mean: one more model call unless the ink settles it.
+    const refsCall = t["draw.sendRefs"] && (marks.length || said.length) ? span("resolve references", ctx, (rctx) => resolve(said, strokes, marks, scene, hits, t, "draw-refs", rctx)) : undefined;
+    let resolveMs = 0;
+    const resolved = refsCall?.then((r) => ((resolveMs = Math.round(performance.now() - r0t)), r));
+    // The pictures and the resolver: side by side; on a board, the pictures the resolver's answers add wait for it.
+    const [shot, board, refs] = await Promise.all([
+      t["draw.sendScreenshot"] && !camera
         ? span("screenshot", ctx, async (sctx) => {
             const sh = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
             // Its own phases, measured inside takeShot, laid end to end from the span's start.
@@ -133,14 +157,27 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
             return sh;
           })
         : undefined,
-      // Which shapes the words and ink mean: one more model call unless the ink settles it.
-      t["draw.sendRefs"] && (marks.length || said.length) ? span("resolve references", ctx, (rctx) => resolve(said, strokes, marks, scene, hits, t, "draw-refs", rctx)) : undefined,
+      t["draw.sendScreenshot"] && camera ? sendShots(scene, camera, strokes, said.map((w) => w.word).join(" "), t, resolved?.then((r) => r.refs), ctx) : undefined,
+      resolved,
     ]);
-    const resolveMs = Math.round(performance.now() - r0);
+    const shots = board?.shots;
 
-    const parts = [`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`];
-    const idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
-    if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${idMap.join("\n")}`);
+    const parts: string[] = [];
+    let mapChars = 0;
+    let idMap: string[] = [];
+    if (camera) {
+      parts.push(`Board: ${pagesOf(scene).length} pages, ${scene.shapes.size} shapes. The screen shows ${fmtBox(camera)} of it (x y w h, board pixels).`);
+      if (shots?.length) parts.push(`Pictures (boxes are always in board pixels):\n${shots.map((s, i) => `${i + 1}. ${s.name}: board ${fmtBox(s.view)} at ${s.shot.width}×${s.shot.height} (${s.why})`).join("\n")}`);
+      if (t["draw.sendIdMap"]) {
+        const map = siteMap(scene, t, { depth: t["draw.mapDepth"], words: t["draw.mapWords"], boxes: !!t["draw.mapBoxes"] });
+        mapChars = map.length;
+        parts.push(`Site map (each page's content as a tree, id${t["draw.mapBoxes"] ? " (box)" : ""}: description):\n${map}`);
+      }
+    } else {
+      parts.push(`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`);
+      idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
+      if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${idMap.join("\n")}`);
+    }
     const ops = t["draw.sendOps"] ? sceneToOps(scene) : "";
     if (ops) parts.push(`The scene as ops:\n${ops}`);
     if (shot) parts.push(`The screenshot is the canvas at ${Math.round(shot.width)}×${Math.round(shot.height)} (scaled ${t["shot.scale"]}); boxes are always in canvas pixels.`);
@@ -149,20 +186,27 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     if (refs && refLines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${refLines.join("\n")}`);
     parts.push(`Request: ${transcript || "(no words)"}`);
     const user = parts.join("\n\n");
-    const imageTokens = shot ? Math.round((shot.width * shot.height) / 750) : 0;
+    const pictures = shots ? shots.map((s) => s.shot) : shot ? [shot] : [];
+    const imageTokens = pictures.reduce((a, p) => a + Math.round((p.width * p.height) / 750), 0);
     return {
       system,
       user,
-      images: shot ? [shot.dataUrl] : [],
-      shot,
+      images: pictures.map((p) => p.dataUrl),
+      shot: pictures[0],
+      shots,
+      camera,
       transcript,
       refs,
-      features: { marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: shot ? 1 : 0, grid: cell },
+      features: {
+        marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: pictures.length ? 1 : 0, grid: cell,
+        board: camera ? 1 : 0, pictures: pictures.length, views: shots?.map((s) => s.name).join(" | ") ?? "", earlyShots: board?.early ?? 0, unusedShots: board?.unused ?? 0, shotsMs: board?.ms ?? 0, mapChars,
+      },
     };
   });
 }
 
-export type OpResult = { line: string; ok: boolean; error?: string; ms: number };
+/** One op line as it landed; a camera(...) line carries the view to move the screen to (the caller moves it). */
+export type OpResult = { line: string; ok: boolean; error?: string; ms: number; camera?: View };
 export type SendResult = { ops: OpResult[]; firstOpMs?: number; ms: number; stats?: ModelStats; reply: string; error?: string };
 
 /**
@@ -188,9 +232,11 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
       if (!p.ok) r = { line: p.line, ok: false, error: p.error, ms };
       else {
         try {
-          applyOp(scene, p.op, opT);
+          // camera(...) moves the screen, not the scene: on a board, the caller glides there.
+          const camera = p.op.name === "camera" && prompt.camera ? parseCamera(p.op.line, scene, t).view : undefined;
+          if (!camera) applyOp(scene, p.op, opT);
           firstOpMs ??= ms;
-          r = { line: p.op.line, ok: true, ms };
+          r = { line: p.op.line, ok: true, ms, camera };
         } catch (e) {
           r = { line: p.op.line, ok: false, error: e instanceof Error ? e.message : String(e), ms };
         }

@@ -2,7 +2,7 @@
 // left". A model gets where the camera is, the site map, and pictures if the
 // knobs say so, and answers with one camera(...) line: a rectangle of the board
 // or the ids to frame. Cases (src/fixtures/camera-cases.json) score it.
-import { ASPECT, type View, boardBounds, centerOf, fitView, insideShare, norm, pagesOf, siteMap, union } from "./board.ts";
+import { ASPECT, SCREEN, type View, boardBounds, centerOf, fitView, insideShare, norm, pagesOf, pageTop, siteMap, union } from "./board.ts";
 import { type ModelStats, callModel, modelOf } from "./model.ts";
 import type { Scene } from "./scene.ts";
 import { takeShot } from "./shot.ts";
@@ -42,7 +42,7 @@ export async function cameraPrompt(said: string, current: View, scene: Scene, t:
     }
     if (t["camera.sendMap"]) parts.push(`Site map:\n${siteMap(scene, t)}`);
     parts.push(`They said: "${said}"`);
-    return { system: CAMERA_SYSTEM.replace("{W}", "1280").replace("{H}", "800"), user: parts.join("\n\n"), images };
+    return { system: CAMERA_SYSTEM.replace("{W}", String(SCREEN.w)).replace("{H}", String(SCREEN.h)), user: parts.join("\n\n"), images };
   });
 }
 
@@ -107,7 +107,7 @@ export function startView(c: { from: CameraCase["from"] }, scene: Scene): View {
   if (c.from === "all") return fitView(union(pagesOf(scene).map((p) => p.box)), 0.03);
   const p = scene.get(c.from);
   if (!p) throw new Error(`no page ${c.from}`);
-  return { x: p.box.x, y: p.box.y - 60, w: p.box.w, h: p.box.w / ASPECT };
+  return pageTop(p);
 }
 
 /** Whether a view answers the case, with each check's verdict. */

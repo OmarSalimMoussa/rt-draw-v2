@@ -56,6 +56,8 @@ export const SYNTH = {
   /** An arrowhead's barbs are this long, smallest to largest. */
   headMinPx: 20,
   headMaxPx: 34,
+  /** A scroll or zoom by hand takes this long, give or take a fifth. */
+  viewMs: 600,
 };
 
 export type DrawStep =
@@ -66,7 +68,10 @@ export type DrawStep =
   | { draw: "arrow"; from: number[]; to: number[] }
   | { draw: "line"; from: number[]; to: number[] }
   | { draw: "tap"; at: number[] };
-export type Step = { say: string } | DrawStep | { pause: number };
+/** Moving the view by hand, like on a trackpad: scroll by (dx, dy), zoom a step, or zoom in on a box. Board pixels once parsed. */
+export type ViewStep = { scroll: number[] } | { zoom: "in" | "out" } | { look: number[] };
+export type Step = { say: string } | DrawStep | ViewStep | { pause: number };
+export const isView = (s: Step): s is ViewStep => "scroll" in s || "zoom" in s || "look" in s;
 
 /** mulberry32: a small seeded random source. */
 export function rng(seed: number) {
@@ -313,6 +318,8 @@ export type Timeline = {
   ms: number;
   /** Where each voiced line starts on the clock (by step index). */
   clips: { step: number; at: number }[];
+  /** Each view move, when it starts and how long the hand takes. */
+  moves: { move: ViewStep; at: number; ms: number }[];
 };
 
 /**
@@ -326,6 +333,7 @@ export function synthesize(steps: Step[], traits: Traits, seed: number, voiced?:
   const words: Word[] = [];
   const strokes: Stroke[] = [];
   const clips: Timeline["clips"] = [];
+  const moves: Timeline["moves"] = [];
   let now = between(r, 300, 700);
   steps.forEach((step, i) => {
     if ("say" in step) {
@@ -345,6 +353,10 @@ export function synthesize(steps: Step[], traits: Traits, seed: number, voiced?:
       }
     } else if ("pause" in step) {
       now += Math.max(0, Math.min(10, Number(step.pause) || 0)) * 1000;
+    } else if (isView(step)) {
+      const ms = SYNTH.viewMs * between(r, 0.8, 1.2);
+      moves.push({ move: step, at: Math.round(now), ms: Math.round(ms) });
+      now += ms;
     } else {
       const lastWord = words.at(-1);
       const t0 = Math.max(strokes.at(-1)?.t1 ?? 0, lastWord ? lastWord.t1 - SYNTH.pointLeadMs : now);
@@ -354,5 +366,5 @@ export function synthesize(steps: Step[], traits: Traits, seed: number, voiced?:
     }
   });
   const ms = Math.max(now, strokes.at(-1)?.t1 ?? 0, words.at(-1)?.t1 ?? 0);
-  return { words, strokes, spoken: words.map((w) => w.word).join(" "), ms: Math.round(ms), clips };
+  return { words, strokes, spoken: words.map((w) => w.word).join(" "), ms: Math.round(ms), clips, moves };
 }
