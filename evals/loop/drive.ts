@@ -20,7 +20,7 @@ import { type Scenario, applies, beatOf, plan } from "../core/scenarios.ts";
 import { type Step, isView, synthesize } from "../core/synth.ts";
 import { loadFixture, savedIn } from "../fixtures/fixtures.ts";
 import { draw, expectationFor, missCheck } from "../judge/judge.ts";
-import { type Page, capture } from "./chrome.ts";
+import { type Page, paintedCapture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus } from "./client.ts";
 import { DRIVE_VIEW, LOOP, configId, sha256 } from "./config.ts";
 import { suspendGap } from "./load.ts";
@@ -66,8 +66,10 @@ export type HarnessEvent = { v: string; kind: string; case?: string; session: st
 const js = JSON.stringify;
 const READY = "new Promise((r) => { const t = () => (window.rtEval ? r() : setTimeout(t, 20)); t(); })";
 const dataUrl = (b: Buffer) => `data:image/jpeg;base64,${b.toString("base64")}`;
-const driverShot = (page: Page) => capture(page, { width: DRIVE_VIEW.screenW, quality: DRIVE_VIEW.jpegQuality });
-const judgeShot = (page: Page) => capture(page, { width: LOOP.judgePx, quality: LOOP.judgeQuality });
+/** A capture, and whether it came back blank twice (a §7.5 invariant: a blank screen is never shown to a driver or judge). */
+const driverShot = (page: Page) => paintedCapture(page, { width: DRIVE_VIEW.screenW, quality: DRIVE_VIEW.jpegQuality });
+const judgeShot = (page: Page) => paintedCapture(page, { width: LOOP.judgePx, quality: LOOP.judgeQuality });
+const BLANK = "a blank capture (twice)";
 const pad = (n: number) => String(n).padStart(2, "0");
 export const caseIdOf = (bank: string, session: number, send: number) => `c-${bank}-s${pad(session)}-${send}`;
 
@@ -205,7 +207,7 @@ export async function continueFrom(ctx: DriveCtx, pages: Pages, caseId: string, 
   const page = pages[on]!;
   await loadPage(page, ctx.run, `${caseId}-k0`, before, input.camera, ctx.arms[on]?.tuning);
   await page.eval(`rtEval.showInk(${js(input.strokes)}, { numbers: false })`);
-  const lastEnter = await driverShot(page);
+  const lastEnter = (await driverShot(page)).jpeg;
   const o: DriveOpts = { bank: "", session: 0, fork: true, continueOn: on };
   return play(ctx, s, pages, o, { scene: result.after, camera: result.camera, lastEnter, undoTo: before, past, replies: [], champion: false }, info.send + 1, info.send + sends, caseId);
 }
@@ -221,11 +223,14 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
   const arms: Arm[] = o.fork ? ["A", "B"] : ["A"];
   const out: Session = { scenario: s.id, cases: [], banked: [], ended: "out of sends" };
   const banked: Banked[] = [];
-  // A first-timer's own page (never a continuation's), the first one per target kept.
+  // A first-timer's own page (never a continuation's), the first one per target kept. Only a page whose pictures are all
+  // filled (V12): a later session starting on one that still needs a picture would end at once with no case.
   const firstTimer = !origin && s.persona === "first-timer" && !!s.target;
   let saved = !firstTimer || existsSync(paths().resume(s.target!));
   const save = () => {
-    if (!saved && st.champion && !existsSync(paths().resume(s.target!))) put(paths().resume(s.target!), st.scene);
+    const fill = checkBefore(st.scene, st.replies);
+    if (saved || !st.champion || "refused" in fill) return;
+    if (!existsSync(paths().resume(s.target!))) put(paths().resume(s.target!), fill.scene);
     saved = true;
   };
   let capped: Capped | undefined;
@@ -285,7 +290,13 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
       }
       for (let look = 0; ; look++) {
         drawnOn = st.camera;
-        const now = await driverShot(pages[on]!);
+        const shot = await driverShot(pages[on]!);
+        if (shot.blank) {
+          event("V9", "invariant", `the driver's screen: ${BLANK}`);
+          ended = `V9: the driver's screen: ${BLANK}`;
+          break;
+        }
+        const now = shot.jpeg;
         images = [st.lastEnter ?? now, now];
         const planned = plans[n - 1];
         const user = userMessage(card, st.past, planned.beat, planned.ask, to - n + 1, looked);
@@ -358,14 +369,17 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
       const p = pages[on]!;
       await p.eval(`rtEval.setView(${js(camera)})`);
       await p.eval(`rtEval.showInk(${js(input.strokes)}, { numbers: true })`);
-      const beforeInk = await judgeShot(p);
+      const inkShot = await judgeShot(p);
+      const beforeInk = inkShot.jpeg;
       await p.eval(`rtEval.showInk(${js(input.strokes)}, { numbers: false })`);
-      const lastEnter = await driverShot(p);
+      const enterShot = await driverShot(p);
+      const lastEnter = enterShot.jpeg;
 
       // Up to two attempts: a transport error (V7) or a machine suspend (V10) voids the attempt and re-queues it once.
       let sent: Partial<Record<Arm, Sent>> = {};
       let fork: Fork | undefined;
       let loopP99 = 0;
+      let blankShot = false;
       for (let attempt = 1; attempt <= 2; attempt++) {
         const hashes: Partial<Record<Arm, string>> = {};
         // A re-queued attempt starts from a reloaded page again.
@@ -382,10 +396,11 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
         const outcomes = await Promise.all(pending);
         const beat1 = { wall: Date.now(), mono: performance.now() };
         const shots = await Promise.all(order.map((a) => judgeShot(pages[a]!)));
+        if (shots.some((x) => x.blank) || inkShot.blank || enterShot.blank) blankShot = true;
         const fin = (await endCase(run, id)) as { loopP99Ms: number; calls: Partial<Record<Arm, RecordedReply[]>> };
         loopP99 = fin.loopP99Ms;
         const lines = meterSince(from, run, id);
-        sent = Object.fromEntries(order.map((a, i) => [a, { outcome: outcomes[i], after: shots[i], calls: lines.filter((l) => l.arm === a), replies: fin.calls[a] ?? [], hash: hashes[a]!, at: [at[a]!, beat1.mono] }]));
+        sent = Object.fromEntries(order.map((a, i) => [a, { outcome: outcomes[i], after: shots[i].jpeg, calls: lines.filter((l) => l.arm === a), replies: fin.calls[a] ?? [], hash: hashes[a]!, at: [at[a]!, beat1.mono] }]));
         st.replies.push(...(sent.A?.replies ?? []));
         const errors = lines.filter((l) => l.apiError);
         const gap = suspendGap(beat0, beat1);
@@ -400,6 +415,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
 
       // V9: the invariants of a fork, whose arms are compared (a bank send's own timing decides nothing). V6: a meant the judges can't use.
       const limit = dispatchLimit();
+      if (!voided && blankShot) voided = `V9: ${BLANK}`;
       if (!voided && fork && loopP99 > LOOP.eventLoopP99MaxMs) voided = `V9: the gateway's event-loop p99 was ${loopP99.toFixed(1)} ms`;
       if (!voided && fork && sent.A!.hash !== sent.B!.hash) voided = "V9: the arms loaded different before-scenes";
       if (!voided && fork && Math.max(...fork.offsetsMs) >= limit) voided = `V9: dispatch offset ${Math.max(...fork.offsetsMs)} ms ≥ the machine's limit ${limit} ms`;
@@ -465,10 +481,9 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
       st.lastEnter = lastEnter;
       st.champion &&= on === "A";
       st.past.push({ said: tl.spoken, marks: describeMarks(t.steps, drawnOn), meant: t.meant });
-      if (firstTimer && n === RESUME_AFTER) save();
+      if (firstTimer && n >= RESUME_AFTER) save();
     }
   } finally {
-    if (firstTimer && out.cases.length) save();
     // Done last: once the judges (and the rating, when one came) are in; rating.json is absent when no later turn gave one.
     for (const b of banked) {
       if (await b.judged) caseDone(b.id, { last: !b.rated });
