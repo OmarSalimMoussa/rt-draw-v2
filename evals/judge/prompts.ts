@@ -23,7 +23,7 @@ const RULES =
   "Rules: (1) What they meant decides; words and ink are how they said it. (2) Doing more than asked is a fault: extra shapes, invented names or numbers, restyling what nobody pointed at, running ahead to parts not asked for. " +
   "(3) A result that changed nothing when they asked for a change loses. (4) If their words and ink allow two readings, doing the other plausible reading is a smaller fault than doing something unrelated. " +
   "(5) Ignore roughness, fonts and colours unless they asked about them. (6) Left and right are in random order. If both are equally right or equally wrong, say tie.";
-const CRAFT_POINTS = "clear structure, readable text, aligned and consistent, pictures that read as what they show, nothing broken or overlapping by accident";
+const CRAFT_POINTS = "clear structure, readable text, aligned and consistent, pictures that read as what they show, nothing broken or overlapping by accident, and still a hand-drawn sketch, never a crisp mockup";
 
 /** Expectation: the before image only, never a result. */
 export const expectation = (s: StepView) =>

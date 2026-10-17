@@ -168,6 +168,33 @@ export function networkGate(files: FileDiff[]): Finding[] {
   }));
 }
 
+/** The Sketchbook look's constants in src/core/render.ts: the font, the paper and the ink. */
+const LOOK = /\b(FONT|BOARD|INK)\b/g;
+/** Knobs whose low values stop the page looking hand-drawn, and the share of today's default below which that's the owner's. */
+const HAND_DRAWN = ["render.roughness", "render.strokeWidth", "picture.roughness"];
+const HAND_DRAWN_MIN = 0.8;
+
+/**
+ * The editor's look is never the loop's (the owner's hard rule), and only prompt text guarded it: render.ts' FONT, BOARD
+ * and INK can't be redefined or dropped, no text gets a font of its own (the grid labels' monospace aside), and a
+ * hand-drawn knob set under 0.8× today's value goes to the owner (a crisp page could win the craft judge).
+ */
+export function lookGate(files: FileDiff[]): Finding[] {
+  const out: Finding[] = [];
+  const r = files.find((f) => f.path === "src/core/render.ts");
+  const uses = (ls: string[]) => ls.reduce((n, l) => n + (codeOf(l).code.match(LOOK)?.length ?? 0), 0);
+  if (r && ([...r.added, ...r.removed].some((l) => /\bconst\s+(FONT|BOARD|INK)\b/.test(l)) || uses(r.added) < uses(r.removed)))
+    out.push({ verdict: "reject", why: "src/core/render.ts' FONT, BOARD and INK are the Sketchbook look: the loop never redefines or drops them" });
+  for (const f of files.filter((x) => x.path.startsWith("src/core/")))
+    for (const l of f.added) if (/font-?family|fontFamily/i.test(l) && !/\bFONT\b|monospace|Excalifont/.test(l)) out.push({ verdict: "reject", why: `a font of its own in ${f.path} (the Sketchbook look is Excalifont): "${l.trim().slice(0, 120)}"` });
+  for (const l of files.find((f) => f.path === "src/core/tuning.ts")?.added ?? []) {
+    const m = /\bK\("([\w.]+)",\s*(-?[\d.]+)/.exec(l);
+    const k = m && HAND_DRAWN.includes(m[1]) ? KNOBS.find((x) => x.key === m[1]) : undefined;
+    if (k && Number(m![2]) < HAND_DRAWN_MIN * k.value) out.push({ verdict: "owner", why: `${k.key} ${m![2]} is under ${HAND_DRAWN_MIN}× today's ${k.value}: how hand-drawn the page looks is the owner's` });
+  }
+  return out;
+}
+
 /** Patch knobs are never the loop's to turn on or move: any changed line about them in tuning.ts. */
 export function patchGate(files: FileDiff[]): Finding[] {
   const t = files.find((f) => f.path === "src/core/tuning.ts");
@@ -226,7 +253,7 @@ export function sceneRoundTrip(tree: string, files: string[]): { loaded: number;
  */
 export function g0(o: { diff: string; tree?: string; scenes?: string[] }): G0Result {
   const files = parseDiff(o.diff);
-  const found = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files)];
+  const found = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files)];
   let scenes: G0Result["scenes"];
   if (!found.length && o.tree) {
     found.push(...typecheck(o.tree));
