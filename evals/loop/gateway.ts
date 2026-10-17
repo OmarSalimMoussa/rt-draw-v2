@@ -22,7 +22,6 @@
 // prints "READY <url>"; exits when its stdin closes (run.ts went away).
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { createServer as netServer } from "node:net";
-import { type IntervalHistogram, monitorEventLoopDelay } from "node:perf_hooks";
 import { join } from "node:path";
 import { CallError, type CallStats, EFFORTS, type Effort, MODEL_IDS, type MockApi, Pool, type Proc, SDK_VERSION, type Thinking, keepOf, keyOf, startProcess, streamCall, toContent } from "../../dev/claude.ts";
 import { type Chunk, Flights, type Req, readReply, replay, replyName, reqHash, standIn, storeImages, writeReply } from "./cache.ts";
@@ -39,10 +38,11 @@ const MAX_WARM = 4;
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 const LOOP_RESOLUTION_MS = 10;
+const LATE_MAX_MS = 1000;
 /**
- * Starting a Claude process blocks this loop ~6–12 ms: every start goes through one queue, this far apart, so
- * the starts of two arms and several slots never stack into a stall past V9's 20 ms. A call that has no
- * waiting process is served first; pool top-ups, the page's warm requests and eval roles wait their turn.
+ * Starting a Claude process blocks this loop ~6–12 ms (20–27 ms measured on the busy shared laptop): every start
+ * goes through one queue, this far apart, so the starts of two arms and several slots never stack. A call that has
+ * no waiting process is served first; pool top-ups, the page's warm requests and eval roles wait their turn.
  */
 const SPAWN_GAP_MS = 25;
 
@@ -58,7 +58,8 @@ type Out = {
   /** a real call was made: its list $ and token slot */ upstream?: { usd: number; token: SlotN };
   /** refused before any call (the cap): no meter line */ refused?: boolean;
 };
-type CaseState = { loop: IntervalHistogram; ordinals: Map<string, number>; calls: Record<string, RecordedReply[]> };
+/** A case's loop delays by whole ms (the last bucket: LATE_MAX_MS and more), a fixed size however long the case runs. */
+type CaseState = { lates: Uint32Array; ordinals: Map<string, number>; calls: Record<string, RecordedReply[]> };
 
 const flat = (s: CallStats) => ({
   inTokens: s.inTokens, outTokens: s.outTokens, cacheRead: s.cacheRead, cacheWrite: s.cacheWrite, write5m: s.write5m, write1h: s.write1h, thinkingTokens: s.thinkingTokens,
@@ -76,6 +77,16 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   const flights = new Flights();
   const runs = new Map<string, { mode: RunMode; share: boolean; cached?: Set<string> }>();
   const cases = new Map<string, CaseState>();
+  // The loop's delay, sampled every LOOP_RESOLUTION_MS into each open case: how late a tick ran, less the time spent
+  // starting processes since the last one. The starts are the harness's own and spaced (SPAWN_GAP_MS); counted, a
+  // run's first cases (every pool starting) tripped V9 on them alone, and V9 is about every other delay.
+  let tick = performance.now(), starting = 0;
+  const sampler = setInterval(() => {
+    const now = performance.now(), late = Math.max(0, now - tick - LOOP_RESOLUTION_MS - starting);
+    [tick, starting] = [now, 0];
+    for (const c of cases.values()) c.lates[Math.min(LATE_MAX_MS, Math.round(late))]++;
+  }, LOOP_RESOLUTION_MS);
+  sampler.unref();
   let calls = 0;
   let evalBusy = 0;
   const evalWaiting: (() => void)[] = [];
@@ -89,8 +100,10 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (spawnTimer || !spawnQueue.length) return;
     const wait = lastSpawn + SPAWN_GAP_MS - performance.now();
     if (wait > 0) return void (spawnTimer = setTimeout(() => ((spawnTimer = undefined), pump()), wait));
+    const t0 = performance.now();
     spawnQueue.shift()!();
     lastSpawn = performance.now();
+    starting += lastSpawn - t0;
     pump();
   };
   const later = (f: () => void, first = false) => (first ? spawnQueue.unshift(f) : spawnQueue.push(f), pump());
@@ -107,9 +120,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     let c = cases.get(key);
     if (!c) {
       slots.boundary();
-      const loop = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
-      loop.enable();
-      cases.set(key, (c = { loop, ordinals: new Map(), calls: {} }));
+      cases.set(key, (c = { lates: new Uint32Array(LATE_MAX_MS + 1), ordinals: new Map(), calls: {} }));
     }
     return c;
   }
@@ -267,10 +278,12 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   function endCase(run: string, id: string) {
     const c = cases.get(`${run}|${id}`);
     if (!c) return { loopP99Ms: 0, calls: {} };
-    c.loop.disable();
     cases.delete(`${run}|${id}`);
     flights.drop(`${run}|${id}`);
-    return { loopP99Ms: Math.max(0, c.loop.percentile(99) / 1e6 - LOOP_RESOLUTION_MS), calls: c.calls };
+    const n = c.lates.reduce((a, x) => a + x, 0);
+    let ms = 0;
+    for (let seen = c.lates[0]; seen < 0.99 * n; seen += c.lates[++ms]);
+    return { loopP99Ms: ms, calls: c.calls };
   }
 
   const status = () => ({ calls, cap, capReached: cap !== undefined && calls >= cap, evalInFlight: evalBusy, evalWaiting: evalWaiting.length, pools: pool.sizes(), slots: slots.status(), pace: slots.pace(), sameAccount: slots.sameAccount(), runs: Object.fromEntries([...runs].map(([k, r]) => [k, { ...r, cached: r.cached?.size }])) });
@@ -308,6 +321,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   return {
     url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     close() {
+      clearInterval(sampler);
       clearTimeout(spawnTimer);
       spawnQueue.length = 0;
       pool.closeAll();
