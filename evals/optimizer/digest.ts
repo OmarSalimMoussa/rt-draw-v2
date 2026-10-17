@@ -229,6 +229,8 @@ export type DigestInput = {
   runs?: string[];
   /** The failure analysts' answers, the ledger's one-liners, the tried index (title, component, diff hash, verdict). */
   failures?: string[]; ledger?: string[]; tried?: string[];
+  /** What the coordinator would drop unrun now (paused components, --quality-only, owner-only kinds). */
+  wont?: string[];
 };
 
 /** The analyst's input: champion misses first, then candidate losses, trace patterns, latency, failures, ledger, tried. */
@@ -243,7 +245,8 @@ export function analystDigest(o: DigestInput): string {
   const rest = fit(["# 3. The champion's traces", "Patterns:", ...report, "Latency by step (median):", ...spanMedians(spans)],
     [...(o.failures?.length ? ["# 4. Failure analysts", ...o.failures] : []), ...(o.ledger?.length ? ["# 5. Ledger", ...o.ledger] : []), ...(o.tried?.length ? ["# 6. Tried (don't repeat without saying what differs)", ...o.tried] : [])],
     budget(DIGEST.share.rest));
-  return [missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
+  const wont = o.wont?.length ? `# 0. What the loop won't run now (don't propose it)\n${o.wont.map((w) => `- ${w}`).join("\n")}` : undefined;
+  return [...(wont ? [wont] : []), missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
 }
 
 // ---- The failure analyst's digest: at most 12 cases in full

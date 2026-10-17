@@ -867,7 +867,7 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   const perDay = ((diskAtStart.gb - gb) / (Date.now() - diskAtStart.at)) * DAY;
   return {
     now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
-    blocked: st.blocked, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
+    blocked: st.blocked, emptyEpochs: st.emptyEpochs ?? 0, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
     daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
   };
 }
@@ -898,8 +898,15 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
   const ck = last && { run: last.run, champion: "B" as Arm };
   const run = `${st.stamp}-e${st.epoch}-analyst`;
   const notes = [...(await agents.championFailures(sha, run, ck)), ...st.lastRuns.flatMap((r) => maybe<agents.FailureNote[]>(runFile(r, "failures.json")) ?? [])];
+  // What the coordinator would drop unrun: told up front, so an epoch isn't spent on cards that can't be measured.
+  const wont = [
+    ...(st.paused.length ? [`paused until the next checkpoint (dry well): cards on ${st.paused.join(", ")}`] : []),
+    ...(o.f["quality-only"] ? ["latency-goal cards: this run is --quality-only (they wait for the PGX)"] : []),
+    ...(!hasU1() ? ["cards on the ink readers (marks, arrow, hit, link): no U1 set to check them on, they go to the owner"] : []),
+    "patch knobs, cost-raising changes, frozen areas and model switches: they go to the owner unmeasured",
+  ];
   const digest = analystDigest({
-    championSha: sha, checkpoint: ck, runs: st.lastRuns, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
+    championSha: sha, checkpoint: ck, runs: st.lastRuns, wont, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
     ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(),
   });
   const analysis = await engine().analyst(digest, run);
@@ -989,6 +996,9 @@ async function epoch(gw: string, st: State): Promise<boolean> {
   }
   await Promise.allSettled(built);
   if (stopped) return false;
+  // An epoch that decided nothing (no well-formed card, or every one dropped) pays the analyst and critic again for the
+  // same digest: §6.7's rules stop the loop after RULES.emptyEpochs of them in a row.
+  st.emptyEpochs = st.cards.some((c) => c.status === "done" && c.verdict !== "deferred") ? 0 : (st.emptyEpochs ?? 0) + 1;
   const rec = await epochRecord(gw, st, started, ck);
   say(`epoch ${st.epoch}: ${rec.decisions.length} decisions, ${rec.cost.calls} calls, $${rec.cost.listUsd.toFixed(2)} (${(100 * rec.cost.windowShare).toFixed(1)}% of a window), ${rec.minutes.total.toFixed(0)} min`);
   Object.assign(st, { epoch: st.epoch + 1, stamp: stampNow(), cards: [], lastRuns: st.cards.flatMap((c) => (c.run ? [c.run] : [])) });

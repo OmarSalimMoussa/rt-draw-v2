@@ -34,6 +34,8 @@ export type State = {
   /** Why the loop won't run (a sync conflict, a broken bridge contract): cleared by a successful sync. */
   blocked?: string;
   refreshQueued?: string; lastRefresh?: string; lastOwnerStep?: string;
+  /** Epochs in a row that decided nothing (§6.7's spin guard). */
+  emptyEpochs?: number;
   /** The night cap counts list $ since this moment; a new night starts 24 h later. */
   nightStart: string;
   lastRuns: string[];
@@ -107,6 +109,7 @@ export type Facts = {
   /** What a step threw, if it threw. */
   error?: string;
   blocked?: string;
+  emptyEpochs?: number;
   /** When product calls failed as overloaded (529). */
   overloads: number[];
   diskGb: number; daysLeft?: number; onAC?: boolean;
@@ -130,6 +133,7 @@ export function rules(f: Facts): Action[] {
   if (f.error && /call cap/.test(f.error)) out.push({ do: "stop", why: `the step's --cap is reached: ${f.error}` });
   if (f.error && /requested|\/api\/(tts|stt)/.test(f.error)) out.push({ do: "stop", why: `aborted: ${f.error}` });
   if (f.blocked) out.push({ do: "stop", why: `paused for the owner: ${f.blocked}` });
+  if ((f.emptyEpochs ?? 0) >= RULES.emptyEpochs) out.push({ do: "stop", why: `${f.emptyEpochs} epochs in a row decided nothing: the critic's cards were missing or all dropped (paused, --quality-only, owner-only)` });
   // A dry well: the optimizer keeps proposing what doesn't work.
   const since = f.recent.filter((d) => Date.parse(d.at) >= (f.checkpointAt ?? 0));
   if (last(RULES.revertsInRow, since)?.every((d) => d.verdict === "revert")) out.push({ do: "owner", why: `dry well: ${RULES.revertsInRow} reverts in a row` });
