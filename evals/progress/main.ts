@@ -309,7 +309,7 @@ function status(d: Data) {
   host.innerHTML = `<div class="strip"><b>${esc(state)}</b>${st.why ? `<span>${esc(st.why)}</span>` : ""}<span>phase: ${esc(st.phase ?? "-")}</span>
     <span>token ${slot ?? "-"}${use ? `: 5-hour ${use.fiveHour !== undefined ? pct(use.fiveHour) : "?"}, 7-day ${use.sevenDay !== undefined ? pct(use.sevenDay) : "?"}` : ""}</span>
     <span>heartbeat ${age === undefined ? "none" : ago(age)}</span><span>owner list: ${d.ownerOpen} open</span>
-    <span class="${disk && disk.freeGb < disk.ownerGb ? "bad" : ""}">${disk ? `disk ${disk.freeGb.toFixed(0)} GB free · ${disk.daysLeft === null ? "no growth last week, days left: plenty" : `~${disk.daysLeft.toFixed(0)} days left`} (to the ${disk.pauseGb} GB pause at last week's ${disk.weekGrowthGb.toFixed(1)} GB)` : "free disk: unknown here"}</span>
+    <span class="${disk && disk.freeGb < disk.ownerGb ? "bad" : ""}">${disk ? `disk ${disk.freeGb.toFixed(0)} GB free · ${disk.daysLeft === null || disk.daysLeft > 365 ? "days left: plenty" : `~${disk.daysLeft.toFixed(0)} days left`} (to the ${disk.pauseGb} GB pause at last week's ${disk.weekGrowthGb.toFixed(1)} GB)` : "free disk: unknown here"}</span>
     <span class="muted">history: ${esc(d.source)}${s.error ? ` · ${esc(s.error)}` : ""}</span></div>`;
   return running;
 }
