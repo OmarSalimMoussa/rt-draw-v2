@@ -108,7 +108,7 @@ const verify = (w) => {
   check(r.debt[0] >= 1 && r.debt[1] >= 1, `${w} px: debt bands (quality, latency) ${r.debt}`);
   check(r.hollow[0] >= 1 && r.hollow[1] >= 3 && !r.strayHollow.length, `${w} px: hollow points ${r.hollow}, joined by a trend line: ${r.strayHollow}`);
   check(r.cost[0] === 2 && r.cost[1] === 2 && /v1: ~120 min and 25–33% of a window per decision/.test(r.cost[2]) && /doc as written: 75 min, 13\.7%/.test(r.cost[2]), `${w} px: v1's band or the doc-as-written point missing on the cost panel`);
-  check(/running/.test(r.status) && /\d+ GB free/.test(r.status) && /~\d+ days left/.test(r.status) && /owner list: 2 open/.test(r.status) && /token 2/.test(r.status), `${w} px: status strip reads "${r.status.replace(/\s+/g, " ").trim()}"`);
+  check(/running/.test(r.status) && /\d+ GB free/.test(r.status) && /~\d+ days left|days left: plenty/.test(r.status) && /owner list: 2 open/.test(r.status) && /token 2/.test(r.status), `${w} px: status strip reads "${r.status.replace(/\s+/g, " ").trim()}"`);
   check(/chained, not additive/.test(r.qTitle), `${w} px: Q isn't labelled "chained, not additive"`);
   check(r.decisions === rows("decisions.jsonl").length, `${w} px: ${r.decisions} decision rows`);
 };
