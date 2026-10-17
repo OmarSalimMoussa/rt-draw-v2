@@ -61,6 +61,12 @@ for (const [line, why] of [['  const r = await fetch("https://example.com/x");',
   check(core([line]).verdict === "reject", `not refused: ${why}`);
 check(core(['  const r = await fetch("/api/model", { method: "POST", body });']).verdict === "pass", "a fetch to /api/model is refused");
 check(core(['  const settings = { attempt: t["draw.mapDepth"] };']).verdict === "pass", "a clean src/core change doesn't pass G0's diff checks");
+// The Sketchbook look: an outline set crisp in code, or asked for in a prompt, is the owner's; a knob read kept passes.
+const KNOB = '    roughness: st.roughness ?? knobs["render.roughness"],';
+for (const [file, added, removed] of [["src/core/render.ts", ["    roughness: 0,"], [KNOB]], ["src/core/picture.ts", ["    opts.strokeWidth = 1;"], []], ["src/core/ops.ts", ['      case "roughness": into.roughness = 0; break;'], []],
+  ["src/core/prompts.ts", ["Give every shape roughness:0 so it reads clean."], []], ["src/core/draw.ts", ["  const x = 1;"], ['  const r = t["picture.roughness"];']]])
+  check(verdict(diff(file, added, removed)).verdict === "owner", `a crisp outline in ${file} isn't an owner-list item: ${verdict(diff(file, added, removed)).reasons}`);
+check(verdict(diff("src/core/render.ts", [`${KNOB} // the shape's own style first`], [KNOB])).verdict === "pass", "a render edit that keeps the knob read isn't passed");
 
 // ---- G0 in a candidate tree: the typecheck with the bridge, and the scene round trip (0 calls)
 const tree = join(home, "trees", "cand");

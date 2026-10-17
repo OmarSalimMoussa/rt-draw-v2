@@ -173,11 +173,16 @@ const LOOK = /\b(FONT|BOARD|INK)\b/g;
 /** Knobs whose low values stop the page looking hand-drawn, and the share of today's default below which that's the owner's. */
 const HAND_DRAWN = ["render.roughness", "render.strokeWidth", "picture.roughness"];
 const HAND_DRAWN_MIN = 0.8;
+/** Where outlines get their wobble and width: set there other than from those knobs, the page can stop looking hand-drawn. */
+const OUTLINE_FILES = ["src/core/render.ts", "src/core/picture.ts", "src/core/ops.ts"];
+const OUTLINE_SET = /\b(roughness|strokeWidth)\s*(:|=(?!=))/;
 
 /**
  * The editor's look is never the loop's (the owner's hard rule), and only prompt text guarded it: render.ts' FONT, BOARD
- * and INK can't be redefined or dropped, no text gets a font of its own (the grid labels' monospace aside), and a
- * hand-drawn knob set under 0.8× today's value goes to the owner (a crisp page could win the craft judge).
+ * and INK can't be redefined or dropped, no text gets a font of its own (the grid labels' monospace aside), and these go
+ * to the owner (a crisp page could win the craft judge): a hand-drawn knob set under 0.8× today's value, an outline's
+ * roughness or width set in render.ts, picture.ts or ops.ts other than from its knob, a dropped read of one of those knobs, and
+ * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape).
  */
 export function lookGate(files: FileDiff[]): Finding[] {
   const out: Finding[] = [];
@@ -192,6 +197,14 @@ export function lookGate(files: FileDiff[]): Finding[] {
     const k = m && HAND_DRAWN.includes(m[1]) ? KNOBS.find((x) => x.key === m[1]) : undefined;
     if (k && Number(m![2]) < HAND_DRAWN_MIN * k.value) out.push({ verdict: "owner", why: `${k.key} ${m![2]} is under ${HAND_DRAWN_MIN}× today's ${k.value}: how hand-drawn the page looks is the owner's` });
   }
+  const knobRead = (l: string) => codeOf(l).strings.some((x) => HAND_DRAWN.includes(x));
+  for (const f of files.filter((x) => OUTLINE_FILES.includes(x.path)))
+    for (const l of f.added) if (OUTLINE_SET.test(codeOf(l).code) && !knobRead(l)) out.push({ verdict: "owner", why: `an outline's roughness or width set without its knob in ${f.path}: "${l.trim().slice(0, 120)}"` });
+  const core = files.filter((f) => f.path.startsWith("src/core/") && f.path !== "src/core/tuning.ts");
+  const reads = (ls: string[]) => ls.filter(knobRead).length;
+  if (reads(core.flatMap((f) => f.added)) < reads(core.flatMap((f) => f.removed))) out.push({ verdict: "owner", why: `a read of ${HAND_DRAWN.join(", ")} dropped: how hand-drawn the page looks is the owner's` });
+  for (const l of files.find((f) => f.path === "src/core/prompts.ts")?.added ?? [])
+    if (/rough|stroke.?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
   return out;
 }
 
