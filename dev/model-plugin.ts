@@ -22,6 +22,8 @@ const TIMEOUT_MS = 120_000;
 const MAX_KEYS = 6;
 /** Processes kept waiting for one key, at most. */
 const MAX_WARM = 4;
+/** A waiting process older than this is closed rather than trusted. */
+const MAX_WAIT_MS = 10 * 60_000;
 /** How each call is made, reported back with its stats so the pages can show it. */
 const settings = (effort: Effort, thinking: Thinking) => ({
   via: `Claude Agent SDK ${SDK_VERSION} (Claude Code) on the Claude subscription`,
@@ -60,7 +62,7 @@ g.__rtV2Pools = undefined;
 export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
   let token = "";
   let dataDir = "";
-  const pool = (g.__rtV2Pool ??= new Pool({ maxKeys: MAX_KEYS, maxWarm: MAX_WARM }));
+  const pool = (g.__rtV2Pool ??= new Pool({ maxKeys: MAX_KEYS, maxWarm: MAX_WARM, idleMs: MAX_WAIT_MS }));
   return {
     name: "model-api",
     apply: "serve",
@@ -115,12 +117,20 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
         const since = () => Math.round(performance.now() - t0);
         let firstMs: number | undefined;
         let waitMs: number | undefined;
-        const { proc, waiting, readyAtTake } = pool.take(key, keep, start1);
+        const taken = pool.take(key, keep, start1);
+        let proc = taken.proc;
         const timer = setTimeout(() => proc.q.close(), TIMEOUT_MS);
         res.on("close", () => !res.writableEnded && proc.q.close());
-        const head = { done: true, model: body.model, modelId: model, warm: waiting, readyAtTake, effort, thinking, settings: settings(effort, thinking) };
+        const head = { done: true, model: body.model, modelId: model, warm: taken.waiting, readyAtTake: taken.readyAtTake, effort, thinking, settings: settings(effort, thinking) };
         try {
-          await proc.ready;
+          // A waiting process whose start failed is replaced by a fresh one: the call never fails on a dead spare.
+          await proc.ready.catch((err) => {
+            if (!taken.waiting) throw err;
+            proc.q.close();
+            proc = start1();
+            Object.assign(head, { warm: false, readyAtTake: false });
+            return proc.ready;
+          });
           waitMs = since();
           const { text, stats } = await streamCall(proc, content, (chunk) => {
             firstMs ??= since();
