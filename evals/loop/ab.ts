@@ -33,6 +33,8 @@ import type {
 
 /** The first arm server's port; each further tree takes the next (spec §7.2: 5300 + 2k, 5301 + 2k). */
 const PORT = 5300;
+/** How often a slot sitting out a busy machine checks the load gate again. */
+const SIT_OUT_POLL_MS = 1000;
 /** The case files a run copies when a case's inputs aren't the bank's (the yardstick's bench copies). */
 export const INPUT_FILES = ["case.json", "input.json", "before.scene.json", "meant.json", "expectation.json", "readings.json", "before-ink.jpg"];
 
@@ -333,10 +335,14 @@ export function begin(rig: Rig, s: RunSpec) {
       let next = 0;
       let stop: unknown;
       const slot = async (k: number) => {
-        while (next < ids.length && !stop) {
+        for (let sitting = false; next < ids.length && !stop; ) {
           const gate = await beforeWave(s.loadWaitMs);
-          if (!gate.ok) appendLine(runFile(s.run, "load-gate.jsonl"), { ...gate.sample, at: new Date().toISOString(), slots: Math.max(1, rig.slots - 1) });
-          if (!gate.ok && k > 0 && k === rig.slots - 1) continue;
+          if (!gate.ok && !sitting) appendLine(runFile(s.run, "load-gate.jsonl"), { ...gate.sample, at: new Date().toISOString(), slots: Math.max(1, rig.slots - 1) });
+          // The top slot sits out a busy machine, polling: with a short gate wait (a check's 0) it spun and starved the run.
+          if ((sitting = !gate.ok && k > 0 && k === rig.slots - 1)) {
+            await new Promise((r) => setTimeout(r, SIT_OUT_POLL_MS));
+            continue;
+          }
           if (next >= ids.length || stop) return;
           const j = next++;
           try {
