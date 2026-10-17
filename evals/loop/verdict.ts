@@ -79,7 +79,7 @@ function qualityFloor(rows: Row[], debt: boolean, floor: number): { ok: boolean;
   const z = zOf(rows);
   if (debt) return { ok: z >= LOOP.qualDebtFloorZ, why: `quality debt: fidelity Z ${z.toFixed(2)} < ${LOOP.qualDebtFloorZ}` };
   const f = ratio(rows, (r, a) => r.work[a]) < LOOP.workMin ? Math.max(floor, LOOP.workFloorZ) : floor;
-  return { ok: z > f, why: `fidelity Z ${z.toFixed(2)} ≤ ${f}` };
+  return { ok: z >= f, why: `fidelity Z ${z.toFixed(2)} < ${f}` };
 }
 
 /** The latency veto (§1.4 item 2): either metric surely slower, and by more than LOOP.latVeto.est. */

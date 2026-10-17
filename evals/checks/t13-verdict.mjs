@@ -201,9 +201,11 @@ check(says(late[1], "revert") && late[1].counts.look === 80 && late[1].latency.t
 const qFast = (s) => decide({ tuning: rows(80, { class: "Q", lat: () => 0.85, s }), heldout: rows(16), exhausted: true }, LAT, STATE);
 check(says(qFast((i) => [1, -1, 0, 0][i % 4]), "keep"), "a faster Q card with fidelity holding isn't kept");
 check(says(qFast((i) => [-1, -1, 0, 1][i % 4]), "revert", /costs fidelity/) && qFast((i) => [-1, -1, 0, 1][i % 4]).counts.look === 32, "a faster Q card that clearly loses fidelity isn't reverted at look 32");
-check(says(qFast((i) => [1, -1, 0, 0][i % 4]), "keep") && qFast((i) => [1, -1, 0, 0][i % 4]).counts.look === 48, "a faster Q card with fidelity even is kept before look 48 (Z must clear 0 at 32)");
+// Even fidelity holds at look 32; one extra loss (Z −0.24 there) waits for look 48's −0.5.
+const oneLoss = (i) => (i === 2 ? -1 : [1, -1, 0, 0][i % 4]);
+check(qFast((i) => [1, -1, 0, 0][i % 4]).counts.look === 32 && says(qFast(oneLoss), "keep") && qFast(oneLoss).counts.look === 48, "a faster Q card's fidelity floor isn't Z ≥ 0 at look 32, ≥ −0.5 at 48");
 const qWork = (workB) => decide({ tuning: rows(80, { class: "Q", lat: () => 0.85, s: SLIGHT_LOSS, workB }), heldout: rows(16), exhausted: true }, LAT, STATE);
-check(says(qWork(() => 3), "keep") && says(qWork(() => 2), "revert", /≤ -0.5/), "a visible-work drop doesn't tighten the quality floor to −0.5 (N6)");
+check(says(qWork(() => 3), "keep") && says(qWork(() => 2), "revert", /< -0.5/), "a visible-work drop doesn't tighten the quality floor to −0.5 (N6)");
 
 // ---- Goal craft (N3)
 const CRAFT = card({ goal: "craft", component: "render" });
