@@ -88,11 +88,15 @@ export async function openRig(o: { trees: string[]; gateway: string; slots: numb
   async function open(slot: number, arm: Arm, tree: string): Promise<Tab> {
     const server = servers[arm === "B" ? trees.lastIndexOf(tree) : trees.indexOf(tree)];
     if (!server) throw new Error(`the rig doesn't serve ${tree}`);
-    const page = await chrome!.newPage(server.url, { run: "-", case: "-", arm, slot });
+    // A host of its own per tab (a0.localhost, b3.localhost: Chrome sends them to loopback, Vite allows them), so each
+    // tab gets Chrome's 6 connections per host the way one user's browser does. On one host an arm's tabs queued their
+    // /api/model streams behind each other: the PGX's ladder froze at 2 slots, with never more than 6 calls in flight.
+    const url = server.url.replace("127.0.0.1", `${arm.toLowerCase()}${slot}.localhost`);
+    const page = await chrome!.newPage(url, { run: "-", case: "-", arm, slot });
     const tab: Tab = { page, errors: [] };
     page.on("Runtime.exceptionThrown", ({ exceptionDetails: d }) => tab.errors.push(d.exception?.description ?? d.text));
     await page.send("Runtime.enable");
-    await page.goto(`${server.url}/evals/bridge/`);
+    await page.goto(`${url}/evals/bridge/`);
     await page.eval(UP);
     return tab;
   }
