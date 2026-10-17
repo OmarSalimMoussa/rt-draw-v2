@@ -111,7 +111,7 @@ export type Facts = {
   recent: Decided[];
   /** When the last checkpoint ran: a dry well counts only the decisions since (the checkpoint unpauses). */
   checkpointAt?: number;
-  /** The last readiness passed (at the harness's tag, within a day); calibration's outcome. */
+  /** The last readiness passed (at the harness's tag, within a day); calibration's outcome ("dry" on the fake API, whose judge is canned). */
   ready?: boolean; calib?: string;
   /** What a step threw, if it threw. */
   error?: string;
@@ -137,6 +137,8 @@ export function rules(f: Facts): Action[] {
   if (f.recent.at(-1)?.v9) out.push({ do: "stop", why: `a V9 invariant tripped in ${f.recent.at(-1)!.id}` });
   if (f.ready === false) out.push({ do: "stop", why: "readiness failed or is stale: rte ready --stub --mock-api" });
   if (f.calib === "stop") out.push({ do: "stop", why: "calibration failed with both frozen prompt variants: the judge prompt is the owner's to change" });
+  // §11 gates each step on the one before: no decision rests on a fidelity judge the owner's labels haven't passed.
+  else if (!["pass", "pass-no-craft", "dry"].includes(f.calib ?? "")) out.push({ do: "stop", why: `the judge isn't calibrated (${f.calib ?? "never checked"}): label at /evals/label/, then rte calib --check must pass` });
   if (f.error && /call cap/.test(f.error)) out.push({ do: "stop", why: `the step's --cap is reached: ${f.error}` });
   if (f.error && /requested|\/api\/(tts|stt)/.test(f.error)) out.push({ do: "stop", why: `aborted: ${f.error}` });
   if (f.blocked) out.push({ do: "stop", why: `paused for the owner: ${f.blocked}` });

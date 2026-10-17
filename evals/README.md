@@ -48,8 +48,8 @@ Also: `rte status` (slots, cap, cwd, node, launched, inhibitor), `rte decide <br
 funnel), `rte checkpoint --cap n`, `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`,
 `rte gc --trees`, `rte loop --resume` (a stale lock resumes by itself).
 
-A loop stops on §6.7's rules (night cap, weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration, a
-sync conflict, a blocked request), pauses on others (all slots past 0.90 until the earliest reset, overloads, disk,
+A loop stops on §6.7's rules (night cap, weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not
+passed, a sync conflict, a blocked request), pauses on others (all slots past 0.90 until the earliest reset, overloads, disk,
 battery) and writes each to the owner list. Mornings: `/evals/progress/`, `owner-list.md`, `budget.jsonl`.
 
 ## Rehearsing at 0 calls
@@ -76,7 +76,7 @@ rte aa --shared --cases 12
 rte bench freeze --heldout 8 --tuning 8            # smaller than B1's 32 + 32, for the rehearsal only
 bash evals/loop/launch.sh checkpoint --zero --cap 200 $F
 bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200 $F
-rte calib --fake-labels --mock-api http://127.0.0.1:5400; rte calib --check   # the judge's own verdicts (ties) as labels: "more"
+rte calib --fake-labels --mock-api http://127.0.0.1:5400; rte calib --check   # the judge's own verdicts (ties) as labels: "more" (on the fake API the loop waives calibration)
 bash evals/loop/launch.sh loop --epochs 1 --seed-cards evals/optimizer/seed-cards.json $F
 ```
 

@@ -967,7 +967,7 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   diskAtStart ??= { at: Date.now(), gb };
   const perDay = ((diskAtStart.gb - gb) / (Date.now() - diskAtStart.at)) * DAY;
   return {
-    now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
+    now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
     blocked: st.blocked, emptyEpochs: st.emptyEpochs ?? 0, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
     daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
   };

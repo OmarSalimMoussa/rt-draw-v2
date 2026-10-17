@@ -242,7 +242,7 @@ check(l2.status !== 0 && /chmod 600/.test(l2.stdout + l2.stderr), `a mode-644 to
 
 // ---- Every §6.7 rule on crafted facts.
 const T = Date.now();
-const base = { now: T, pace: { ok: true }, nightUsd: 0, nightCapUsd: 200, nightStart: T - 3600_000, recent: [], ready: true, overloads: [], diskGb: 500, onAC: true };
+const base = { now: T, pace: { ok: true }, nightUsd: 0, nightCapUsd: 200, nightStart: T - 3600_000, recent: [], ready: true, calib: "pass", overloads: [], diskGb: 500, onAC: true };
 const d = (verdict, o = {}) => ({ id: "x", verdict, component: "draw", at: new Date(T).toISOString(), ...o });
 const fires = {
   "slots spent → pause": [{ pace: { ok: false, pauseUntil: T + 5000 } }, "pause", /five-hour/],
@@ -253,6 +253,8 @@ const fires = {
   "V9 → stop": [{ recent: [d("void", { v9: true })] }, "stop", /V9/],
   "readiness → stop": [{ ready: false }, "stop", /readiness/],
   "calibration → stop": [{ calib: "stop" }, "stop", /calibration/],
+  "no passed calibration → stop": [{ calib: "more" }, "stop", /isn't calibrated/],
+  "never calibrated → stop": [{ calib: undefined }, "stop", /never checked/],
   "--cap reached → stop": [{ error: "call cap 40 reached" }, "stop", /--cap/],
   "a sync conflict → stop for the owner": [{ blocked: "sync: master conflicts" }, "stop", /paused for the owner/],
   "/api/tts → abort": [{ error: "run x aborted: a page requested http://127.0.0.1:5334/api/tts" }, "stop", /aborted/],
