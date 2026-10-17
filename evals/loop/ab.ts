@@ -439,7 +439,8 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
     for (;;) {
       const exhausted = taken >= order.length && !resumed.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
       const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.length }, d.card, d.state);
-      const over = (dec.verdict === "more" || dec.pending) && d.overrun?.([...rows, ...(heldout ?? []), ...(continuation ?? [])].filter((x) => !x.void).length + topUps);
+      // Measured from rows.jsonl: a resumed decision's finished cases count before they're read back, as their $ already do.
+      const over = (dec.verdict === "more" || dec.pending) && d.overrun?.(readRows(s.run).filter((x) => !x.void).length + topUps);
       if (over) return { ...done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] }), overrun: over };
       if (dec.verdict === "more") {
         // The next look counts live cases: voided ones are replaced from the order, then by top-ups.
