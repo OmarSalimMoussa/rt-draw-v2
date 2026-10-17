@@ -64,7 +64,7 @@ await L.rig.close();
 await L.gw.close(); // run.ts starts its own; the fake API stays
 writeFileSync(p.machine, JSON.stringify({ host: hostname(), arch: arch(), cores: cpus().length, at: new Date().toISOString(), slots: 2, dispatchLimitMs: 25, steps: [] }));
 git("-C", repo, "branch", "loop/champion", "HEAD");
-git("-C", repo, "branch", "master", "HEAD");
+git("-C", repo, "branch", "-f", "master", "HEAD"); // -f: a checkout on master hands its clone a master already (HEAD is detached)
 const owner = join(L.home, "owner");
 git("clone", "-q", "--branch", "master", repo, owner);
 execFileSync("cp", ["-al", join(ROOT, "node_modules"), join(owner, "node_modules")]);
