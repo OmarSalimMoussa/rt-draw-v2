@@ -57,8 +57,9 @@ check(evalHome() === join(homedir(), "rt-eval"), `the default home is ${evalHome
 process.env.RT_EVAL_HOME = home;
 
 // ---- config.ts: §1.6 verbatim (pinned by its hash), browser-safe, the same id in every process.
-// sha256 of LOOP and DRIVE_VIEW as spec §1.6 writes them (2026-10-16). Changing a frozen number is an era change: update this on purpose.
-const SPEC_CONFIG_ID = "b5eba112758efc874d8cfea8ac218f6d3811ce3bba07f3e5bd35043564c0449e";
+// sha256 of LOOP and DRIVE_VIEW as spec §1.6 writes them (2026-10-16), plus latFloorZ and latFutilityZ (2026-10-17, before
+// any run: a latency keep's fidelity floor by look). Changing a frozen number is an era change: update this on purpose.
+const SPEC_CONFIG_ID = "82867120cb4387e1ed1ae7e433bbaa1bb2164d44e0f4bb6943013a74a53ddf7d";
 const cfg = await import("../loop/config.ts");
 check(cfg.configId === SPEC_CONFIG_ID, "config.ts' LOOP or DRIVE_VIEW differ from spec §1.6");
 check(cfg.configId === sha(JSON.stringify({ LOOP: cfg.LOOP, DRIVE_VIEW: cfg.DRIVE_VIEW })), "configId isn't sha256(JSON.stringify({ LOOP, DRIVE_VIEW }))");
