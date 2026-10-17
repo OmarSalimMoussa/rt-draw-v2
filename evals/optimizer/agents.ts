@@ -28,10 +28,12 @@ const TOOLS = { critic: ["Read", "Grep", "Glob"], engineer: ["Read", "Edit", "Wr
 /**
  * The engineer's whole Bash commands (never npx: with no local TypeScript it fetches the unrelated package
  * "tsc"). No "..", no absolute paths, no output files (tune.ts --out, git diff --output), no synthetic-ink tuning (--allow-synth).
+ * tune.ts imports the engineer's own src/core: it runs under node's permission model, reading the worktree only, writing
+ * nothing (evals/, the tokens file) and spawning nothing.
  */
 export const BASH_ALLOW = [
   /^\.\/node_modules\/\.bin\/tsc --noEmit$/,
-  /^node --import \.\/evals\/loop\/node-hooks\.mjs scripts\/tune\.ts(?!.*\.\.)( (?![-/])[\w./-]+| --parts [\w,]+)+$/,
+  /^node --permission --allow-fs-read=\. --import \.\/evals\/loop\/node-hooks\.mjs scripts\/tune\.ts(?!.*\.\.)( (?![-/])[\w./-]+| --parts [\w,]+)+$/,
   /^git (status|diff)(?!.*\.\.)( --(stat|short|name-only)| src\/core\/[\w./-]*)*$/,
 ];
 

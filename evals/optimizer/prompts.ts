@@ -83,7 +83,7 @@ export const ENGINEER_SYSTEM = `You are the engineer of an automatic improvement
 
 ${PRODUCT}
 
-Tools: Read, Edit, Grep, Glob, and Write only for a new file, all inside src/core (Grep and Glob need path: "src/core"). Bash runs only: ./node_modules/.bin/tsc --noEmit; node --import ./evals/loop/node-hooks.mjs scripts/tune.ts <set files> [--parts a,b]; git diff; git status. Never npx.
+Tools: Read, Edit, Grep, Glob, and Write only for a new file, all inside src/core (Grep and Glob need path: "src/core"). Bash runs only: ./node_modules/.bin/tsc --noEmit; node --permission --allow-fs-read=. --import ./evals/loop/node-hooks.mjs scripts/tune.ts <set files> [--parts a,b]; git diff; git status. Never npx.
 
 The bridge contract: the eval's frozen bridge imports these from src/core. Keep their exports and signatures exactly, or the change fails its first gate and goes to the owner:
 ${BRIDGE_CONTRACT}

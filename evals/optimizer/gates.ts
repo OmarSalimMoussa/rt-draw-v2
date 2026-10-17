@@ -150,7 +150,7 @@ export function lint(files: FileDiff[]): Finding[] {
 /** Words of an identifier: camelCase, PascalCase and snake_case split. */
 const wordsOf = (id: string) => id.split(/_|(?<=[a-z\d])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/).map((w) => w.toLowerCase());
 
-/** No voice and no new network: fetch( only to /api/model, no other endpoint, no tts, stt or Scribe identifier. */
+/** No voice and no new network: fetch( only to /api/model, no other endpoint, no tts, stt or Scribe identifier, no path into evals/. */
 export function networkGate(files: FileDiff[]): Finding[] {
   return files.flatMap((f) => f.added.flatMap((line): Finding[] => {
     const { code, strings } = codeOf(line);
@@ -162,6 +162,8 @@ export function networkGate(files: FileDiff[]): Finding[] {
     if (endpoint) out.push({ verdict: "reject", why: `new endpoint ${endpoint} ${at}` });
     const speech = (code.match(/[A-Za-z_$][\w$]*/g) ?? []).find((id) => wordsOf(id).some((w) => SPEECH_WORDS.has(w)));
     if (speech) out.push({ verdict: "reject", why: `speech identifier ${speech} ${at}` });
+    // The harness imports src/core in node: product code that reached into evals/ could rewrite the measuring side.
+    if (strings.some((x) => /(^|\/)evals\//.test(x))) out.push({ verdict: "reject", why: `product code naming the frozen evals/ ${at}` });
     return out;
   }));
 }
@@ -203,9 +205,13 @@ for (const f of files) {
 }
 console.log(JSON.stringify({ loaded: files.length - failed.length, failed }));`;
 
-/** The banked before-scenes through the tree's Scene.fromJSON and back (R4's round trip). */
+/**
+ * The banked before-scenes through the tree's Scene.fromJSON and back (R4's round trip). The candidate's code runs under
+ * node's permission model: it reads its tree and the scenes, writes nothing (evals/, the tokens file) and spawns nothing.
+ */
 export function sceneRoundTrip(tree: string, files: string[]): { loaded: number; failed: string[] } {
-  const r = spawnSync(process.execPath, ["--import", join(tree, "evals/loop/node-hooks.mjs"), "--input-type=module", "-e", ROUND_TRIP, pathToFileURL(join(tree, "src/core/scene.ts")).href],
+  const reads = [tree, ...new Set(files.map((f) => dirname(dirname(f))))].map((d) => `--allow-fs-read=${d}`);
+  const r = spawnSync(process.execPath, ["--permission", ...reads, "--import", join(tree, "evals/loop/node-hooks.mjs"), "--input-type=module", "-e", ROUND_TRIP, pathToFileURL(join(tree, "src/core/scene.ts")).href],
     { cwd: tree, input: JSON.stringify(files), encoding: "utf8", env: env(), maxBuffer: 16 << 20 });
   try {
     return JSON.parse(r.stdout.trim().split("\n").at(-1)!);
