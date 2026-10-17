@@ -92,13 +92,13 @@ export async function probe(ctx: DriveCtx, page: Page): Promise<Probe> {
   const saw = [good?.saw ?? "", bad?.saw ?? ""];
   if (!saw.every((s) => /pink/i.test(s))) why.push("its saw missed the pink nav");
 
-  // The spread: the same screen, another ask each time; what it marks first, and whether its words ask that.
+  // The spread: the same screen, another ask each time; the first shape its marks point at, and whether its words ask that.
   const targets = new Set<string>(), asks = new Set<AskType>();
   for (const [i, a] of SPREAD.entries()) {
     const t = await turn(`probe-spread-${i + 1}`, userMessage(card, [], undefined, a, 3), [before, before]);
     if (!t) continue;
     const tl = synthesize(t.steps as Step[], { mess: 0, disfluency: 0 }, i + 1, { view: start });
-    const first = readingsOf(plain, { camera: start, words: tl.words, strokes: tl.strokes, enterAtMs: 0, inputHash: "" } satisfies CaseInput, []).marks[0]?.targets[0];
+    const first = readingsOf(plain, { camera: start, words: tl.words, strokes: tl.strokes, enterAtMs: 0, inputHash: "" } satisfies CaseInput, []).marks.flatMap((m) => m.targets)[0];
     if (first) targets.add(first);
     if (ASK_WORDS[a].test(`${tl.spoken} ${t.meant}`)) asks.add(a);
   }
