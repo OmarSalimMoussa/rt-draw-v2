@@ -1041,6 +1041,8 @@ function limiter(n: number) {
 }
 
 async function loop() {
+  // --cap bounds gateway calls only: the critic and engineers would run on the owner's own token past it.
+  if (o.devToken) throw new Error("--dev-token is for capped smoke, bake and decide runs: the loop's agent sessions aren't under --cap");
   refuseFactorySlice();
   const held = lock(); // first: a second loop refuses before it touches anything
   const stopBeat = heartbeat((gap) => (suspends.push(Date.now()), say(`loop: a ${Math.round(gap / 1000)}-s suspend: the decision in flight is voided`)));

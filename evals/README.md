@@ -26,7 +26,7 @@ bash evals/loop/launch.sh stop
 
 Tokens: `~/.config/rt-eval/tokens.env` (chmod 600, outside every repo) with `RT_EVAL_TOKEN_1..3=…`, three loop
 accounts. `run.ts` reads it itself and never prints a token; one or two tokens work (a warning; the smoke skips U2).
-`--dev-token` uses the dev plugin's own token from `~/projects/rt-draw-v2/.env`, only with `--cap 60` or less.
+`--dev-token` uses the dev plugin's own token from `~/projects/rt-draw-v2/.env`, only with `--cap 60` or less, and never for `loop` (its critic and engineers run outside the cap).
 
 | Step (§11) | Command | Calls |
 |---|---|---|
