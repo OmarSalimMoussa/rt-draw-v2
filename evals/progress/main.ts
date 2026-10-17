@@ -7,7 +7,7 @@
 import { openModal } from "../../src/modal.ts";
 import { $, shell } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, Era, HealthRow, Lat, Marker } from "../loop/types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, Era, HealthRow, Lat, Marker, SmokeRow } from "../loop/types.ts";
 import { type Dot, type Frame, INK, type XY, frame, legend } from "./charts.ts";
 
 shell("", "Eval progress: what the loop kept and reverted, quality against a frozen anchor on cases no decision sees, latency, and what it cost against v1. Read from the eval/history branch; no model call.");
@@ -43,6 +43,7 @@ function parse(h: History) {
     source: h.source, status: h.status,
     epochs: rowsOf<EpochRow>(f["epochs.jsonl"]), decisions: rowsOf<DecisionRow>(f["decisions.jsonl"]), checkpoints: rowsOf<CheckpointRow>(f["checkpoints.jsonl"]),
     budget: rowsOf<BudgetRow>(f["budget.jsonl"]), health: rowsOf<HealthRow>(f["health.jsonl"]), markers: rowsOf<Marker>(f["markers.jsonl"]),
+    smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]),
     anchors: json<Anchor>("anchors.json"), eras: json<Era>("eras.json"),
     /** Open owner-list items: unchecked markdown tasks. */
     ownerOpen: (f["owner-list.md"]?.match(/^\s*- \[ \]/gm) ?? []).length,
@@ -69,7 +70,7 @@ function xAxis(d: Data) {
     for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) return pts[i - 1][1] + (t - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]);
     return pts.at(-1)![1] + Math.min(0.5, (t - pts.at(-1)![0]) / gap);
   };
-  const xs = [...pts.map((p) => p[1]), ...d.checkpoints.map((c) => at(c.at))];
+  const xs = [...pts.map((p) => p[1]), ...d.checkpoints.map((c) => at(c.at)), ...d.smokes.map((s) => at(s.at))];
   const range: [number, number] = [Math.min(0, ...xs) - 0.3, Math.max(1, ...xs) + 0.3];
   const ticks = d.epochs.map((e) => ({ at: e.epoch, label: `e${e.epoch}` }));
   return { at, range, ticks };
@@ -149,7 +150,10 @@ function quality(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   const host = card("quality", true);
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
   const all = cks.map((c) => c.share.all!).filter(Boolean);
-  const f = frame(host, { title: "Quality: the champion's share against the current anchor (90% band)", height: 280, x: x.range, y: [Math.max(0, Math.min(0.4, ...all.map((s) => s.lo90)) - 0.04), Math.min(1, Math.max(0.6, ...all.map((s) => s.hi90)) + 0.06)], xTicks: x.ticks, yFormat: (v) => v.toFixed(2) });
+  const smokes = d.smokes.filter((s) => s.share !== undefined);
+  const f = frame(host, { title: "Quality: the champion's share against the current anchor (90% band)", height: 280, x: x.range, y: [Math.max(0, Math.min(0.4, ...all.map((s) => s.lo90), ...smokes.map((s) => s.share!)) - 0.04), Math.min(1, Math.max(0.6, ...all.map((s) => s.hi90), ...smokes.map((s) => s.share!)) + 0.06)], xTicks: x.ticks, yFormat: (v) => v.toFixed(2) });
+  // The smoke is the champion against itself on 2 cases: a first point, never a trend.
+  for (const s of smokes) f.point(x.at(s.at), s.share!, `smoke: B's share ${s.share!.toFixed(2)} on ${s.cases} cases`, { point: "smoke" });
   f.hline(0.5, "0.5: as good as the anchor");
   debt(f, cks, x, (c) => c.quality.debt, "quality debt", "quality");
   const toAnchor = (e: Ev, y: number) => (e.kind === "anchor" ? 0.5 : e.era?.bridge ? sigmoid(logit(y) + e.era.bridge.step.Q) : y);
@@ -190,7 +194,7 @@ function chainedQ(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
 function latency(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   const host = card("latency", true);
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
-  const ms = cks.flatMap((c) => [c.latency.champion.ttfcP50, c.latency.champion.ttfcP75, c.latency.champion.ttdP50, c.latency.anchor.ttfcP50]);
+  const ms = [...cks.flatMap((c) => [c.latency.champion.ttfcP50, c.latency.champion.ttfcP75, c.latency.champion.ttdP50, c.latency.anchor.ttfcP50]), ...d.smokes.flatMap((s) => [s.ttfcP50, s.ttdP50].filter((v): v is number => v !== undefined))];
   const ratios = cks.map((c) => c.latency.chainedTtfc);
   const f = frame(host, { title: "Latency: TTFC and TTD in ms (log), chained TTFC ratio against A0 on the right", height: 280, x: x.range, y: [Math.min(GOAL_TTFC_MS, ...ms) * 0.8, Math.max(...ms, 2000) * 1.25], log: true, y2: [0, Math.max(1.2, ...ratios)], xTicks: x.ticks, yFormat: (v) => (v >= 1000 ? `${v / 1000}s` : `${v}`), y2Format: (v) => `×${v.toFixed(1)}` });
   f.hline(GOAL_TTFC_MS, "goal: TTFC 1.0 s (display only)", { goal: "ttfc" });
@@ -207,6 +211,7 @@ function latency(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   ];
   lines.forEach(([name, get, color, k, s], i) => stepped(f, trusted.map((c) => ({ x: x.at(c.at), y: get(c), id: c.id })), evs, step(k), { color, width: i ? 1.5 : 2.5, ...s, data: { series: name } }, i === 0));
   f.dots(cks.map((c) => ({ x: x.at(c.at), y: c.latency.champion.ttfcP50, id: c.id, hollow: c.trust === "amber" || c.machine === "laptop" })), INK);
+  for (const s of d.smokes) for (const [k, v] of [["TTFC", s.ttfcP50], ["TTD", s.ttdP50]] as const) if (v !== undefined) f.point(x.at(s.at), v, `smoke ${k} p50 ${(v / 1000).toFixed(1)} s`, { point: "smoke" });
   ticks(f, d, x);
   legend(host, lines.map(([n, , c, , s]) => [n, c, s.dash]));
 }
@@ -220,8 +225,8 @@ function cost(d: Data, x: ReturnType<typeof xAxis>) {
   const [a, ...cells] = [0, 1, 2].map(() => trio.appendChild(document.createElement("div")));
   const groupOf = (role: string) => GROUPS.find(([, , re]) => re.test(role))?.[0] ?? "product";
   const byGroup = d.epochs.map((e) => Object.fromEntries(GROUPS.map(([g]) => [g, Object.entries(e.cost.byRole).filter(([r]) => groupOf(r) === g).reduce((a, [, v]) => a + v.usd, 0)])));
-  const maxUsd = Math.max(1, ...d.epochs.map((e) => e.cost.listUsd));
-  const maxMin = Math.max(1, ...d.epochs.map((e) => e.minutes.total));
+  const maxUsd = Math.max(1, ...d.epochs.map((e) => e.cost.listUsd), ...d.smokes.map((s) => s.listUsd));
+  const maxMin = Math.max(1, ...d.epochs.map((e) => e.minutes.total), ...d.smokes.map((s) => s.minutes));
   const fa = frame(a, { title: "List $ per epoch by role group, minutes on the right", height: 230, x: x.range, y: [0, maxUsd * 1.15], y2: [0, maxMin * 1.15], xTicks: x.ticks, yFormat: (v) => `$${v}`, y2Format: (v) => `${v}m` });
   d.epochs.forEach((e, i) => {
     let y = 0;
@@ -231,6 +236,7 @@ function cost(d: Data, x: ReturnType<typeof xAxis>) {
     }
   });
   fa.line(d.epochs.map((e) => [e.epoch, e.minutes.total]), { color: INK, width: 1.5, dash: true, right: true, data: { series: "minutes" } });
+  for (const s of d.smokes) fa.point(x.at(s.at), s.listUsd, `smoke $${s.listUsd.toFixed(2)}, ${s.calls} calls, ${s.minutes.toFixed(1)} min`, { point: "smoke" });
   legend(a, [...GROUPS.map(([g, c]) => [g, c] as [string, string]), ["minutes", INK, true]]);
   const perDecision = (e: EpochRow) => Math.max(1, e.decisions.length);
   const perDecisionCharts = [

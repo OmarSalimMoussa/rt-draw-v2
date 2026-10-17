@@ -14,7 +14,7 @@ import { paths } from "../loop/paths.ts";
 import type { Arm, Packet } from "../loop/types.ts";
 
 /** The tracked files the progress page reads (§5.3), plus the owner list for its open count. */
-export const HISTORY_FILES = ["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "health.jsonl", "anchors.json", "eras.json", "markers.jsonl", "owner-list.md"];
+export const HISTORY_FILES = ["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "health.jsonl", "anchors.json", "eras.json", "markers.jsonl", "smoke.jsonl", "owner-list.md"];
 /** What /api/eval/file may serve: run files, banked cases, the reply cache and its images, digests. */
 const SERVED_DIRS = ["runs", "bank", "cache", "digests"];
 /** Disk growth is re-measured at most this often: it walks cache/, runs/ and trees/. */

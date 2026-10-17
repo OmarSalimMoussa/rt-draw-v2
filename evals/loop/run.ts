@@ -419,9 +419,25 @@ const parses = (t: string) => {
   }
 };
 
+const smokeCalls = (run: string) => readMeter(paths().calls).filter((l): l is MeterCall => !("agent" in l) && l.run.startsWith(run) && l.mode === "live" && l.shared !== "follower");
+/** The smoke's point on the progress page (smoke.jsonl), from its meter lines and its A/B's rows. */
+export function recordSmoke(run: string, pass: boolean, started: number, ended = Date.now()) {
+  const live = smokeCalls(run);
+  const rows = readRows(`${run}-ab`).filter((r) => !r.void);
+  const p50 = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : undefined);
+  openHistory();
+  historyAdd("smoke.jsonl", {
+    at: new Date(ended).toISOString(), run, pass, calls: live.length, listUsd: live.reduce((a, l) => a + l.listUsd, 0), minutes: (ended - started) / 60_000, cases: rows.length,
+    share: rows.length ? rows.reduce((a, r) => a + (r.s + 1) / 2, 0) / rows.length : undefined,
+    ttfcP50: p50(rows.flatMap((r) => r.ttfc.filter((v): v is number => v !== null))), ttdP50: p50(rows.flatMap((r) => r.ttd)),
+  });
+  commitHistory(`smoke: ${pass ? "ok" : "FAIL"}, ${live.length} calls`);
+}
+
 /** §11 step 1, pinned to the blank start: every line must pass. */
 async function smoke() {
   needCap();
+  const started = Date.now();
   const champ = championArm();
   const run = `smoke-${stampNow()}`;
   let fails = 0;
@@ -468,7 +484,7 @@ async function smoke() {
       line(r.rows.length === ids.length && r.rows.every((x) => !x.void) && ids.every((id) => existsSync(join(caseDir(ab, id), "judge", "fidelity-1.json"))), `unshared A/B: ${r.rows.length} cases, judged${r.rows.some((x) => x.void) ? `, voided: ${r.rows.map((x) => x.void).filter(Boolean).join("; ")}` : ""}`);
     });
   });
-  const live = readMeter(paths().calls).filter((l): l is MeterCall => !("agent" in l) && l.run.startsWith(run) && l.mode === "live" && l.shared !== "follower");
+  const live = smokeCalls(run);
   line(live.some((l) => l.fiveHour !== undefined && l.fiveHour !== null) || "note", `U1: ${live.filter((l) => l.fiveHour != null).length} of ${live.length} calls carried five-hour utilization (none: the meter uses the W estimate)`);
   line(live.every((l) => l.cacheWrite1h === 0), `cacheWrite1h 0 on all ${live.length} calls`);
   line(live.every((l) => !!l.servedModel), `served models: ${[...new Set(live.map((l) => l.servedModel))].join(", ")}`);
@@ -477,6 +493,7 @@ async function smoke() {
   const conf = paths().claudeConfig;
   const cached = (existsSync(conf) ? readdirSync(conf, { recursive: true, withFileTypes: true }) : []).filter((e) => e.isFile() && /"emailAddress"\s*:\s*"[^"]/.test(readFileSync(join(e.parentPath, e.name), "utf8")));
   line(readyOk() && !cached.length, `no email: readiness (R3) ${readyOk() ? "passed" : "not passed"} at this tag, ${cached.length} Claude config files cache an account email`);
+  recordSmoke(run, !fails, started);
   say(`smoke: ${fails ? `FAIL (${fails} lines)` : "ok"}, ${live.length} calls`);
   return fails ? 1 : 0;
 }

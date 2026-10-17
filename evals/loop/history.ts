@@ -14,7 +14,7 @@ import { readRows } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { runFile, voidPath } from "./record.ts";
 import { clusteredZ } from "./stats.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, Era, HealthRow, HypothesisCard, Lat, Marker, Ratio, Row, RunInfo } from "./types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, Era, HealthRow, HypothesisCard, Lat, Marker, Ratio, Row, RunInfo, SmokeRow } from "./types.ts";
 import type { Decision } from "./verdict.ts";
 
 export const BRANCH = "eval/history";
@@ -84,7 +84,7 @@ export function commitHistory(message: string): string | undefined {
 
 // ---- The files of §5.3
 
-type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker };
+type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker; "smoke.jsonl": SmokeRow };
 /** anchors.json: each anchor once frozen (§5.2); `tuning` when the champion was a commit plus knobs. */
 export type Anchor = { id: string; sha: string; Q: number; latency?: Lat; tuning?: Record<string, number> };
 type Whole = { "anchors.json": Anchor[]; "eras.json": Era[] };
