@@ -27,7 +27,7 @@ token with `--dev-token` (only with `--cap 60` or less); the bank and everything
 # a) private GitHub repo (v1's way, the spec's default)
 git -C ~/projects/rt-draw-v2 remote add origin git@github.com:OmarSalimMoussa/rt-draw-v2.git && git -C ~/projects/rt-draw-v2 push -u origin master
 # b) a bare repo on the PGX over Tailscale, no GitHub
-ssh thinkstationpgx-0eea 'git init --bare ~/git/rt-draw-v2.git' && git -C ~/projects/rt-draw-v2 remote add pgx thinkstationpgx-0eea:git/rt-draw-v2.git && git -C ~/projects/rt-draw-v2 push pgx master
+ssh omar-salim-moussa@thinkstationpgx-0eea 'git init --bare ~/git/rt-draw-v2.git' && git -C ~/projects/rt-draw-v2 remote add pgx omar-salim-moussa@thinkstationpgx-0eea:git/rt-draw-v2.git && git -C ~/projects/rt-draw-v2 push pgx master
 ```
 
 **Every shell that runs a step** (laptop; the PGX adds the PATH line):
@@ -72,7 +72,7 @@ refused by §2.3 → build again with more sessions (only new ones run) or `rte 
 ## 2. The PGX (latency decisions and nights)
 
 ```bash
-ssh -t thinkstationpgx-0eea tmux attach -t rt          # launch.sh opens window `loop` in session rt
+ssh -t omar-salim-moussa@thinkstationpgx-0eea tmux attach -t rt          # launch.sh opens window `loop` in session rt
 export PATH=$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH RT_EVAL_HOME=$HOME/rt-eval
 rte() { node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@"; }
 git clone git@github.com:OmarSalimMoussa/rt-draw-v2.git ~/projects/rt-draw-v2   # or: git clone ~/git/rt-draw-v2.git ~/projects/rt-draw-v2
@@ -92,7 +92,7 @@ same commands without `--quality-only`. A bank built on the laptop moves over in
 
 ```bash
 # laptop
-cd ~/rt-eval/repo && rte export thinkstationpgx-0eea
+cd ~/rt-eval/repo && rte export omar-salim-moussa@thinkstationpgx-0eea
 # PGX
 cd ~/rt-eval/repo && rte init --refresh && rte ready --stub --mock-api
 ```
@@ -141,7 +141,7 @@ The loop never touches your checkout. Merge when you choose, right after a sync 
 ```bash
 cd ~/rt-eval/repo && rte sync --cap 750                     # only when master moved since the last sync (~$5)
 git -C ~/projects/rt-draw-v2 fetch ~/rt-eval/repo loop/champion && git -C ~/projects/rt-draw-v2 merge --ff-only FETCH_HEAD
-# champion on the PGX: git -C ~/projects/rt-draw-v2 fetch thinkstationpgx-0eea:rt-eval/repo loop/champion && git -C ~/projects/rt-draw-v2 merge --ff-only FETCH_HEAD
+# champion on the PGX: git -C ~/projects/rt-draw-v2 fetch omar-salim-moussa@thinkstationpgx-0eea:rt-eval/repo loop/champion && git -C ~/projects/rt-draw-v2 merge --ff-only FETCH_HEAD
 ```
 
 `--ff-only` refusing means master has commits the champion lacks: `rte sync` first.
