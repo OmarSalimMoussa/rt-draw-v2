@@ -16,6 +16,8 @@ champion into his master when he chooses. The spec is `evalprep/work/spec/SPEC.m
 
 ## Running it
 
+The step-by-step commands with caps, costs and times, laptop and PGX, are in `evals/RUNBOOK.md`.
+
 From the loop's clone (`~/rt-eval/repo`) or the owner's checkout:
 
 ```bash
