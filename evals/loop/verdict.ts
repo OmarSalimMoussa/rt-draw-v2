@@ -74,11 +74,14 @@ const rateRise = (rows: Row[], f: (r: Row, arm: 0 | 1) => number, of: (r: Row, a
 };
 const x2 = (r: Ratio) => `×${r.est.toFixed(3)} (lo95 ${r.lo95.toFixed(3)}, hi90 ${r.hi90.toFixed(3)})`;
 
-/** The fidelity floor a craft or latency keep must clear: tighter when visible work fell (N6) or in quality debt. */
+/**
+ * The fidelity floor a craft or latency keep must clear: tighter when visible work fell (N6), at look 32 or before (with
+ * so few cases the −1.0 floor kept a ×0.85 latency win that lost fidelity at a .40 share 65% of the time), or in quality debt.
+ */
 function qualityFloor(rows: Row[], debt: boolean): { ok: boolean; why: string } {
   const z = zOf(rows);
   if (debt) return { ok: z >= LOOP.qualDebtFloorZ, why: `quality debt: fidelity Z ${z.toFixed(2)} < ${LOOP.qualDebtFloorZ}` };
-  const floor = ratio(rows, (r, a) => r.work[a]) < LOOP.workMin ? LOOP.workFloorZ : LOOP.qualityFloorZ;
+  const floor = ratio(rows, (r, a) => r.work[a]) < LOOP.workMin || rows.length <= LOOP.looks[1] ? LOOP.workFloorZ : LOOP.qualityFloorZ;
   return { ok: z > floor, why: `fidelity Z ${z.toFixed(2)} ≤ ${floor}` };
 }
 
