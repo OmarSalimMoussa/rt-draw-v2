@@ -13,7 +13,7 @@ import { DEFAULTS, type Tuning, tune, tuningId } from "../../src/core/tuning.ts"
 import { boardStage } from "../../src/boardStage.ts";
 import { applyPictures } from "../fixtures/fixtures.ts";
 import { LOOP, sha256 } from "../loop/config.ts";
-import type { RtEval, SpanJSON } from "../loop/types.ts";
+import type { OpRecord, RtEval, SpanJSON } from "../loop/types.ts";
 import { drawInk } from "./ink.ts";
 import { watch } from "./timing.ts";
 
@@ -99,20 +99,28 @@ const rtEval: RtEval = {
     const enterAt = performance.now();
     const r0 = renders;
     let ttloAt: number | undefined;
-    const { result, pics } = await send(scene, { words: i.words, strokes: i.strokes }, tuning, {
-      draw,
-      setView: st.setView,
-      // TTLO: the frame after the last applied op, the product's own hook (informational, never gated).
-      onOp: (r) => r.ok && !r.camera && requestAnimationFrame(() => (ttloAt = performance.now())),
-    }, st.view());
+    const applied: OpRecord[] = [];
+    // A send that throws (a candidate's runtime error, a failed resolver call) is the arm's own failure, shown
+    // as its result: the runner must never lose the case, or its process, to it.
+    let sent: Awaited<ReturnType<typeof send>> | undefined, thrown: string | undefined;
+    try {
+      sent = await send(scene, { words: i.words, strokes: i.strokes }, tuning, {
+        draw,
+        setView: st.setView,
+        // TTLO: the frame after the last applied op, the product's own hook (informational, never gated).
+        onOp: (r) => (applied.push(r), r.ok && !r.camera && requestAnimationFrame(() => (ttloAt = performance.now()))),
+      }, st.view());
+    } catch (err) {
+      thrown = `the send threw: ${err instanceof Error ? err.message : String(err)}`;
+    }
     const sentAt = performance.now();
     await quiesce(enterAt);
     const t = clock.measure(before, enterAt);
     return {
-      ops: result.ops.map(({ line, ok, error, ms }) => ({ line, ok, error, ms })),
-      reply: result.reply,
-      error: result.error,
-      pics,
+      ops: (sent?.result.ops ?? applied).map(({ line, ok, error, ms }) => ({ line, ok, error, ms })),
+      reply: sent?.result.reply ?? "",
+      error: sent?.result.error ?? thrown,
+      pics: sent?.pics,
       camera: st.view(),
       after: structuredClone(scene.toJSON()),
       // A send that changes nothing has its end as TTD, so doing nothing never reads as fast.
