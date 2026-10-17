@@ -228,17 +228,22 @@ function healthOf(run: string, rows: Row[], bench: Map<string, BenchCase>): Chec
 
 /**
  * §2.8's distribution check: the drivers' B1 sends against the owner's U1 ones, as means per send (words, marks,
- * pointing words with a mark, each mark kind's share, each ask type the words name). Undefined without a U1.
+ * pointing words with a mark, each mark kind's share, each ask type the words name). Undefined without a U1. A case
+ * it can't read (a scene from before Scene.toJSON's version) is left out: a reported figure never stops a checkpoint.
  */
 export function realismOf(cases: BenchCase[]): CheckpointRow["realism"] {
   const of = (c: BenchCase) => {
-    const input = json<CaseInput>(join(c.dir, "input.json"));
-    const said = typeof input.words === "string" ? input.words : input.words.map((w) => w.word).join(" ");
-    const hits = new HitIndex(Scene.fromJSON(json(join(c.dir, "before.scene.json"))));
-    const marks = groupStrokes(input.strokes).map((m) => readMark(m, hits).kind as string);
-    return { said, words: said.split(/\s+/).filter(Boolean).length, marks };
+    try {
+      const input = json<CaseInput>(join(c.dir, "input.json"));
+      const said = typeof input.words === "string" ? input.words : input.words.map((w) => w.word).join(" ");
+      const hits = new HitIndex(Scene.fromJSON(json(join(c.dir, "before.scene.json"))));
+      const marks = groupStrokes(input.strokes).map((m) => readMark(m, hits).kind as string);
+      return [{ said, words: said.split(/\s+/).filter(Boolean).length, marks }];
+    } catch {
+      return [];
+    }
   };
-  const [driver, human] = [cases.filter((c) => c.bench !== "U1").map(of), cases.filter((c) => c.bench === "U1").map(of)];
+  const [driver, human] = [cases.filter((c) => c.bench !== "U1").flatMap(of), cases.filter((c) => c.bench === "U1").flatMap(of)];
   if (!driver.length || !human.length) return undefined;
   type Send = (typeof driver)[number];
   const both = (f: (x: Send) => number) => ({ driver: driver.reduce((a, x) => a + f(x), 0) / driver.length, human: human.reduce((a, x) => a + f(x), 0) / human.length });
