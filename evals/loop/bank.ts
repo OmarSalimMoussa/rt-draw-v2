@@ -10,7 +10,7 @@ import { type GateCase, HELDOUT_CHART, HELDOUT_GATE, type Scenario, TUNING, fres
 import { missingStarts, savedIn } from "../fixtures/fixtures.ts";
 import { writeMissDigest } from "../optimizer/digest.ts";
 import { LOOP } from "./config.ts";
-import { type DriveCtx, type Pages, type Session, driveSession } from "./drive.ts";
+import { type DriveCtx, type Pages, type Session, driveSession, eachSlot } from "./drive.ts";
 import { type Paths, paths } from "./paths.ts";
 import { put, voidCase } from "./record.ts";
 import type { CaseInfo, DriverRecord, Readings, SetId } from "./types.ts";
@@ -81,18 +81,25 @@ export async function refresh(ctx: DriveCtx, slots: Pages[], n: number): Promise
 
 /**
  * Top-ups (§1.3): live fork sends on the champion, each forked to both arms and continuing on A, every fork point
- * deposited as a new tuning case. `k` numbers the decision's top-ups (fresh seeds each time). Returns the fork cases
- * written to ctx.run (voided ones as *.void there), for ab.ts to judge the affected ones.
+ * deposited as a new tuning case. `k` numbers the decision's top-ups (fresh seeds each time). A session per slot, as a
+ * bank build drives them (one slot alone made a decision's 48 top-ups ~16 min). Returns the fork cases written to
+ * ctx.run (voided ones as *.void there) in session order, for ab.ts to judge the affected ones.
  */
-export async function topUp(ctx: DriveCtx, pages: Pages, n: number, k: number): Promise<string[]> {
-  const out: string[] = [];
+export async function topUp(ctx: DriveCtx, slots: Pages[], n: number, k: number): Promise<string[]> {
   const list = [...fresh(TOPUP_BASE + 2 * k), ...fresh(TOPUP_BASE + 2 * k + 1)];
-  for (const [i, s] of list.entries()) {
-    if (out.length >= Math.min(n, LOOP.topUpMaxSends)) break;
-    const r = await driveSession(ctx, s, pages, { bank: `u${k}`, session: i + 1, fork: true, continueOn: "A", deposit: true, maxSends: Math.min(n, LOOP.topUpMaxSends) - out.length });
-    out.push(...r.cases);
-  }
-  return out;
+  const cases: string[][] = [];
+  let left = Math.min(n, LOOP.topUpMaxSends), at = 0;
+  await eachSlot(slots.length, (slot) => {
+    if (left <= 0 || at >= list.length) return undefined;
+    const i = at++, take = Math.min(left, list[i].sends);
+    left -= take;
+    return async () => {
+      const r = await driveSession(ctx, list[i], slots[slot], { bank: `u${k}`, session: i + 1, fork: true, continueOn: "A", deposit: true, maxSends: take });
+      cases[i] = r.cases;
+      left += take - r.cases.length; // a session that ended early hands its sends on
+    };
+  });
+  return cases.flat();
 }
 
 /** The next top-up's number: one past every top-up in the bank and its archive, so no two decisions' top-ups share case ids or seeds. */

@@ -213,7 +213,7 @@ try {
 
   // ---- A top-up: live fork sends continuing on A; the first breaks the dispatch limit (V9), the second is deposited.
   put(p.machine, { dispatchLimitMs: 0 });
-  const tops = await B.topUp(ctx, { A, B: Bp }, 2, 1);
+  const tops = await B.topUp(ctx, [{ A, B: Bp }], 2, 1);
   check(tops.join() === "c-u1-s01-1,c-u1-s01-2", `top-up cases ${tops.join(", ")}`);
   check(existsSync(bankFile("c-u1-s01-2", "done")) && existsSync(join(p.bankCases, "c-u1-s01-1.void")), "the fork point wasn't deposited (or the V9 one was)");
   const runCase = (id, ...f) => join(p.run(RUN), "cases", id, ...f);

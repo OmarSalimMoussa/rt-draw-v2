@@ -19,6 +19,7 @@ import { OVERUSE } from "../optimizer/patterns.ts";
 import { type Chrome, type Page, launchChrome, paintedCapture } from "./chrome.ts";
 import { endCase, gatewayStatus, setMode } from "./client.ts";
 import { LOOP, configId } from "./config.ts";
+import { eachSlot } from "./drive.ts";
 import type { RunMode } from "./gateway.ts";
 import { type Machine, beforeWave, sampleLoad } from "./load.ts";
 import { appendRow, caseMetrics, readRows, rowOf } from "./metrics.ts";
@@ -407,10 +408,12 @@ export type Decide = {
   heldout?: string[];
   /** Live top-ups (run.ts wires bank.ts): n more fork sends, deposited in the bank; the affected ones come back judged, as rows. */
   topUp?: (n: number) => Promise<Row[]>;
+  /** A resumed decision's top-ups: the sends it already paid for and their rows (rows.jsonl). */
+  toppedUp?: { sends: number; rows: Row[] };
   /** Why the decision has overrun its budget so far, if it has (§6.7): checked before each look's cases are paid for. */
   overrun?: (measured: number) => string | undefined;
-  /** G4, class D: the driver continues on B's result for `sends` more sends, each forked to both arms (drive.ts); their rows. */
-  continueFrom?: (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number) => Promise<Row[]>;
+  /** G4, class D: the driver continues on B's result for `sends` more sends on case slot `slot`, each forked to both arms (drive.ts); their rows. */
+  continueFrom?: (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number, slot: number) => Promise<Row[]>;
 };
 export type ABResult = {
   rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: { case: string; why: string }[];
@@ -429,10 +432,12 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
   try {
     if (!d) return { rows: await r.add(order), invariants: r.invariants };
     const rows: Row[] = [];
-    let heldout: Row[] | undefined, continuation: Row[] | undefined, topUps = 0, taken = 0;
+    // A resumed decision's top-ups come back at its first shortage, where they first went in, and count toward the 48.
+    const resumed = [...(d.toppedUp?.rows ?? [])];
+    let heldout: Row[] | undefined, continuation: Row[] | undefined, topUps = d.toppedUp?.sends ?? 0, taken = 0;
     const done = (dec: Decision) => (put(runFile(s.run, "verdict.json"), { ...dec, invariantsTripped: r.invariants.length, topUps }), { rows, heldout, continuation, decision: dec, topUps, invariants: r.invariants });
     for (;;) {
-      const exhausted = taken >= order.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
+      const exhausted = taken >= order.length && !resumed.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
       const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.length }, d.card, d.state);
       const over = (dec.verdict === "more" || dec.pending) && d.overrun?.([...rows, ...(heldout ?? []), ...(continuation ?? [])].filter((x) => !x.void).length + topUps);
       if (over) return { ...done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] }), overrun: over };
@@ -442,7 +447,8 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
         const banked = order.slice(taken, taken + need);
         taken += banked.length;
         rows.push(...(await r.add(banked)));
-        if (banked.length < need && d.topUp && topUps < LOOP.topUpMaxSends) {
+        if (banked.length < need && resumed.length) rows.push(...resumed.splice(0));
+        else if (banked.length < need && d.topUp && topUps < LOOP.topUpMaxSends) {
           const n = Math.min(need - banked.length, LOOP.topUpMaxSends - topUps);
           topUps += n;
           rows.push(...(await d.topUp(n)));
@@ -456,12 +462,20 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
       }
       if (dec.pending?.includes("continuation")) {
         if (!d.continueFrom) throw new Error("class D needs continuation forks: pass continueFrom");
-        continuation = [];
-        for (const row of rows.filter((x) => x.affected && !x.void).slice(0, LOOP.cont.cases)) {
-          const f = json<Fork>(join(caseDir(s.run, row.case), "fork.json"));
-          const after = json<SceneJSON>(join(caseDir(s.run, row.case), "B", "after.scene.json"));
-          continuation.push(...(await d.continueFrom(row.case, { run: s.run, after, camera: f.cameras!.B }, LOOP.cont.sends)));
-        }
+        // An origin case per slot at a time (one slot alone added ~18 min to a D decision), rows in case order.
+        const from = rows.filter((x) => x.affected && !x.void).slice(0, LOOP.cont.cases);
+        const out: Row[][] = [];
+        let at = 0;
+        await eachSlot(rig.slots, (slot) => {
+          const i = at++;
+          if (i >= from.length) return undefined;
+          const dir = caseDir(s.run, from[i].case);
+          return async () => {
+            const b = { run: s.run, after: json<SceneJSON>(join(dir, "B", "after.scene.json")), camera: json<Fork>(join(dir, "fork.json")).cameras!.B };
+            out[i] = await d.continueFrom!(from[i].case, b, LOOP.cont.sends, slot);
+          };
+        });
+        continuation = out.flat();
         continue;
       }
       return done(dec);

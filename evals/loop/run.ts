@@ -45,7 +45,7 @@ import { freezeHuman, pageShot } from "./human.ts";
 import { pairedRatio } from "./latency.ts";
 import { type Machine, type WaveSend, heartbeat, ladder, onAC, refuseFactorySlice, sampleLoad } from "./load.ts";
 import { type MeterCall, readMeter, rollup } from "./meter.ts";
-import { meterOf, readRows, rowOf } from "./metrics.ts";
+import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { ready } from "./ready.ts";
 import { caseDir, put, runFile, voidCase } from "./record.ts";
@@ -706,32 +706,34 @@ function loopState(): LoopState {
 }
 /** Request hashes this run already paid for: a resumed run gets them from the cache (§6.5's resume cache). */
 const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError).map((c) => c.reqHash);
-/** List $ of the upstream calls of runs starting with `prefix`. */
 /** A decision's live $ so far, the candidate arm's product calls left out: what the candidate itself costs is the cost veto's (usdRatio), never a harness overrun. */
 const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" && l.arm !== "B" ? l.listUsd : 0), 0);
 
-/** Rows for the fork cases drive.ts wrote to a run (G4 continuations, top-ups), each judged (a failed judge call voids its case). */
+/** Rows for the fork cases drive.ts wrote to a run (G4 continuations, top-ups): judged at once (the gateway caps eval roles), kept in rows.jsonl. */
 async function forkedRows(run: string, ids: string[], judge: Judge, o: { seed: string; cls: Row["class"]; cluster: (id: string) => string }): Promise<Row[]> {
   const pos = positionsFor(ids, o.seed);
-  const rows: Row[] = [];
-  for (const id of ids) {
-    const voided = await judgedOnce(judge, id, pos.get(id)!);
+  const voided = await Promise.all(ids.map((id) => judgedOnce(judge, id, pos.get(id)!)));
+  const calls = meterOf(run);
+  return ids.map((id, i) => {
     const info = maybe<CaseInfo>(caseFile(id, "case.json", run))!;
     const fork = maybe<Fork>(join(caseDir(run, id), "fork.json"))!;
-    rows.push(rowOf(run, { case: id, cluster: o.cluster(id), affected: true, class: o.cls, overuse: [false, false], ask: info.ask, beat: info.beat, firstArm: fork.order[0], void: voided }, meterOf(run)));
-  }
-  return rows;
+    const row = rowOf(run, { case: id, cluster: o.cluster(id), affected: true, class: o.cls, overuse: [false, false], ask: info.ask, beat: info.beat, firstArm: fork.order[0], void: voided[i] }, calls);
+    appendRow(run, row);
+    return row;
+  });
 }
-/** Both arms' pages of slot 0 and the driver's context for live fork sends in a decision run. */
-async function forkCtx(rig: Rig, arms: Arms, run: string): Promise<{ ctx: DriveCtx; pages: Pages }> {
-  const pages: Pages = { A: (await rig.tab(0, "A", arms.A.tree)).page, B: (await rig.tab(0, "B", arms.B.tree)).page };
-  return { pages, ctx: { run, arms: { A: { sha: arms.A.sha, tuningId: await tuningIdOf(pages.A) }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag() } };
+/** Each case slot's pages of both arms and the driver's context, for live fork sends in a decision run. */
+async function forkCtx(rig: Rig, arms: Arms, run: string): Promise<{ ctx: DriveCtx; slots: Pages[] }> {
+  const slots = await Promise.all(Array.from({ length: rig.slots }, async (_, k): Promise<Pages> => ({ A: (await rig.tab(k, "A", arms.A.tree)).page, B: (await rig.tab(k, "B", arms.B.tree)).page })));
+  return { slots, ctx: { run, arms: { A: { sha: arms.A.sha, tuningId: await tuningIdOf(slots[0].A) }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag() } };
 }
 
 /** G4 (class D): the driver continues on B's result; each send is forked, judged and made a row (a veto only). */
-const continuation = (rig: Rig, arms: Arms, run: string) => async (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number): Promise<Row[]> => {
-  const { ctx, pages } = await forkCtx(rig, arms, run);
-  const s = await continueFrom(ctx, pages, caseId, b, sends, "B");
+const continuation = (rig: Rig, arms: Arms, run: string) => async (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number, slot: number): Promise<Row[]> => {
+  const had = readRows(run).filter((r) => r.case.startsWith(`${caseId}-k`));
+  if (had.length) return had; // a resumed decision paid for this one already
+  const { ctx, slots } = await forkCtx(rig, arms, run);
+  const s = await continueFrom(ctx, slots[slot], caseId, b, sends, "B");
   return forkedRows(run, s.cases.filter((c) => existsSync(caseDir(run, c))), judging(run, { seed: run, craft: "none" }), { seed: run, cls: "D", cluster: () => caseId });
 };
 
@@ -740,13 +742,24 @@ function differs(run: string, id: string): boolean {
   const reqs = (a: Arm) => (maybe<{ calls: { reqHash: string }[] }>(join(caseDir(run, id), a, "result.json"))?.calls ?? []).map((c) => c.reqHash).sort().join();
   return !maybe<Fork>(join(caseDir(run, id), "fork.json"))?.identicalAfter || reqs("A") !== reqs("B");
 }
+const TOP_UP = /^c-u\d+-/;
+const clusterIn = (run: string) => (id: string) => maybe<CaseInfo>(caseFile(id, "case.json", run))!.originSession;
 /** Top-ups (§1.3) for a decision whose bank ran short: live fork sends on the champion, continuing on A, deposited as new cases. */
 const topUps = (rig: Rig, arms: Arms, run: string, judge: Judge, cls: Row["class"]) => async (n: number): Promise<Row[]> => {
-  const { ctx, pages } = await forkCtx(rig, arms, run);
+  const { ctx, slots } = await forkCtx(rig, arms, run);
   const k = nextTopUp();
-  const ids = (await topUp(ctx, pages, n, k)).filter((id) => existsSync(caseDir(run, id)) && differs(run, id));
-  return forkedRows(run, ids, judge, { seed: `${run} top-up ${k}`, cls, cluster: (id) => maybe<CaseInfo>(caseFile(id, "case.json", run))!.originSession });
+  const ids = (await topUp(ctx, slots, n, k)).filter((id) => existsSync(caseDir(run, id)) && differs(run, id));
+  return forkedRows(run, ids, judge, { seed: `${run} top-up ${k}`, cls, cluster: clusterIn(run) });
 };
+/** A resumed decision's top-ups: every send it already paid for, and the rows (judging those a stop cut off before theirs). */
+async function toppedUp(run: string, judge: Judge, cls: Row["class"]): Promise<{ sends: number; rows: Row[] }> {
+  const dirs = existsSync(runFile(run, "cases")) ? readdirSync(runFile(run, "cases")) : [];
+  const ids = [...new Set(dirs.filter((d) => TOP_UP.test(d)).map((d) => d.replace(/\.void(\.\d+)?$/, "")))];
+  const had = new Set(readRows(run).map((r) => r.case));
+  const cut = ids.filter((id) => !had.has(id) && existsSync(join(caseDir(run, id), "done")) && differs(run, id));
+  if (cut.length) await forkedRows(run, cut, judge, { seed: `${run} top-up resumed`, cls, cluster: clusterIn(run) });
+  return { sends: ids.length, rows: readRows(run).filter((r) => TOP_UP.test(r.case)) };
+}
 
 /** What a decision teaches the next analyst: its candidate-loss digest and one failure-analyst call on its losses. */
 async function lessons(run: string, rows: Row[]) {
@@ -846,7 +859,7 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
         cls: sc.class,
       }, {
         card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined,
-        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, overrun: (n) => overBy(sc.class, n, rig.slots),
+        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, toppedUp: tops ? await toppedUp(at, judge, sc.class) : undefined, overrun: (n) => overBy(sc.class, n, rig.slots),
       });
       affected.topUp = result.topUps ?? 0;
     }

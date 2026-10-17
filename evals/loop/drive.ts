@@ -548,6 +548,24 @@ function dispatchLimit(): number {
   }
 }
 
+/**
+ * Jobs over `slots` workers, one at a time each: `next(slot)` hands a worker its next job (none: it stops). The first
+ * failure stops the others taking more, and is what this rejects with.
+ */
+export async function eachSlot(slots: number, next: (slot: number) => (() => Promise<void>) | undefined): Promise<void> {
+  let failed = false;
+  await Promise.all(Array.from({ length: slots }, async (_, slot) => {
+    for (let job = next(slot); job && !failed; job = next(slot)) {
+      try {
+        await job();
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  }));
+}
+
 export function harnessEvent(run: string, e: HarnessEvent) {
   appendLine(runFile(run, "events.jsonl"), { at: new Date().toISOString(), ...e });
 }
