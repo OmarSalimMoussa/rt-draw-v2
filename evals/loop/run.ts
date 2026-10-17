@@ -124,11 +124,11 @@ function tryGit(dir: string, ...a: string[]): string | undefined {
     return undefined; // a non-zero exit is the answer
   }
 }
-/** The loop commits as itself where git has no identity. */
-const ident = (dir: string) => (tryGit(dir, "config", "user.email") ? [] : ["-c", "user.name=rt-eval loop", "-c", "user.email=rt-eval@localhost"]);
+/** The loop always commits as itself: the machine's identity (the owner's email) would land in cand/* commits and tried patches. */
+const IDENT = ["-c", "user.name=rt-eval loop", "-c", "user.email=rt-eval@localhost"];
 function commitAll(dir: string, message: string): string {
   git(dir, "add", "-A");
-  git(dir, ...ident(dir), "commit", "-q", "-m", message, "-m", CO_AUTHOR);
+  git(dir, ...IDENT, "commit", "-q", "-m", message, "-m", CO_AUTHOR);
   return git(dir, "rev-parse", "HEAD");
 }
 const isAncestor = (a: string, b: string) => tryGit(paths().repo, "merge-base", "--is-ancestor", a, b) !== undefined;
@@ -195,7 +195,7 @@ function importHistory() {
   const dir = openHistory();
   if (tryGit(dir, "merge-base", "--is-ancestor", "eval/history-import", "HEAD") !== undefined) return;
   if (tryGit(dir, "merge", "-q", "--ff-only", "eval/history-import") !== undefined) return say("history: fast-forwarded to eval/history-import");
-  if (tryGit(dir, ...ident(dir), "merge", "-q", "--no-edit", "eval/history-import") !== undefined) return say("history: merged eval/history-import");
+  if (tryGit(dir, ...IDENT, "merge", "-q", "--no-edit", "eval/history-import") !== undefined) return say("history: merged eval/history-import");
   tryGit(dir, "merge", "--abort");
   ownerItem("eval/history and eval/history-import conflict: merge them by hand in $RT_EVAL_HOME/history");
   commitHistory("owner list: a history import to merge by hand");
@@ -599,7 +599,7 @@ async function sync(gw: string, st: State): Promise<"merged" | "nothing" | "paus
     return "paused" as const;
   };
   const wt = worktreeOf(`sync/${new Date().toISOString().replace(/[:.]/g, "-")}`);
-  if (tryGit(wt, ...ident(wt), "merge", "-q", "--no-edit", "-m", "Merge the owner's master into the champion (rte sync)", "-m", CO_AUTHOR, master) === undefined) {
+  if (tryGit(wt, ...IDENT, "merge", "-q", "--no-edit", "-m", "Merge the owner's master into the champion (rte sync)", "-m", CO_AUTHOR, master) === undefined) {
     const files = (tryGit(wt, "diff", "--name-only", "--diff-filter=U") ?? "").split("\n").join(", ");
     tryGit(wt, "merge", "--abort");
     return block(`master ${master.slice(0, 12)} conflicts with the champion in ${files || "?"}: resolve it on master, then rte sync`);
@@ -836,7 +836,7 @@ async function rebased(gw: string, st: State, c: CardState): Promise<boolean> {
   const champ = championSha();
   if (isAncestor(champ, c.cand!)) return true;
   const wt = worktreeOf(c.branch);
-  if (tryGit(wt, ...ident(wt), "rebase", "-q", "loop/champion") !== undefined) {
+  if (tryGit(wt, ...IDENT, "rebase", "-q", "loop/champion") !== undefined) {
     c.cand = git(wt, "rev-parse", "HEAD");
     return true;
   }

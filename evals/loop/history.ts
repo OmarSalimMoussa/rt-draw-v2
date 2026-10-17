@@ -33,8 +33,8 @@ function tryGit(cwd: string, ...args: string[]): string | undefined {
     return undefined; // a non-zero exit is the answer (no such ref, staged changes)
   }
 }
-/** The loop commits as itself on a machine whose git has no identity. */
-const who = (cwd: string) => (tryGit(cwd, "config", "user.email") ? [] : ["-c", "user.name=rt-eval loop", "-c", "user.email=rt-eval@localhost"]);
+/** The loop always commits as itself: the machine's own identity (the owner's email) would land in every record and tried patch. */
+const WHO = ["-c", "user.name=rt-eval loop", "-c", "user.email=rt-eval@localhost"];
 
 /** The history worktree, made on first use: the orphan branch, then the worktree; files written before it are adopted. */
 export function openHistory(): string {
@@ -69,7 +69,7 @@ export function commitHistory(message: string): string | undefined {
   const dir = openHistory();
   git(dir, "add", "-A");
   if (tryGit(dir, "diff", "--cached", "--quiet") !== undefined) return undefined;
-  git(dir, ...who(dir), "commit", "-q", "-m", message);
+  git(dir, ...WHO, "commit", "-q", "-m", message);
   const remote = tryGit(dir, "config", "--get", `branch.${BRANCH}.remote`);
   if (remote) {
     try {
