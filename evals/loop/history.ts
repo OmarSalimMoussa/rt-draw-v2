@@ -196,9 +196,12 @@ export function decisionRow(o: {
   };
 }
 
-/** §5.2's trust colour: void as decided; amber for a tripped load gate or a laptop point (launch.sh tells the PGX by arch). */
+/**
+ * §5.2's trust colour: void as decided; amber for a tripped load gate. A laptop point is not amber: its quality is as good
+ * as the PGX's, and the latency panel hollows laptop points itself (amber here left the laptop with no quality trend at all).
+ */
 export const trustOf = (voided: boolean, run: string, warn = false): DecisionRow["trust"] =>
-  voided ? "void" : warn || existsSync(runFile(run, "load-gate.jsonl")) || process.arch !== "arm64" ? "amber" : "green";
+  voided ? "void" : warn || existsSync(runFile(run, "load-gate.jsonl")) ? "amber" : "green";
 
 /** A decision's whole record: decisions.jsonl, the ledger, a tried patch unless kept, owner items, runs/<run>.json, one commit. */
 export function recordDecision(d: DecisionRow, o: { owner?: string[] } = {}) {
@@ -211,4 +214,4 @@ export function recordDecision(d: DecisionRow, o: { owner?: string[] } = {}) {
 }
 
 /** The amber bands of §5.2 (they colour points, never decide). */
-export const AMBER = { flip: 0.2, hedge: 0.2, beatCompliance: 0.8 } as const;
+export const AMBER = { flip: 0.2 } as const;

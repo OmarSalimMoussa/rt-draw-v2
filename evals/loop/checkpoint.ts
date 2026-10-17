@@ -296,7 +296,9 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   const Q = { value: anchor.Q + logit(all.share), lo90: anchor.Q + logit(all.lo90), hi90: anchor.Q + logit(all.hi90) };
   const health = healthOf(run, rows, byId);
   const voided = health.voidPct > LOOP.voidMax || health.flipPct > LOOP.flipAlarm;
-  const trust = trustOf(voided, run, health.flipPct >= AMBER.flip || health.hedgePct > AMBER.hedge || health.beatCompliance < AMBER.beatCompliance);
+  // Hedges and beat compliance are the frozen yardstick's, the same at every checkpoint of an era: reported in health, never
+  // colouring a point (one low B1 would otherwise empty the era's trend lines).
+  const trust = trustOf(voided, run, health.flipPct >= AMBER.flip);
   // The anchor ladder (§5.2): only a clear win moves it, never at checkpoint 0 or on a void point.
   const moved = !zero && trust !== "void" && all.share >= LOOP.anchorMove.share && all.lo90 >= LOOP.anchorMove.lo90;
   const links = [...past.map((c) => c.links), linksOf(id, rows, moved)];
