@@ -157,6 +157,11 @@ try {
   const marker = (n) => json(join(p.home, "bank", "sessions", `b1-s0${n}.json`));
   check(marker(1).scenario === S1.id && marker(2).scenario === S3.id && marker(3).scenario === S2.id, "first-timers didn't run first");
   check(json(join(p.home, "bank", "gates.json")).fails.length && built.fails.length, "the gates weren't computed (a 3-session bank fails coverage)");
+  // A refused bank is used by nothing after it until accepted; a bigger rebuild keeps every session's number (only new ones run).
+  check(/failed §2\.3/.test(B.bankRefuses() ?? "") && B.acceptBank().length && !B.bankRefuses(), "a refused bank isn't refused downstream, or accepting it doesn't clear that");
+  const numbers = (t) => new Map(B.sessionsOf([{ set: "tuning", sessions: t }, { set: "heldout-gate", sessions: 2 }, { set: "heldout-chart", sessions: 2 }]).map((x) => [x.s.id, x.n]));
+  const [small, big] = [numbers(8), numbers(12)];
+  check([...small].every(([id, n]) => big.get(id) === n) && new Set(big.values()).size === big.size, "a rebuild with more tuning sessions renumbers sessions");
   const DONE = ["c-b1-s01-1", "c-b1-s01-2", "c-b1-s01-3", "c-b1-s02-1", "c-b1-s02-3", "c-b1-s03-1"];
   const doneNow = readdirSync(p.bankCases).filter((d) => existsSync(join(p.bankCases, d, "done"))).sort();
   check(JSON.stringify(doneNow) === JSON.stringify(DONE), `banked cases ${doneNow.join(" ")}`);

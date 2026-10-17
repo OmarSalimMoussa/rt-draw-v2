@@ -37,7 +37,7 @@ accounts. `run.ts` reads it itself and never prints a token; one or two tokens w
 | smoke | `bash evals/loop/launch.sh smoke --cap 50` (§11's 40 is what a full smoke makes: 39–41 in the rehearsal) | ≤ 50 |
 | fixture doodles | `bash evals/loop/launch.sh bake --cap 36`, review, commit only `evals/fixtures/pictures.json` on master, `rte init --refresh && rte ready --stub --mock-api` (a new harness tag needs its own readiness before the loop) | ≤ 36 |
 | driver probe | `bash evals/loop/launch.sh probe --cap 10` (§2.8; bank build and refreshes run it themselves when `evals/core/driver.ts` or the served driver model changed; a failed one stops banking: read `probe.json`, then fix the driver or `rte probe --accept`) | 8 |
-| bank | `bash evals/loop/launch.sh bank build --tuning 32 --heldout-gate 8 --heldout-chart 8 --cap 1900` | ~1,520 |
+| bank | `bash evals/loop/launch.sh bank build --tuning 32 --heldout-gate 8 --heldout-chart 8 --cap 1900` (a bank that fails §2.3 stops every later step: build again with more sessions, only the new ones run, or `rte bank accept`) | ~1,520 |
 | shared A/A, yardstick | `rte aa --shared --cases 16`, `rte bench freeze` | 0 |
 | checkpoint 0 | `bash evals/loop/launch.sh checkpoint --zero --cap 750` | ~600 |
 | calibration | `bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200`, label at `/evals/label/`, `rte calib --check` (else `calib --check --variant 2 --cap 150`) | ~200 |
@@ -72,6 +72,7 @@ cp $RT_EVAL_HOME/out/pictures.json evals/fixtures/ && git commit -qm "dry: baked
 rte init --refresh && rte ready --stub --mock-api
 bash evals/loop/launch.sh probe --cap 10 $F; rte probe --accept   # FAILS: one canned reply per message can't tell good from bad
 bash evals/loop/launch.sh bank build --tuning 8 --heldout-gate 2 --heldout-chart 2 --cap 450 $F   # REFUSED by the §2.3 gates: a 56-send bank is too small, as it should be
+rte bank accept                                    # used anyway, for the rehearsal only
 rte aa --shared --cases 12
 rte bench freeze --heldout 8 --tuning 8            # smaller than B1's 32 + 32, for the rehearsal only
 bash evals/loop/launch.sh checkpoint --zero --cap 200 $F

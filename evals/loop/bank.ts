@@ -25,6 +25,10 @@ const json = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
 const maybe = <T>(file: string): T | undefined => (existsSync(file) ? json<T>(file) : undefined);
 const pad = (n: number) => String(n).padStart(2, "0");
 const sessionMarker = (bank: string, n: number) => join(paths().home, "bank", "sessions", `${bank}-s${pad(n)}.json`);
+/** A build's session numbers, fixed per scenario whatever sizes it asks for: a rerun with more sessions only adds the missing ones. */
+const CANON = [...TUNING, ...HELDOUT_GATE, ...HELDOUT_CHART].map((s) => s.id);
+const gatesFile = () => join(paths().home, "bank", "gates.json");
+type GatesFile = { ok: boolean; fails: string[]; kept?: "old" | "new"; accepted?: string };
 
 /**
  * Drives sessions over the slots, one per slot at a time. A session with its marker is done (a rerun skips it);
@@ -50,10 +54,15 @@ async function runSessions(ctx: DriveCtx, slots: Pages[], bank: string, todo: { 
   return banked;
 }
 
+/** A build's sessions as they run, first-timers of every set first, each with its number (a check's own scenarios, in no list, as they run). */
+export function sessionsOf(sets: BankSet[]): { s: Scenario; n: number }[] {
+  const list = sets.flatMap(({ set, sessions }) => (typeof sessions === "number" ? (LISTS[set] ?? []).slice(0, sessions) : sessions));
+  return [...list.filter((s) => s.persona === "first-timer"), ...list.filter((s) => s.persona !== "first-timer")].map((s, i) => ({ s, n: CANON.indexOf(s.id) + 1 || i + 1 }));
+}
+
 /** The first bank (§11 step 3): every set's sessions on the champion, first-timers of every set first, then the §2.3 gates. */
 export async function buildBank(ctx: DriveCtx, slots: Pages[], o: { bank: string; sets: BankSet[] }): Promise<BankResult> {
-  const list = o.sets.flatMap(({ set, sessions }) => (typeof sessions === "number" ? (LISTS[set] ?? []).slice(0, sessions) : sessions));
-  const ordered = [...list.filter((s) => s.persona === "first-timer"), ...list.filter((s) => s.persona !== "first-timer")].map((s, i) => ({ s, n: i + 1 }));
+  const ordered = sessionsOf(o.sets);
   // Two phases: no held-out explorer starts before every first-timer has saved its page.
   const cases = await runSessions(ctx, slots, o.bank, ordered.filter((x) => x.s.persona === "first-timer"));
   cases.push(...(await runSessions(ctx, slots, o.bank, ordered.filter((x) => x.s.persona !== "first-timer"))));
@@ -110,9 +119,23 @@ export function nextTopUp(): number {
 
 /** bank/gates.json and the champion-miss digest (§8.2), after every build and refresh. */
 function judged(ctx: DriveCtx, r: BankResult, about: Record<string, unknown>): BankResult {
-  put(join(paths().home, "bank", "gates.json"), { at: new Date().toISOString(), ...about, cases: gateCases().length, ok: !r.fails.length, fails: r.fails });
+  put(gatesFile(), { at: new Date().toISOString(), ...about, cases: gateCases().length, ok: !r.fails.length, fails: r.fails });
   if (ctx.arms.A?.sha) writeMissDigest(ctx.arms.A.sha);
   return r;
+}
+
+/** Why the bank may not be used: its build failed a §2.3 gate (a refused refresh keeps the old bank) and wasn't accepted. */
+export function bankRefuses(): string | undefined {
+  const g = maybe<GatesFile>(gatesFile());
+  if (g && !g.ok && g.kept !== "old" && !g.accepted)
+    return `the bank failed §2.3 (${g.fails.slice(0, 2).join("; ")}${g.fails.length > 2 ? "; …" : ""}): bank build again with more sessions (only the new ones run), or rte bank accept`;
+}
+/** The owner's word that a bank that failed a gate may be used (a rehearsal's small bank, or a gate he judges too strict). */
+export function acceptBank(): string[] {
+  const g = maybe<GatesFile>(gatesFile());
+  if (!g || g.ok) throw new Error("no refused bank to accept");
+  put(gatesFile(), { ...g, accepted: new Date().toISOString() });
+  return g.fails;
 }
 
 type Banked = GateCase & { id: string; recordedAt: string };

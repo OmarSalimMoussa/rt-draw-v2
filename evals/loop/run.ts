@@ -32,7 +32,7 @@ import { analystDigest, failureDigest, writeLossDigest, writeMissDigest } from "
 import { bankedScenes, cardOwnerReasons, diffOf, g0, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
 import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, harnessTag, judgedOnce, openRig, product, runAB } from "./ab.ts";
 import { bake } from "./bake.ts";
-import { type BankSet, buildBank, nextTopUp, refresh, topUp } from "./bank.ts";
+import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, topUp } from "./bank.ts";
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
@@ -62,7 +62,7 @@ import { type Decision, type LoopState, decide } from "./verdict.ts";
 const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/README.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
-  probe --cap n | --accept
+  probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
   aa --shared --cases n                bench freeze                         human freeze
   checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
@@ -510,8 +510,15 @@ async function probeCmd() {
   }, 1));
 }
 
+/** A bank that failed §2.3 is used by nothing after it (bench, checkpoints, calibration, decisions) until rebuilt or accepted. */
+function needBank() {
+  const no = bankRefuses();
+  if (no) throw new Error(no);
+}
+
 async function bankCmd() {
-  if (o.pos[1] !== "build") throw new Error("bank build --tuning n --heldout-gate n --heldout-chart n --cap n");
+  if (o.pos[1] === "accept") return say(`bank: accepted although it fails ${acceptBank().join("; ")}`);
+  if (o.pos[1] !== "build") throw new Error("bank build --tuning n --heldout-gate n --heldout-chart n --cap n | bank accept");
   needCap("bank build");
   const sets: BankSet[] = (["tuning", "heldout-gate", "heldout-chart"] as const).map((set) => ({ set, sessions: num(set) ?? 0 })).filter((s) => s.sessions);
   const champ = championArm();
@@ -528,6 +535,7 @@ async function bankCmd() {
 
 async function benchCmd() {
   if (o.pos[1] !== "freeze") throw new Error("bench freeze");
+  needBank();
   openHistory();
   const m = freeze({ heldout: num("heldout"), tuning: num("tuning") }); // smaller only in a rehearsal
   say(`bench freeze: B1, ${Object.keys(m.files).length} files, hash ${m.hash.slice(0, 12)}`);
@@ -551,6 +559,7 @@ async function runCheckpoint(gw: string, epoch: number, owner?: { commits: numbe
 }
 async function checkpointCmd() {
   needCap(o.f.zero ? "checkpoint --zero" : "checkpoint");
+  needBank();
   openHistory();
   const zero = !historyRows("checkpoints.jsonl").length;
   if (o.f.zero && !zero) throw new Error("checkpoint 0 exists already");
@@ -593,6 +602,7 @@ async function calib() {
   const [knob, value] = (str("contrast") ?? "").split("=");
   if (!knob || value === undefined) throw new Error("calib --contrast <knob=value> --cap n | calib --check [--variant 2]");
   needCap("calib --contrast");
+  needBank();
   const ck0 = (historyRows("checkpoints.jsonl") as StoredCheckpoint[])[0];
   if (!ck0) throw new Error("no checkpoint 0 yet: its A/A pairs are most of the label set");
   const champ = championArm();
@@ -1157,6 +1167,7 @@ async function loop() {
   const held = lock(); // first: a second loop refuses before it touches anything
   const stopBeat = heartbeat((gap) => (suspends.push(Date.now()), say(`loop: a ${Math.round(gap / 1000)}-s suspend: the decision in flight is voided`)));
   try {
+    needBank();
     openHistory();
     if (!historyRows("checkpoints.jsonl").length) throw new Error("no checkpoint 0 yet: checkpoint --zero --cap 750 first (§11 step 5)");
     const resume = !!o.f.resume || held.stale;
@@ -1193,6 +1204,7 @@ async function decideCmd() {
   const branch = o.pos[1];
   if (!branch) throw new Error("decide <branch> --cap n");
   needCap("decide");
+  needBank();
   openHistory();
   const st = readState() ?? newState(nextEpoch());
   const card: HypothesisCard = { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
