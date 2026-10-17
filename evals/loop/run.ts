@@ -752,7 +752,8 @@ function differs(run: string, id: string): boolean {
   const reqs = (a: Arm) => (maybe<{ calls: { reqHash: string }[] }>(join(caseDir(run, id), a, "result.json"))?.calls ?? []).map((c) => c.reqHash).sort().join();
   return !maybe<Fork>(join(caseDir(run, id), "fork.json"))?.identicalAfter || reqs("A") !== reqs("B");
 }
-const TOP_UP = /^c-u\d+-/;
+/** A top-up's fork case (bank.ts' c-u<k>-s<n>-<send>), not a continuation of one (<case>-k<n>). */
+const TOP_UP = /^c-u\d+-s\d+-\d+$/;
 const clusterIn = (run: string) => (id: string) => maybe<CaseInfo>(caseFile(id, "case.json", run))!.originSession;
 /** Top-ups (§1.3) for a decision whose bank ran short: live fork sends on the champion, continuing on A, deposited as new cases. */
 const topUps = (rig: Rig, arms: Arms, run: string, judge: Judge, cls: Row["class"]) => async (n: number): Promise<Row[]> => {
@@ -761,14 +762,19 @@ const topUps = (rig: Rig, arms: Arms, run: string, judge: Judge, cls: Row["class
   const ids = (await topUp(ctx, slots, n, k)).filter((id) => existsSync(caseDir(run, id)) && differs(run, id));
   return forkedRows(run, ids, judge, { seed: `${run} top-up ${k}`, cls, cluster: clusterIn(run) });
 };
-/** A resumed decision's top-ups: every send it already paid for, and the rows (judging those a stop cut off before theirs). */
-async function toppedUp(run: string, judge: Judge, cls: Row["class"]): Promise<{ sends: number; rows: Row[] }> {
+/**
+ * A resumed decision's top-ups: every send it already paid for, and their rows (judging those a stop cut off before theirs).
+ * Its banked cases aren't among them, though an earlier decision's top-ups are banked under the same c-u names.
+ */
+async function toppedUp(run: string, banked: string[], judge: Judge, cls: Row["class"]): Promise<{ sends: number; rows: Row[] }> {
   const dirs = existsSync(runFile(run, "cases")) ? readdirSync(runFile(run, "cases")) : [];
-  const ids = [...new Set(dirs.filter((d) => TOP_UP.test(d)).map((d) => d.replace(/\.void(\.\d+)?$/, "")))];
+  const not = new Set(banked);
+  const ids = [...new Set(dirs.map((d) => d.replace(/\.void(\.\d+)?$/, "")))].filter((id) => TOP_UP.test(id) && !not.has(id));
   const had = new Set(readRows(run).map((r) => r.case));
   const cut = ids.filter((id) => !had.has(id) && existsSync(join(caseDir(run, id), "done")) && differs(run, id));
   if (cut.length) await forkedRows(run, cut, judge, { seed: `${run} top-up resumed`, cls, cluster: clusterIn(run) });
-  return { sends: ids.length, rows: readRows(run).filter((r) => TOP_UP.test(r.case)) };
+  const own = new Set(ids);
+  return { sends: ids.length, rows: readRows(run).filter((r) => own.has(r.case)) };
 }
 
 /** What a decision teaches the next analyst: its candidate-loss digest and one failure-analyst call on its losses. */
@@ -869,7 +875,7 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
         cls: sc.class,
       }, {
         card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined,
-        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, toppedUp: tops ? await toppedUp(at, judge, sc.class) : undefined, overrun: (n) => overBy(sc.class, n, rig.slots),
+        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, toppedUp: tops ? await toppedUp(at, tuning, judge, sc.class) : undefined, overrun: (n) => overBy(sc.class, n, rig.slots),
       });
       affected.topUp = result.topUps ?? 0;
     }
