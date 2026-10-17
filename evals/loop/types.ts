@@ -87,7 +87,9 @@ export type ArmTiming = {
   quiescedAt: number; heapMb: number; gatewayLoopP99Ms: number;
 };
 /** cases/<case>/fork.json */
-export type Fork = { order: Arm[]; offsetsMs: number[]; sharedReqs: string[]; identicalAfter: boolean };
+export type Fork = { order: Arm[]; offsetsMs: number[]; sharedReqs: string[]; identicalAfter: boolean;
+  /** Each arm's camera after the send: where a G4 continuation of this case starts. */
+  cameras?: Record<Arm, View> };
 /** cases/<case>/judge/packet.json (§4.2); positions is stored, never sent. */
 export type Packet = {
   case: string; said: string; meant: string; hedged: boolean; targetParts?: string;

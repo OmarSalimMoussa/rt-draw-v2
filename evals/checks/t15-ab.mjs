@@ -255,16 +255,14 @@ if (import.meta.main) {
   let lose = true;
   const contRow = (id, k) => ({ case: `${id}-c${k}`, cluster: id, affected: true, class: "D", s: lose ? -1 : 1, ttfc: [1000, 1000], ttd: [2000, 2000], work: [1, 1], usd: [0, 0], thought: [false, false], overuse: [false, false], pics: [[0, 0], [0, 0]], ask: "add", firstArm: k % 2 ? "B" : "A" });
   const continueFrom = async (id, b, sends) => (asked.push({ id, b, sends }), Array.from({ length: sends }, (_, k) => contRow(id, k)));
+  // Top-ups come back as judged rows (run.ts sends, deposits and judges them live): winning ones, one session each.
   let tops = 0;
-  const topUp = async (count) =>
-    L.tuning.slice(0, count).map((id) => {
-      const to = `c-top-${tops++}`;
-      if (!existsSync(p.bankCase(to))) {
-        cpSync(p.bankCase(id), p.bankCase(to), { recursive: true });
-        put(join(p.bankCase(to), "case.json"), { ...json(join(p.bankCase(id), "case.json")), id: to, originSession: `top-${to}` });
-      }
-      return to;
-    });
+  const topUp = async (count) => Array.from({ length: count }, () => {
+    const row = { ...contRow(`c-top-${tops}`, tops++), cluster: `top-${tops}`, s: 1 };
+    // A continuation may start from a top-up case: its fork folder, as drive.ts writes one (a banked case's stands in).
+    if (!existsSync(join(p.run("d-card"), "cases", row.case))) cpSync(join(p.run("d-card"), "cases", L.tuning[0]), join(p.run("d-card"), "cases", row.case), { recursive: true });
+    return row;
+  });
   const dSpec = { ...base, run: "d-card", kind: "ab", mode: "scan", share: true, cases: L.tuning, cls: "D", judge: canned("d-card", "B") };
   const dDecide = { card: card({ dialogue: true, classGuess: "D" }), state: STATE, heldout: [...L.gate, ...L.chart, L.tuning[0]], topUp, continueFrom };
   const d1 = await runAB(rig, dSpec, dDecide);

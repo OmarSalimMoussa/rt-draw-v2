@@ -408,7 +408,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
         const why = errors.length ? `V7: ${errors.length} calls failed (${errors[0].role}: ${errors[0].apiError})` : gap > LOOP.suspendGapMs ? `V10: the machine was suspended ${Math.round(gap / 1000)} s` : undefined;
         if (why) event(why.slice(0, why.indexOf(":")), errors.length ? "void-transport" : "suspend", `attempt ${attempt}: ${why}`);
         if (arms.length > 1) fork = { order, offsetsMs: order.map((a) => Math.round((at[a]! - at[order[0]]!) * 1000) / 1000), sharedReqs: [...new Set(lines.filter((l) => l.shared !== "-").map((l) => l.reqHash))],
-          identicalAfter: js(sent.A!.outcome.after) === js(sent.B!.outcome.after) };
+          identicalAfter: js(sent.A!.outcome.after) === js(sent.B!.outcome.after), cameras: { A: sent.A!.outcome.camera, B: sent.B!.outcome.camera } };
         if (!why) break;
         if (attempt === 2) voided = why;
       }

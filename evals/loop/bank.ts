@@ -95,6 +95,12 @@ export async function topUp(ctx: DriveCtx, pages: Pages, n: number, k: number): 
   return out;
 }
 
+/** The next top-up's number: one past every top-up in the bank and its archive, so no two decisions' top-ups share case ids or seeds. */
+export function nextTopUp(): number {
+  const dirs = [paths().bankCases, paths().bankArchive].flatMap((d) => (existsSync(d) ? readdirSync(d) : []));
+  return Math.max(-1, ...dirs.map((d) => Number(/^c-u(\d+)-/.exec(d)?.[1] ?? -1))) + 1;
+}
+
 /** bank/gates.json and the champion-miss digest (§8.2), after every build and refresh. */
 function judged(ctx: DriveCtx, r: BankResult, about: Record<string, unknown>): BankResult {
   put(join(paths().home, "bank", "gates.json"), { at: new Date().toISOString(), ...about, cases: gateCases().length, ok: !r.fails.length, fails: r.fails });

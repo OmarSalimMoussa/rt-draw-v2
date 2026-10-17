@@ -175,6 +175,19 @@ function meterTail(run: string) {
 /** A product call (an arm's), not the harness's own roles. */
 export const product = (c: CallLog) => !["driver", "judge", "craft", "expectation", "miss", "failure", "probe", "analyst"].includes(c.role);
 
+/** Judges a case; a judge call that fails is tried once more, then the case is void (V7: why). The call cap stops the run instead. */
+export async function judgedOnce(judge: Judge, id: string, positions: Positions): Promise<string | undefined> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await judge.judgeCase(id, positions);
+      return;
+    } catch (err) {
+      if (/call cap/.test(String(err))) throw err;
+      if (attempt === 2) return `V7: a judge call failed twice (${String(err).slice(0, 160)})`;
+    }
+  }
+}
+
 /** A run in progress: cases go in through add(), in entry order (dispatch order and judge positions follow it). */
 export function begin(rig: Rig, s: RunSpec) {
   const p = paths();
@@ -217,19 +230,6 @@ export function begin(rig: Rig, s: RunSpec) {
     return { out, failed, transport, end, lines, origin, sceneHash };
   }
 
-  /** A judge call that fails is tried once more, then the case is void (V7); the call cap stops the run instead. */
-  async function judged(id: string): Promise<string | undefined> {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await s.judge!.judgeCase(id, positionsFor(order, s.seed).get(id)!);
-        return;
-      } catch (err) {
-        if (/call cap/.test(String(err))) throw err;
-        if (attempt === 2) return `V7: a judge call failed twice (${String(err).slice(0, 160)})`;
-      }
-    }
-  }
-
   /** Sends one case (on its slot) and returns its judging and row, which run off the slot. */
   async function fork(id: string, i: number, slot: number): Promise<() => Promise<Row>> {
     const dir = caseDir(s.run, id);
@@ -242,8 +242,9 @@ export function begin(rig: Rig, s: RunSpec) {
     const first = firstArm(s.seed, i);
     const sendOf = (a: Arm) => s.faults?.input?.(id, a, { words: input.words, strokes: input.strokes }) ?? { words: input.words, strokes: input.strokes };
     const payload = { A: sendOf("A"), B: sendOf("B") };
-    const cls = s.classify?.(id) ?? { affected: true, class: s.cls ?? "Q" };
-    const row = (lines: CallLog[], o: { void?: string; overuse?: [boolean, boolean] } = {}) => {
+    const row = (lines: CallLog[], o: { void?: string; overuse?: [boolean, boolean]; sent?: boolean } = {}) => {
+      // The scan's classes read both arms' recorded calls: a case whose page failed has none.
+      const cls = (o.sent && s.classify?.(id)) || { affected: true, class: s.cls ?? "Q" };
       const r = rowOf(s.run, { case: id, cluster: info.originSession, affected: cls.affected, class: cls.class, overuse: o.overuse ?? [false, false], ask: info.ask, beat: info.beat, firstArm: first, void: o.void }, lines);
       appendRow(s.run, r);
       return r;
@@ -312,9 +313,9 @@ export function begin(rig: Rig, s: RunSpec) {
     const overuse = ARMS.map((a) => !!det?.({ before, after: out[a].after, ops: out[a].ops, cameras: [input.camera, out[a].camera], pointed })) as [boolean, boolean];
 
     return async () => {
-      const voided = why.length ? why.join("; ") : transport ?? (s.judge ? await judged(id) : undefined);
+      const voided = why.length ? why.join("; ") : transport ?? (s.judge ? await judgedOnce(s.judge, id, positionsFor(order, s.seed).get(id)!) : undefined);
       runCaseDone(s.run, id);
-      return row(lines, { void: voided, overuse });
+      return row(lines, { void: voided, overuse, sent: true });
     };
   }
 
@@ -398,12 +399,14 @@ export type Decide = {
   card: HypothesisCard; state: LoopState;
   /** G3: the affected H-gate cases (the scan's); anything else is never drawn here. */
   heldout?: string[];
-  /** Live top-ups (run.ts wires drive.ts): up to n more fork sends, deposited in the bank; returns the affected new case ids. */
-  topUp?: (n: number) => Promise<string[]>;
+  /** Live top-ups (run.ts wires bank.ts): n more fork sends, deposited in the bank; the affected ones come back judged, as rows. */
+  topUp?: (n: number) => Promise<Row[]>;
+  /** Why the decision has overrun its budget so far, if it has (§6.7): checked before each look's cases are paid for. */
+  overrun?: (measured: number) => string | undefined;
   /** G4, class D: the driver continues on B's result for `sends` more sends, each forked to both arms (drive.ts); their rows. */
   continueFrom?: (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number) => Promise<Row[]>;
 };
-export type ABResult = { rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; invariants: { case: string; why: string }[] };
+export type ABResult = { rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: { case: string; why: string }[] };
 
 /**
  * One run over `cases` (in seeded origin-session order). Without `d` it runs them all (A/A, calibration,
@@ -416,19 +419,24 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
   try {
     if (!d) return { rows: await r.add(order), invariants: r.invariants };
     const rows: Row[] = [];
-    let heldout: Row[] | undefined, continuation: Row[] | undefined, topUps = 0;
+    let heldout: Row[] | undefined, continuation: Row[] | undefined, topUps = 0, taken = 0;
+    const done = (dec: Decision) => (put(runFile(s.run, "verdict.json"), { ...dec, invariantsTripped: r.invariants.length, topUps }), { rows, heldout, continuation, decision: dec, topUps, invariants: r.invariants });
     for (;;) {
-      const exhausted = rows.length >= order.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
+      const exhausted = taken >= order.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
       const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.length }, d.card, d.state);
+      const over = (dec.verdict === "more" || dec.pending) && d.overrun?.([...rows, ...(heldout ?? []), ...(continuation ?? [])].filter((x) => !x.void).length + topUps);
+      if (over) return done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] });
       if (dec.verdict === "more") {
-        // The next look counts live cases: voided ones are replaced from the order (or by top-ups).
-        const upTo = rows.length + dec.next! - rows.filter((x) => !x.void).length;
-        if (order.length < upTo && d.topUp && topUps < LOOP.topUpMaxSends) {
-          const n = Math.min(upTo - order.length, LOOP.topUpMaxSends - topUps);
+        // The next look counts live cases: voided ones are replaced from the order, then by top-ups.
+        const need = dec.next! - rows.filter((x) => !x.void).length;
+        const banked = order.slice(taken, taken + need);
+        taken += banked.length;
+        rows.push(...(await r.add(banked)));
+        if (banked.length < need && d.topUp && topUps < LOOP.topUpMaxSends) {
+          const n = Math.min(need - banked.length, LOOP.topUpMaxSends - topUps);
           topUps += n;
-          order.push(...(await d.topUp(n)).filter((id) => !order.includes(id)));
+          rows.push(...(await d.topUp(n)));
         }
-        rows.push(...(await r.add(order.slice(rows.length, upTo))));
         continue;
       }
       if (dec.pending?.includes("heldout")) {
@@ -440,14 +448,13 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
         if (!d.continueFrom) throw new Error("class D needs continuation forks: pass continueFrom");
         continuation = [];
         for (const row of rows.filter((x) => x.affected && !x.void).slice(0, LOOP.cont.cases)) {
-          const f = json<ForkFile>(join(caseDir(s.run, row.case), "fork.json"));
+          const f = json<Fork>(join(caseDir(s.run, row.case), "fork.json"));
           const after = json<SceneJSON>(join(caseDir(s.run, row.case), "B", "after.scene.json"));
-          continuation.push(...(await d.continueFrom(row.case, { run: s.run, after, camera: f.cameras.B }, LOOP.cont.sends)));
+          continuation.push(...(await d.continueFrom(row.case, { run: s.run, after, camera: f.cameras!.B }, LOOP.cont.sends)));
         }
         continue;
       }
-      put(runFile(s.run, "verdict.json"), { ...dec, invariantsTripped: r.invariants.length, topUps });
-      return { rows, heldout, continuation, decision: dec, invariants: r.invariants };
+      return done(dec);
     }
   } finally {
     r.finish();

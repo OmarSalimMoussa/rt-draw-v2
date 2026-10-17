@@ -90,11 +90,17 @@ export function lock(): { stale: boolean; release(): void } {
 
 // ---- §6.7's stop and pause rules
 
-/** §6.2's measuring budget per class ($), and §6.7's ceiling on one decision's measuring. */
-export const BUDGET: Record<DecisionClass, number> = { N: 0, S: 0.71, R: 0.71, Q: 3.94, D: 7.27 };
-export const RULES = { decisionMaxMin: 30, overrunsPerNight: 3, voidsInRow: 2, revertsInRow: 6, componentRevertsInRow: 3, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
-/** A decision over 2× its class budget or past 30 min of measuring is closed as void (harness suspect). */
-export const overrun = (cls: DecisionClass, usd: number, minutes: number) => usd > LOOP.decisionOverrun * BUDGET[cls] || minutes > RULES.decisionMaxMin;
+/** §6.2's measuring $ per case by class (D's continuation and top-up sends at a live fork send's): the overrun rule's yardstick. */
+export const CASE_USD: Record<DecisionClass, number> = { N: 0, S: 0.059, R: 0.014, Q: 0.074, D: 0.089 };
+export const RULES = { decisionMaxMin: 30, overrunsPerNight: 3, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 6, componentRevertsInRow: 3, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
+/** The ladder's slots §6's 30 minutes assume (the PGX's). */
+const SLOTS_30MIN = 8;
+/**
+ * A decision is closed as void (harness suspect) past 2× its class's $ per measured case (a retry storm or runaway pictures
+ * raise that, a long legitimate path doesn't), or past 30 min of measuring at 8 slots (scaled for fewer).
+ */
+export const overrun = (cls: DecisionClass, usd: number, measured: number, minutes: number, slots: number) =>
+  usd > LOOP.decisionOverrun * CASE_USD[cls] * Math.max(1, measured) || minutes > RULES.decisionMaxMin * Math.max(1, SLOTS_30MIN / slots);
 
 export type Facts = {
   now: number;

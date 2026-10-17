@@ -42,10 +42,10 @@ const q = (s?: string) => `"${cut(s)}"`;
 /** A banked case's folder: the bank, or the archive it retired to. */
 const bankDir = (id: string) => (existsSync(paths().bankCase(id)) ? paths().bankCase(id) : join(paths().bankArchive, id));
 const bank = <T>(id: string, f: string) => read<T>(join(bankDir(id), f));
-/** Only tuning cases are ever digested: held-out ones would teach the optimizer the yardstick. */
+/** Only tuning cases (the bank's, refreshes' and top-ups') are ever digested: held-out ones would teach the optimizer the yardstick. */
 const tuningInfo = (id: string) => {
   const info = bank<CaseInfo>(id, "case.json");
-  return info?.set === "tuning" ? info : undefined;
+  return info?.set === "tuning" || info?.set === "fresh" ? info : undefined;
 };
 const saidOf = (id: string) => {
   const w = bank<CaseInput>(id, "input.json")?.words;

@@ -24,15 +24,15 @@ import { loadFixture } from "../fixtures/fixtures.ts";
 import { assemble, checkCalibration } from "../judge/calibrate.ts";
 import { canaryDue, runCanary } from "../judge/canary.ts";
 import { calibrationFile, combined, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
-import { readPacket } from "../judge/packet.ts";
+import { caseFile, readPacket } from "../judge/packet.ts";
 import { startFakeApi } from "../mock/fake-api.ts";
 import type { Label, PairRef } from "../pages/plugin.ts";
 import * as agents from "../optimizer/agents.ts";
 import { analystDigest, failureDigest, writeLossDigest, writeMissDigest } from "../optimizer/digest.ts";
 import { bankedScenes, cardOwnerReasons, diffOf, g0, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
-import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, harnessTag, openRig, product, runAB } from "./ab.ts";
+import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, harnessTag, judgedOnce, openRig, product, runAB } from "./ab.ts";
 import { bake } from "./bake.ts";
-import { type BankSet, buildBank, refresh } from "./bank.ts";
+import { type BankSet, buildBank, nextTopUp, refresh, topUp } from "./bank.ts";
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
@@ -50,7 +50,7 @@ import { paths } from "./paths.ts";
 import { ready } from "./ready.ts";
 import { caseDir, put, runFile, voidCase } from "./record.ts";
 import { remetric } from "./remetric.ts";
-import { BUDGET, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
+import { CASE_USD, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { fakeApiReplies, stubPictures } from "./stubs.ts";
 import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
@@ -672,21 +672,42 @@ const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode ==
 /** List $ of the upstream calls of runs starting with `prefix`. */
 const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0), 0);
 
-/** G4 (class D): the driver continues on B's result; each send is forked, judged and made a row (a veto only). */
-const continuation = (rig: Rig, arms: Arms, run: string) => async (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number): Promise<Row[]> => {
-  const pages: Pages = { A: (await rig.tab(0, "A", arms.A.tree)).page, B: (await rig.tab(0, "B", arms.B.tree)).page };
-  const ctx: DriveCtx = { run, arms: { A: { sha: arms.A.sha, tuningId: "" }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag() };
-  const s = await continueFrom(ctx, pages, caseId, b, sends, "B");
-  const judge = judging(run, { seed: run, craft: "none" });
-  const pos = positionsFor(s.cases, run);
+/** Rows for the fork cases drive.ts wrote to a run (G4 continuations, top-ups), each judged (a failed judge call voids its case). */
+async function forkedRows(run: string, ids: string[], judge: Judge, o: { seed: string; cls: Row["class"]; cluster: (id: string) => string }): Promise<Row[]> {
+  const pos = positionsFor(ids, o.seed);
   const rows: Row[] = [];
-  for (const id of s.cases.filter((c) => existsSync(caseDir(run, c)))) {
-    await judge.judgeCase(id, pos.get(id)!);
-    const info = maybe<CaseInfo>(join(caseDir(run, id), "case.json"))!;
+  for (const id of ids) {
+    const voided = await judgedOnce(judge, id, pos.get(id)!);
+    const info = maybe<CaseInfo>(caseFile(id, "case.json", run))!;
     const fork = maybe<Fork>(join(caseDir(run, id), "fork.json"))!;
-    rows.push(rowOf(run, { case: id, cluster: caseId, affected: true, class: "D", overuse: [false, false], ask: info.ask, beat: info.beat, firstArm: fork.order[0] }, meterOf(run)));
+    rows.push(rowOf(run, { case: id, cluster: o.cluster(id), affected: true, class: o.cls, overuse: [false, false], ask: info.ask, beat: info.beat, firstArm: fork.order[0], void: voided }, meterOf(run)));
   }
   return rows;
+}
+/** Both arms' pages of slot 0 and the driver's context for live fork sends in a decision run. */
+async function forkCtx(rig: Rig, arms: Arms, run: string): Promise<{ ctx: DriveCtx; pages: Pages }> {
+  const pages: Pages = { A: (await rig.tab(0, "A", arms.A.tree)).page, B: (await rig.tab(0, "B", arms.B.tree)).page };
+  return { pages, ctx: { run, arms: { A: { sha: arms.A.sha, tuningId: await tuningIdOf(pages.A) }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag() } };
+}
+
+/** G4 (class D): the driver continues on B's result; each send is forked, judged and made a row (a veto only). */
+const continuation = (rig: Rig, arms: Arms, run: string) => async (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number): Promise<Row[]> => {
+  const { ctx, pages } = await forkCtx(rig, arms, run);
+  const s = await continueFrom(ctx, pages, caseId, b, sends, "B");
+  return forkedRows(run, s.cases.filter((c) => existsSync(caseDir(run, c))), judging(run, { seed: run, craft: "none" }), { seed: run, cls: "D", cluster: () => caseId });
+};
+
+/** A fork send's arms differ: their product requests, or their after-scenes. Only those are judged (§1.3). */
+function differs(run: string, id: string): boolean {
+  const reqs = (a: Arm) => (maybe<{ calls: { reqHash: string }[] }>(join(caseDir(run, id), a, "result.json"))?.calls ?? []).map((c) => c.reqHash).sort().join();
+  return !maybe<Fork>(join(caseDir(run, id), "fork.json"))?.identicalAfter || reqs("A") !== reqs("B");
+}
+/** Top-ups (§1.3) for a decision whose bank ran short: live fork sends on the champion, continuing on A, deposited as new cases. */
+const topUps = (rig: Rig, arms: Arms, run: string, judge: Judge, cls: Row["class"]) => async (n: number): Promise<Row[]> => {
+  const { ctx, pages } = await forkCtx(rig, arms, run);
+  const k = nextTopUp();
+  const ids = (await topUp(ctx, pages, n, k)).filter((id) => existsSync(caseDir(run, id)) && differs(run, id));
+  return forkedRows(run, ids, judge, { seed: `${run} top-up ${k}`, cls, cluster: (id) => maybe<CaseInfo>(caseFile(id, "case.json", run))!.originSession });
 };
 
 /** What a decision teaches the next analyst: its candidate-loss digest and one failure-analyst call on its losses. */
@@ -714,11 +735,26 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     say(`${id}: ${d.verdict} (${d.class}, ${d.goal}): ${[...d.reasons, ...d.vetoes].join("; ")}`);
     return row;
   };
-  const gate = (verdict: "revert" | "owner", reasons: string[]): Decided => {
-    const d: Decision = { verdict, reasons, goal: c.card.goal, class: c.card.classGuess, looks: [], vetoes: [], configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
+  // The card is done in state.json at once: a stop before lessons() and the rig's close would otherwise re-decide a keep
+  // on resume as "no change was made" (its candidate is the champion by then).
+  const settle = (d: Decided): Decided => {
+    if (!st.cards.includes(c)) return d; // rte decide: no epoch's card
+    Object.assign(c, { status: "done", verdict: d.verdict });
+    st.recent = [...st.recent, d].slice(-50);
+    if (d.verdict === "keep") st.keepsSinceCheckpoint++, st.keepsSinceRefresh++;
+    saveState(st);
+    return d;
+  };
+  const gate = (verdict: "revert" | "owner", reasons: string[], o: { owner?: string[]; cls?: Decision["class"] } = {}): Decided => {
+    const d: Decision = { verdict, reasons, goal: c.card.goal, class: o.cls ?? c.card.classGuess, looks: [], vetoes: [], configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
     put(runFile(run("g0"), "verdict.json"), d);
-    record(d, run("g0"), undefined, verdict === "owner" ? reasons : []);
-    return { id, verdict, component: c.card.component, at: new Date().toISOString() };
+    record(d, run("g0"), undefined, o.owner ?? (verdict === "owner" ? reasons : []));
+    return settle({ id, verdict, component: c.card.component, at: new Date().toISOString() });
+  };
+  // More than 2× its class's $ per measured case, or past 30 min of measuring at 8 slots: harness suspect (§6.7).
+  const overBy = (cls: Decision["class"], measured: number, slots: number) => {
+    const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0) / 60_000;
+    return overrun(cls, usd, measured, minutes, slots) ? `overran: $${usd.toFixed(2)} for ${measured} measured cases in ${minutes.toFixed(0)} min (class ${cls}: $${CASE_USD[cls]} a case)` : undefined;
   };
 
   // G0, free: the diff's gates, then (code cards) the typecheck and the scene round trip in the candidate's tree.
@@ -745,7 +781,15 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
     if (o.f["quality-only"] && sc.class === "S") {
       say(`${id}: a schedule change (S): latency-goal cards wait for the PGX (--quality-only)`);
-      return { id, verdict: "deferred", component: c.card.component, at: new Date().toISOString() };
+      return settle({ id, verdict: "deferred", component: c.card.component, at: new Date().toISOString() });
+    }
+    // Top-ups are live sends (R runs on the banked replies: a top-up has none). Too rare (§1.3) at 0 calls when even
+    // every top-up send, affected at the scan's rate, can't bring the affected cases to LOOP.rareMin.
+    const tops = sc.class === "Q" || sc.class === "D";
+    const more = tops && affected.of ? (LOOP.topUpMaxSends * tuning.length) / affected.of : 0;
+    if (sc.class !== "N" && sc.class !== "S" && tuning.length + more < LOOP.rareMin) {
+      const why = `too rare to measure: ${tuning.length} affected cases${tops ? `, ~${more.toFixed(0)} more from ${LOOP.topUpMaxSends} top-up sends` : ""} (< ${LOOP.rareMin})`;
+      return gate("revert", [why], { owner: [why], cls: sc.class });
     }
     let at: string, result: ABResult;
     if (sc.class === "N" || sc.class === "S") {
@@ -762,7 +806,11 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
       result = await runAB(rig, {
         run: at, kind: "ab", arms, mode: sc.class === "R" ? "scan" : "live", share: true, cached: [...sc.cached, ...paid(at)], seed: at, card: c.card, judge, cases: tuning,
         cls: sc.class,
-      }, { card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined });
+      }, {
+        card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined,
+        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, overrun: (n) => overBy(sc.class, n, rig.slots),
+      });
+      affected.topUp = result.topUps ?? 0;
     }
     let d = result.decision!;
     const owner: string[] = [];
@@ -781,13 +829,14 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
       const hold = [...cardOwnerReasons(c.card, { u1: hasU1() }), ...(c.card.goal === "craft" && !variants().craftCalibrated ? ["a craft keep before craft calibration passed"] : [])];
       if (hold.length) (d = { ...d, verdict: "owner", vetoes: [...d.vetoes, ...hold] }), owner.push(...hold);
     }
-    // More than 2× its class budget or 30 min of measuring: void, harness suspect (§6.7).
-    const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0) / 60_000;
-    const over = d.verdict !== "void" && overrun(d.class, usd, minutes);
-    if (over) d = { ...d, verdict: "void", reasons: [...d.reasons, `overran: $${usd.toFixed(2)} in ${minutes.toFixed(0)} min (class ${d.class} budget $${BUDGET[d.class]})`] };
+    // The whole path's measuring against its class budget per case (§6.7): void, harness suspect.
+    const measured = [...result.rows, ...(result.heldout ?? []), ...(result.continuation ?? [])].filter((r) => !r.void).length + (result.topUps ?? 0);
+    const over = d.verdict === "void" ? undefined : overBy(d.class, measured, rig.slots);
+    if (over) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
     record(d, at, { ...result, decision: d }, owner);
+    const done = settle({ id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: !!over, v9 });
     await lessons(at, result.rows);
-    return { id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: over, v9 };
+    return done;
   });
   return decided === "rerun" ? decideCard(gw, st, c, "r") : decided;
 }
@@ -976,23 +1025,19 @@ async function epoch(gw: string, st: State): Promise<boolean> {
   let stopped = false;
   for (const [i, c] of st.cards.entries()) {
     await built[i];
-    if (c.status !== "built" || stopped) continue;
-    if ((stopped = await halt(gw, st))) continue;
-    if (!(await rebased(gw, st, c))) continue;
-    let d: Decided;
-    try {
-      d = await decideCard(gw, st, c);
-    } catch (err) {
-      // A cap, a blocked request or a broken step: the rules say whether the loop goes on.
-      say(`${c.id}: failed: ${msg(err)}`);
-      if ((stopped = await halt(gw, st, msg(err)))) continue;
-      throw err;
+    // decideCard marks the card done in state.json itself, right as it is recorded.
+    if (c.status === "built" && !stopped && !(stopped = await halt(gw, st)) && (await rebased(gw, st, c))) {
+      try {
+        await decideCard(gw, st, c);
+      } catch (err) {
+        // A cap, a blocked request or a broken step: the rules say whether the loop goes on.
+        say(`${c.id}: failed: ${msg(err)}`);
+        if ((stopped = await halt(gw, st, msg(err)))) continue;
+        throw err;
+      }
     }
-    Object.assign(c, { status: "done", verdict: d.verdict });
-    st.recent = [...st.recent, d].slice(-50);
-    if (d.verdict === "keep") st.keepsSinceCheckpoint++, st.keepsSinceRefresh++;
-    saveState(st);
-    if (st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps) ck = await loopCheckpoint(gw, st);
+    // Here, not only after a decision: a resumed epoch owes the checkpoint a stop just before it skipped.
+    if (!stopped && st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps) ck = await loopCheckpoint(gw, st);
   }
   await Promise.allSettled(built);
   if (stopped) return false;
