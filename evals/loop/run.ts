@@ -472,6 +472,11 @@ async function smoke() {
   line(live.some((l) => l.fiveHour !== undefined && l.fiveHour !== null) || "note", `U1: ${live.filter((l) => l.fiveHour != null).length} of ${live.length} calls carried five-hour utilization (none: the meter uses the W estimate)`);
   line(live.every((l) => l.cacheWrite1h === 0), `cacheWrite1h 0 on all ${live.length} calls`);
   line(live.every((l) => !!l.servedModel), `served models: ${[...new Set(live.map((l) => l.servedModel))].join(", ")}`);
+  // No email in any request: R3 shows the transport adds none on the fake API, but Claude Code puts the account's email
+  // in every prompt (userEmail) once its config dir caches the account, which only a real login can do.
+  const conf = paths().claudeConfig;
+  const cached = (existsSync(conf) ? readdirSync(conf, { recursive: true, withFileTypes: true }) : []).filter((e) => e.isFile() && /"emailAddress"\s*:\s*"[^"]/.test(readFileSync(join(e.parentPath, e.name), "utf8")));
+  line(readyOk() && !cached.length, `no email: readiness (R3) ${readyOk() ? "passed" : "not passed"} at this tag, ${cached.length} Claude config files cache an account email`);
   say(`smoke: ${fails ? `FAIL (${fails} lines)` : "ok"}, ${live.length} calls`);
   return fails ? 1 : 0;
 }

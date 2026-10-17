@@ -23,9 +23,11 @@ clean=("$(command -v env)" -u RT_EVAL_TOKEN_1 -u RT_EVAL_TOKEN_2 -u RT_EVAL_TOKE
 run=("$(command -v node)" --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@")
 
 if [ "$(uname -m)" = aarch64 ]; then
-  [ "$1" = stop ] && exec tmux send-keys -t rt:loop C-c
+  s="${RT_EVAL_TMUX:-rt}" # the owner's session; a probe names its own so it never touches his
+  tmux has-session -t "=$s" 2>/dev/null || tmux new-session -d -s "$s"
+  [ "$1" = stop ] && exec tmux send-keys -t "=$s:loop" C-c
   # A new window inherits the tmux server's environment, not ours: hence -c, -e and the absolute node.
-  exec tmux new-window -t rt -n loop -c "$PWD" -e "RT_EVAL_HOME=$RT_EVAL_HOME" -e RT_EVAL_LAUNCHED=1 "${clean[@]}" "${run[@]}"
+  exec tmux new-window -t "=$s:" -n loop -c "$PWD" -e "RT_EVAL_HOME=$RT_EVAL_HOME" -e RT_EVAL_LAUNCHED=1 "${clean[@]}" "${run[@]}"
 fi
 
 mkdir -p "$RT_EVAL_HOME"
