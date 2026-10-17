@@ -228,17 +228,21 @@ const copied = ["bank/cases", "cache/replies", "cache/blobs", "labels/labels.jso
 check(!copied.length, `export didn't copy ${copied.join(", ")}`);
 
 // ---- launch.sh in a real systemd unit: the child reports the slots and the cap; a mode-644 tokens file is refused.
-const sHome = mkdtempSync(join(tmpdir(), "rt-eval-status-"));
-const sTokens = join(sHome, "tokens.env");
-copyFileSync(tokens, sTokens);
-chmodSync(sTokens, 0o600);
-const launch = () => spawnSync("bash", [join(ROOT, "evals/loop/launch.sh"), "status", "--tokens", sTokens, "--cap", "7"], { env: { ...process.env, RT_EVAL_HOME: sHome }, encoding: "utf8", timeout: 60_000 });
-const l1 = launch();
-check(l1.status === 0 && /slots loaded: 3/.test(l1.stdout) && /cap: 7/.test(l1.stdout) && /launched: yes/.test(l1.stdout) && /inhibitor: held/.test(l1.stdout) && !l1.stdout.includes("sk-ant"),
-  `launch.sh status: exit ${l1.status}: ${short(l1.stdout + l1.stderr)}`);
-chmodSync(sTokens, 0o644);
-const l2 = launch();
-check(l2.status !== 0 && /chmod 600/.test(l2.stdout + l2.stderr), `a mode-644 tokens file wasn't refused: exit ${l2.status}: ${short(l2.stdout + l2.stderr)}`);
+// On aarch64 launch.sh opens a tmux window and returns at once, with none of the child's output: the PGX's launcher is
+// proven by its own ladder run, never by a window opened here in the owner's session.
+if (process.arch === "x64") {
+  const sHome = mkdtempSync(join(tmpdir(), "rt-eval-status-"));
+  const sTokens = join(sHome, "tokens.env");
+  copyFileSync(tokens, sTokens);
+  chmodSync(sTokens, 0o600);
+  const launch = () => spawnSync("bash", [join(ROOT, "evals/loop/launch.sh"), "status", "--tokens", sTokens, "--cap", "7"], { env: { ...process.env, RT_EVAL_HOME: sHome }, encoding: "utf8", timeout: 60_000 });
+  const l1 = launch();
+  check(l1.status === 0 && /slots loaded: 3/.test(l1.stdout) && /cap: 7/.test(l1.stdout) && /launched: yes/.test(l1.stdout) && /inhibitor: held/.test(l1.stdout) && !l1.stdout.includes("sk-ant"),
+    `launch.sh status: exit ${l1.status}: ${short(l1.stdout + l1.stderr)}`);
+  chmodSync(sTokens, 0o644);
+  const l2 = launch();
+  check(l2.status !== 0 && /chmod 600/.test(l2.stdout + l2.stderr), `a mode-644 tokens file wasn't refused: exit ${l2.status}: ${short(l2.stdout + l2.stderr)}`);
+} else console.log(`note: launch.sh status is checked on the laptop (this is ${process.arch})`);
 
 // ---- Every §6.7 rule on crafted facts.
 const T = Date.now();
