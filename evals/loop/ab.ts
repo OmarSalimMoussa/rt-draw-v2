@@ -412,7 +412,11 @@ export type Decide = {
   /** G4, class D: the driver continues on B's result for `sends` more sends, each forked to both arms (drive.ts); their rows. */
   continueFrom?: (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number) => Promise<Row[]>;
 };
-export type ABResult = { rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: { case: string; why: string }[] };
+export type ABResult = {
+  rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: { case: string; why: string }[];
+  /** Set when the decision was closed between looks as over its budget (§6.7): never rerun, it counts toward the night's overruns. */
+  overrun?: string;
+};
 
 /**
  * One run over `cases` (in seeded origin-session order). Without `d` it runs them all (A/A, calibration,
@@ -431,7 +435,7 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
       const exhausted = taken >= order.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
       const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.length }, d.card, d.state);
       const over = (dec.verdict === "more" || dec.pending) && d.overrun?.([...rows, ...(heldout ?? []), ...(continuation ?? [])].filter((x) => !x.void).length + topUps);
-      if (over) return done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] });
+      if (over) return { ...done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] }), overrun: over };
       if (dec.verdict === "more") {
         // The next look counts live cases: voided ones are replaced from the order, then by top-ups.
         const need = dec.next! - rows.filter((x) => !x.void).length;

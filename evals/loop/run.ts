@@ -854,8 +854,9 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     const owner: string[] = [];
     const v9 = result.invariants.some((x) => x.why.startsWith("V9"));
     if (suspends.some((t) => t >= t0) && d.verdict !== "void") d = { ...d, verdict: "void", reasons: [...d.reasons, "V10: the machine was suspended during the decision"] };
-    // A void is rerun once (new runs, after this rig closes), then goes to the owner list (§1.4 item 9).
-    if (d.verdict === "void" && !attempt && !v9) {
+    // A void is rerun once (new runs, after this rig closes), then goes to the owner list (§1.4 item 9). Not an overrun:
+    // rerunning it would pay G2 again on the harness it suspects, and hide it from the night's overrun count.
+    if (d.verdict === "void" && !attempt && !v9 && !result.overrun) {
       record(d, at, result);
       st.recent.push({ id, verdict: "void", component: c.card.component, at: new Date().toISOString() });
       return "rerun" as const;
@@ -869,8 +870,8 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     }
     // The whole path's measuring against its class budget per case (§6.7): void, harness suspect.
     const measured = [...result.rows, ...(result.heldout ?? []), ...(result.continuation ?? [])].filter((r) => !r.void).length + (result.topUps ?? 0);
-    const over = d.verdict === "void" ? undefined : overBy(d.class, measured, rig.slots);
-    if (over) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
+    const over = result.overrun ?? (d.verdict === "void" ? undefined : overBy(d.class, measured, rig.slots));
+    if (over && !result.overrun) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
     record(d, at, { ...result, decision: d }, owner);
     const done = settle({ id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: !!over, v9 });
     await lessons(at, result.rows);
