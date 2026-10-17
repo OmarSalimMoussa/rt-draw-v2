@@ -141,8 +141,15 @@ function stratified(cases: CaseInfo[], n: number, seed: string): CaseInfo[] {
 }
 
 /**
- * `bench freeze`: the H-chart cases and LOOP.bench.tuning stratified tuning cases, copied from the bank into
- * bench/B1 with their manifest, committed. Once only: a new yardstick is an era, so a frozen B1 is refused.
+ * H-chart sends banked clean, of the LOOP.bench.heldout made: hedged meants (V5) and V6/V7/V12 voids are left out of a
+ * held-out set by design, so a real bank never has all 32. Below this share the chart's held-out line is too thin.
+ */
+const CHART_MIN_SHARE = 0.75;
+
+/**
+ * `bench freeze`: every clean H-chart case (up to LOOP.bench.heldout, at least CHART_MIN_SHARE of it) and LOOP.bench.tuning
+ * stratified tuning cases, copied from the bank into bench/B1 with their manifest, committed. Once only: a new yardstick
+ * is an era, so a frozen B1 is refused.
  */
 export function freeze(o: { seed?: string; heldout?: number; tuning?: number } = {}): BenchManifest {
   const p = paths();
@@ -152,13 +159,13 @@ export function freeze(o: { seed?: string; heldout?: number; tuning?: number } =
   const bank = readdirSync(p.bankCases).filter((id) => !id.includes(".void") && existsSync(join(p.bankCase(id), "done"))).sort().map((id) => json<CaseInfo>(join(p.bankCase(id), "case.json")));
   const chart = bank.filter((c) => c.set === "heldout-chart").slice(0, nH);
   const tuning = stratified(bank.filter((c) => c.set === "tuning"), nT, o.seed ?? "B1");
-  if (chart.length < nH || tuning.length < nT) throw new Error(`the bank has ${chart.length} H-chart and ${tuning.length} tuning cases (B1 takes ${nH} + ${nT})`);
+  if (chart.length < Math.ceil(CHART_MIN_SHARE * nH) || tuning.length < nT) throw new Error(`the bank has ${chart.length} clean H-chart and ${tuning.length} tuning cases (B1 takes ${Math.ceil(CHART_MIN_SHARE * nH)}–${nH} + ${nT})`);
   for (const c of [...chart, ...tuning]) {
     mkdirSync(join(benchDir("B1"), c.id), { recursive: true });
     for (const f of INPUT_FILES) if (existsSync(join(p.bankCase(c.id), f))) copyFileSync(join(p.bankCase(c.id), f), join(benchDir("B1"), c.id, f));
   }
   const m = writeManifest("B1");
-  commitHistory(`bench freeze: B1 = ${nH} H-chart + ${nT} tuning cases (${m.hash.slice(0, 12)})`);
+  commitHistory(`bench freeze: B1 = ${chart.length} H-chart + ${nT} tuning cases (${m.hash.slice(0, 12)})`);
   return m;
 }
 
