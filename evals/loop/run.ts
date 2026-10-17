@@ -49,6 +49,7 @@ import { meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { ready } from "./ready.ts";
 import { caseDir, put, runFile, voidCase } from "./record.ts";
+import { acceptProbe, probe, probeDue, probeRefuses } from "./probe.ts";
 import { remetric } from "./remetric.ts";
 import { CASE_USD, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
@@ -61,6 +62,7 @@ import { type Decision, type LoopState, decide } from "./verdict.ts";
 const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/README.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
+  probe --cap n | --accept
   aa --shared --cases n                bench freeze                         human freeze
   checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
@@ -475,6 +477,27 @@ async function bakeCmd() {
   }, 1));
 }
 
+/** §2.8's driver probe before drivers bank (run when due, N14): why they may not, if they may not. */
+async function probed(ctx: DriveCtx, page: Page): Promise<string | undefined> {
+  const due = probeDue();
+  if (due) {
+    const p = await probe({ ...ctx, run: `${ctx.run}-probe` }, page);
+    say(`probe (${due}): ${p.pass ? "ok" : `FAIL: ${p.why.join("; ")}`}`);
+  }
+  return probeRefuses();
+}
+async function probeCmd() {
+  if (o.f.accept) return void say(`probe: accepted by the owner: ${acceptProbe().why.join("; ") || "it passed"}`);
+  needCap();
+  const champ = championArm();
+  return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
+    const page = (await rig.tab(0, "A", champ.tree)).page;
+    const p = await probe({ run: `probe-${stampNow()}`, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(page) } }, harnessTag: harnessTag() }, page);
+    say(`probe: ${p.pass ? "ok" : `FAIL: ${p.why.join("; ")}`} (good ${p.good ?? "-"}, bad ${p.bad ?? "-"}, ${p.targets.length} targets, asks ${p.asks.join(", ") || "none"})`);
+    return p.pass ? 0 : 1;
+  }, 1));
+}
+
 async function bankCmd() {
   if (o.pos[1] !== "build") throw new Error("bank build --tuning n --heldout-gate n --heldout-chart n --cap n");
   needCap("bank build");
@@ -483,6 +506,8 @@ async function bankCmd() {
   return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
     const slots = await championPages(rig, champ.tree);
     const ctx: DriveCtx = { run: "bank-b1", arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag() };
+    const no = await probed(ctx, slots[0].A);
+    if (no) return say(`bank: REFUSED before any session: ${no}`), 1;
     const r = await buildBank(ctx, slots, { bank: "b1", sets });
     say(`bank: ${r.cases.length} cases; ${r.fails.length ? `REFUSED: ${r.fails.join("; ")}` : "every §2.3 gate passes"}`);
     return r.fails.length ? 1 : 0;
@@ -981,7 +1006,10 @@ async function between(gw: string, st: State) {
     try {
       await withRig(gw, [champ.tree], async (rig) => {
         const slots = await championPages(rig, champ.tree);
-        const r = await refresh({ run: `${st.stamp}-refresh${n}`, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag() }, slots, n);
+        const ctx: DriveCtx = { run: `${st.stamp}-refresh${n}`, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag() };
+        const no = await probed(ctx, slots[0].A);
+        if (no) throw new Error(no);
+        const r = await refresh(ctx, slots, n);
         say(`refresh ${n}: ${r.cases.length} new cases, ${r.retired.length} to bank/archive${r.fails.length ? ` (the new cases failed ${r.fails.join("; ")})` : ""}`);
       });
     } catch (err) {
@@ -1160,7 +1188,7 @@ async function gc() {
 }
 
 const COMMANDS: Record<string, () => Promise<number | void>> = {
-  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
+  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
   checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, status,
   remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc,
 };

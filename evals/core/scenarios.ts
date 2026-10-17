@@ -81,7 +81,7 @@ const distance = (p: number[], b: Box) => Math.hypot(Math.max(b.x - p[0], 0, p[0
 const anchor = (s: DrawStep) => (s.draw === "tap" ? s.at : s.draw === "arrow" || s.draw === "line" ? s.from : centre(s.draw === "circle" ? s.around : s.box));
 /** Words that name a part of a page. */
 export const PART_NOUNS = /\b(header|footer|nav|navbar|navigation|menu|button|title|heading|headline|logo|image|photo|picture|card|banner|hero|sidebar|form|field|input|link|icon|label|list|table|chart|graph|grid|section|column|row|tab|map|price|search|bar|box|text|caption|page|avatar|calendar|player|cover|checklist|paragraph)s?\b/i;
-const POINTING = /\b(this|that|these|those|here|there)\b/i;
+export const POINTING = /\b(this|that|these|those|here|there)\b/i;
 /** Words that take (part of) an ask back. */
 const TAKE_BACK = /\b(no|nope|not|actually|wait|instead|rather|back|anymore|no longer|undo|revert|scratch that|never ?mind|forget|on second thought)\b/i;
 const MOOD = /\b(feel|feels|feeling|mood|vibe|vibes|atmosphere|cozy|cosy|calm|warm|cold|cheerful|gloomy|playful|serious|fancy|elegant|fun|sad|happy)\b/i;

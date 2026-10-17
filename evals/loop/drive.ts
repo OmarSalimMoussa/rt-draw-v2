@@ -106,7 +106,7 @@ const replyText = (r?: RecordedReply) => {
 };
 
 /** The ink readings and the resolver's answer (readings.json): the product's own readers (this harness's copy, at defaults) and the champion's recorded resolver reply. */
-function readingsOf(before: SceneJSON, input: CaseInput, replies: RecordedReply[]): Readings {
+export function readingsOf(before: SceneJSON, input: CaseInput, replies: RecordedReply[]): Readings {
   const scene = Scene.fromJSON(before);
   const hits = new HitIndex(scene);
   const marks = groupStrokes(input.strokes).map((m, i) => {
@@ -120,7 +120,7 @@ function readingsOf(before: SceneJSON, input: CaseInput, replies: RecordedReply[
 type Asked = { raw: string; turn: Turn; dropped: Dropped[]; clamped: number; retries: number; reqHash: string };
 
 /** One driver call: one retry on an unparseable reply (V1) or a transport error (V7); undefined when both failed. */
-async function driverTurn(ctx: DriveCtx, caseId: string, user: string, images: string[], view: View, event: (v: string, kind: string, why: string) => void): Promise<Asked | undefined> {
+export async function driverTurn(ctx: DriveCtx, caseId: string, user: string, images: string[], view: View, event: (v: string, kind: string, why: string) => void): Promise<Asked | undefined> {
   let turns: string | string[] = user;
   for (let retries = 0; retries < 2; retries++) {
     let r: Awaited<ReturnType<typeof ask>>;

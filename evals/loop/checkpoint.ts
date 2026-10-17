@@ -10,6 +10,10 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { HitIndex } from "../../src/core/hittest.ts";
+import { groupStrokes, readMark } from "../../src/core/marks.ts";
+import { Scene } from "../../src/core/scene.ts";
+import { ASKS, ASK_WORDS, POINTING } from "../core/scenarios.ts";
 import { fidelityCall, judging, pick, variants } from "../judge/judge.ts";
 import { readPacket } from "../judge/packet.ts";
 import { type ArmSpec, INPUT_FILES, type Rig, benchCases, checkpointRun, harnessTag, product } from "./ab.ts";
@@ -21,7 +25,7 @@ import { paths } from "./paths.ts";
 import { appendLine, caseDir, runFile } from "./record.ts";
 import { entryOrder, rng, seedOf } from "./stats.ts";
 import { treeOf } from "./trees.ts";
-import type { BenchManifest, CaseInfo, CheckpointRow, DecisionRow, Era, Judged, Lat, LoadSample, Marker, Meant, Row, RunInfo } from "./types.ts";
+import type { BenchManifest, CaseInfo, CaseInput, CheckpointRow, DecisionRow, Era, Judged, Lat, LoadSample, Marker, Meant, Row, RunInfo } from "./types.ts";
 import { aaPass } from "./verdict.ts";
 
 type Bench = "B1" | "U1";
@@ -222,6 +226,30 @@ function healthOf(run: string, rows: Row[], bench: Map<string, BenchCase>): Chec
   };
 }
 
+/**
+ * §2.8's distribution check: the drivers' B1 sends against the owner's U1 ones, as means per send (words, marks,
+ * pointing words with a mark, each mark kind's share, each ask type the words name). Undefined without a U1.
+ */
+export function realismOf(cases: BenchCase[]): CheckpointRow["realism"] {
+  const of = (c: BenchCase) => {
+    const input = json<CaseInput>(join(c.dir, "input.json"));
+    const said = typeof input.words === "string" ? input.words : input.words.map((w) => w.word).join(" ");
+    const hits = new HitIndex(Scene.fromJSON(json(join(c.dir, "before.scene.json"))));
+    const marks = groupStrokes(input.strokes).map((m) => readMark(m, hits).kind as string);
+    return { said, words: said.split(/\s+/).filter(Boolean).length, marks };
+  };
+  const [driver, human] = [cases.filter((c) => c.bench !== "U1").map(of), cases.filter((c) => c.bench === "U1").map(of)];
+  if (!driver.length || !human.length) return undefined;
+  type Send = (typeof driver)[number];
+  const both = (f: (x: Send) => number) => ({ driver: driver.reduce((a, x) => a + f(x), 0) / driver.length, human: human.reduce((a, x) => a + f(x), 0) / human.length });
+  const kinds = [...new Set([...driver, ...human].flatMap((x) => x.marks))].sort();
+  return {
+    words: both((x) => x.words), marks: both((x) => x.marks.length), pointing: both((x) => Number(x.marks.length > 0 && POINTING.test(x.said))),
+    ...Object.fromEntries(kinds.map((k) => [`mark:${k}`, both((x) => (x.marks.length ? x.marks.filter((m) => m === k).length / x.marks.length : 0))])),
+    ...Object.fromEntries(ASKS.map((a) => [`ask:${a}`, both((x) => Number(ASK_WORDS[a].test(x.said)))])),
+  };
+}
+
 /** Expectations a run made (a new case, or a new judgeId) go back to the bench, outside its hash, for the next run to reuse. */
 function writeBack(run: string) {
   for (const c of benchCases()) {
@@ -325,7 +353,7 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
     },
     quality: { debt: debts.quality.debt, vsQualityCheckpoint },
     ...(aa ? { aa: { pass: aa.pass, ci: aa.ci, tests: aa.tests } } : {}),
-    productUsdPerSend: { champion: usd(1), anchor: usd(0) }, overfitGap, health,
+    productUsdPerSend: { champion: usd(1), anchor: usd(0) }, overfitGap, health, realism: realismOf([...byId.values()]),
     run, seed, judgeId, ...(o.champion.tuning ? { championTuning: o.champion.tuning } : {}), links: links.at(-1)!, debts, harness, served,
   };
 
