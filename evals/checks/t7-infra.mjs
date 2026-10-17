@@ -323,7 +323,6 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
   check(inFactorySlice() === false, "this check thinks it runs in the factory slice");
 
   // ---- launch.sh for real: a systemd user unit around a probe run.ts (and the tmux path with a fake tmux).
-  if (process.arch !== "x64") fail(`launch.sh's unit is checked on the laptop (this is ${process.arch}: run this check there)`);
   const layout = join(home, "launch");
   mkdirSync(join(layout, "evals/loop"), { recursive: true });
   for (const f of ["launch.sh", "node-hooks.mjs"]) copyFileSync(join(ROOT, "evals/loop", f), join(layout, "evals/loop", f));
@@ -349,35 +348,38 @@ await new Promise((r) => setTimeout(r, process.argv.includes("--long") ? 60_000 
   const callerNode = execFileSync("bash", ["-c", "command -v node"], { env, encoding: "utf8" }).trim();
   const callerVersion = execFileSync(callerNode, ["--version"], { encoding: "utf8" }).trim();
 
-  const first = launch(["first", "--cap", "7"]);
-  if (!(await until(() => existsSync(probe("first")), 15_000, "the first launch's probe never ran"))) fail(`launch.sh: ${(await first.done).err}`);
-  const unit1 = readFileSync(join(home, "unit"), "utf8").trim();
-  const heldWhile = holding(first.pid);
-  const out = JSON.parse(readFileSync(probe("first"), "utf8"));
-  const end1 = await first.done;
-  check(end1.code === 0, `the first launch exited ${end1.code}: ${end1.err}`);
-  check(end1.out.includes(JSON.stringify(out)), "the probe's output didn't reach launch.sh's terminal (-P)");
-  check(heldWhile, "systemd-inhibit --list didn't show the 'rt eval' inhibitor while the probe ran");
-  check(!holding(first.pid), "the 'rt eval' inhibitor outlived the unit");
-  check(/^rt-eval-\d+-\d+$/.test(unit1) && out.cgroup.includes(`${unit1}.service`), `the probe didn't run in the recorded unit ${unit1}`);
-  check(out.cwd === layout, `the unit's cwd is ${out.cwd} (want the launch directory ${layout})`);
-  check(out.node === callerVersion, `the unit ran node ${out.node} (want the caller's ${callerNode}, ${callerVersion})`);
-  check(out.env.includes("RT_EVAL_HOME") && out.env.includes("RT_EVAL_LAUNCHED"), "the unit lacks RT_EVAL_HOME or RT_EVAL_LAUNCHED");
-  check(!out.env.some((k) => /^RT_EVAL_TOKEN_/.test(k) || k === "CLAUDE_CODE_OAUTH_TOKEN"), `a token variable reached the unit: ${out.env.filter((k) => /TOKEN/.test(k))}`);
-  check(out.argv.join(" ") === "first --cap 7", `the unit got argv "${out.argv.join(" ")}" (want "first --cap 7")`);
-  check(unitState(unit1) === "not-found", `the finished unit is still loaded (${unitState(unit1)}): --collect`);
+  // On aarch64 launch.sh opens a tmux window, never a unit: the unit is checked here on the laptop, the window by the fake tmux below.
+  if (process.arch === "x64") {
+    const first = launch(["first", "--cap", "7"]);
+    if (!(await until(() => existsSync(probe("first")), 15_000, "the first launch's probe never ran"))) fail(`launch.sh: ${(await first.done).err}`);
+    const unit1 = readFileSync(join(home, "unit"), "utf8").trim();
+    const heldWhile = holding(first.pid);
+    const out = JSON.parse(readFileSync(probe("first"), "utf8"));
+    const end1 = await first.done;
+    check(end1.code === 0, `the first launch exited ${end1.code}: ${end1.err}`);
+    check(end1.out.includes(JSON.stringify(out)), "the probe's output didn't reach launch.sh's terminal (-P)");
+    check(heldWhile, "systemd-inhibit --list didn't show the 'rt eval' inhibitor while the probe ran");
+    check(!holding(first.pid), "the 'rt eval' inhibitor outlived the unit");
+    check(/^rt-eval-\d+-\d+$/.test(unit1) && out.cgroup.includes(`${unit1}.service`), `the probe didn't run in the recorded unit ${unit1}`);
+    check(out.cwd === layout, `the unit's cwd is ${out.cwd} (want the launch directory ${layout})`);
+    check(out.node === callerVersion, `the unit ran node ${out.node} (want the caller's ${callerNode}, ${callerVersion})`);
+    check(out.env.includes("RT_EVAL_HOME") && out.env.includes("RT_EVAL_LAUNCHED"), "the unit lacks RT_EVAL_HOME or RT_EVAL_LAUNCHED");
+    check(!out.env.some((k) => /^RT_EVAL_TOKEN_/.test(k) || k === "CLAUDE_CODE_OAUTH_TOKEN"), `a token variable reached the unit: ${out.env.filter((k) => /TOKEN/.test(k))}`);
+    check(out.argv.join(" ") === "first --cap 7", `the unit got argv "${out.argv.join(" ")}" (want "first --cap 7")`);
+    check(unitState(unit1) === "not-found", `the finished unit is still loaded (${unitState(unit1)}): --collect`);
 
-  const second = launch(["second"], home); // right away, and from another directory
-  const end2 = await second.done;
-  const out2 = existsSync(probe("second")) && JSON.parse(readFileSync(probe("second"), "utf8"));
-  check(end2.code === 0 && out2?.cwd === layout, `an immediate second launch failed (exit ${end2.code}, cwd ${out2?.cwd}): ${end2.err}`);
+    const second = launch(["second"], home); // right away, and from another directory
+    const end2 = await second.done;
+    const out2 = existsSync(probe("second")) && JSON.parse(readFileSync(probe("second"), "utf8"));
+    check(end2.code === 0 && out2?.cwd === layout, `an immediate second launch failed (exit ${end2.code}, cwd ${out2?.cwd}): ${end2.err}`);
 
-  const long = launch(["long", "--long"]);
-  await until(() => existsSync(probe("long")), 15_000, "the long probe never ran");
-  const unit3 = readFileSync(join(home, "unit"), "utf8").trim();
-  execFileSync("bash", [launchSh, "stop"], { env, stdio: "ignore" });
-  const stopped = await Promise.race([long.done, sleep(10_000).then(() => undefined)]);
-  check(stopped !== undefined && unitState(unit3) === "not-found", `launch.sh stop didn't stop the running probe (${unitState(unit3)})`);
+    const long = launch(["long", "--long"]);
+    await until(() => existsSync(probe("long")), 15_000, "the long probe never ran");
+    const unit3 = readFileSync(join(home, "unit"), "utf8").trim();
+    execFileSync("bash", [launchSh, "stop"], { env, stdio: "ignore" });
+    const stopped = await Promise.race([long.done, sleep(10_000).then(() => undefined)]);
+    check(stopped !== undefined && unitState(unit3) === "not-found", `launch.sh stop didn't stop the running probe (${unitState(unit3)})`);
+  } else console.log(`note: the systemd unit is checked on the laptop (this is ${process.arch})`);
 
   // The PGX's path (aarch64, a tmux window), as far as this laptop can check it: a uname that says aarch64 and a
   // tmux that records what it was asked.
@@ -391,10 +393,10 @@ await new Promise((r) => setTimeout(r, process.argv.includes("--long") ? 60_000 
   const tmuxArgs = (verb) => (existsSync(join(home, `tmux-${verb}.args`)) ? readFileSync(join(home, `tmux-${verb}.args`), "utf8").trim().split("\n") : []);
   const win = tmuxArgs("new-window");
   const nodeAt = win.indexOf(callerNode);
-  check(win.slice(0, 12).join(" ") === `new-window -t rt -n loop -c ${layout} -e RT_EVAL_HOME=${home} -e RT_EVAL_LAUNCHED=1 /usr/bin/env`, `tmux new-window got: ${win.slice(0, 12).join(" ")}`);
+  check(win.slice(0, 12).join(" ") === `new-window -t =rt: -n loop -c ${layout} -e RT_EVAL_HOME=${home} -e RT_EVAL_LAUNCHED=1 /usr/bin/env`, `tmux new-window got: ${win.slice(0, 12).join(" ")}`);
   check(["RT_EVAL_TOKEN_1", "RT_EVAL_TOKEN_2", "RT_EVAL_TOKEN_3", "CLAUDE_CODE_OAUTH_TOKEN"].every((k) => win.slice(12, nodeAt).includes(k)), `the tmux window keeps a token: env ${win.slice(12, nodeAt).join(" ")}`);
   check(nodeAt > 0 && win.slice(nodeAt).join(" ") === `${callerNode} --import ./evals/loop/node-hooks.mjs evals/loop/run.ts first --cap 7`, `the tmux window runs: ${win.slice(nodeAt).join(" ")}`);
-  check(tmuxArgs("send-keys").join(" ") === "send-keys -t rt:loop C-c", `launch.sh stop on aarch64 sent: ${tmuxArgs("send-keys").join(" ")}`);
+  check(tmuxArgs("send-keys").join(" ") === "send-keys -t =rt:loop C-c", `launch.sh stop on aarch64 sent: ${tmuxArgs("send-keys").join(" ")}`);
 
   // Inside emberhub-factory.slice (a transient one of this check's own, removed after): refused, and load.ts agrees.
   const slice = `rtcheck${process.pid}`;
