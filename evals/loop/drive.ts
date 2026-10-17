@@ -16,7 +16,7 @@ import { Scene } from "../../src/core/scene.ts";
 import { sceneDiff } from "../core/diff.ts";
 import { type Dropped, type Past, RETRY, type Turn, describeMarks, describeMove, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
 import { personaOf, styleOf, targetOf } from "../core/personas.ts";
-import { type Scenario, applies, beatOf, plan } from "../core/scenarios.ts";
+import { ASK_WORDS, type Scenario, applies, beatOf, plan } from "../core/scenarios.ts";
 import { type Step, isView, synthesize } from "../core/synth.ts";
 import { loadFixture, savedIn } from "../fixtures/fixtures.ts";
 import { draw, expectationFor, missCheck } from "../judge/judge.ts";
@@ -429,11 +429,12 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
         if (s.set.startsWith("heldout") && !voided) voided = "V5: a hedged meant is excluded from held-out sets";
       }
 
-      // The beat given (an undo only after a send rated ≤ 3), checked free from the parsed reply (V11: a miss stays valid).
+      // The beat given (an undo only after a send rated ≤ 3), checked free from the parsed reply (V11: a miss stays valid);
+      // a driver that says it didn't do the twist (beat_done false) didn't, whatever its words happen to match.
       const planned = plans[n - 1];
       const given = planned.beat && applies(planned.beat.id, st.past.at(-1)?.satisfaction) ? planned.beat : undefined;
       const sc = Scene.fromJSON(start);
-      const complied = !!given && beatOf(given.id).check(t, { send: n, looks: looks.map((l) => l.turn), view: drawnOn, lastMeant: st.past.at(-1)?.meant,
+      const complied = !!given && t.beatDone !== false && beatOf(given.id).check(t, { send: n, looks: looks.map((l) => l.turn), view: drawnOn,
         shapes: sc.stacked().filter((x) => x.kind !== "frame").map((x) => x.box), pages: pagesOf(sc).map((x) => ({ name: pageName(x), box: x.box })) });
       if (given && !complied) event("V11", "beat-missed", `beat ${given.id} not complied`);
 
@@ -441,7 +442,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
       const info: CaseInfo = {
         id, set: s.set, scenario: s.id, persona: s.persona, style: s.style, ...(s.target ? { target: s.target } : {}), start: s.start, ...(given ? { beat: given.id } : {}), ask: planned.ask,
         seed: s.seed, originSession: name, send: n, championSha: ctx.arms.A?.sha ?? "", tuningId: ctx.arms.A?.tuningId ?? "", harnessTag: ctx.harnessTag, configId,
-        recordedAt: new Date().toISOString(), hedged: t.hedged, beatDone: complied, flags,
+        recordedAt: new Date().toISOString(), hedged: t.hedged, beatDone: complied, askDone: ASK_WORDS[planned.ask].test(`${tl.spoken} ${t.meant}`), flags,
       };
       const meant: Meant = { meant: t.meant, ...(t.testing ? { testing: t.testing } : {}), hedged: t.hedged };
       const driverRec: DriverRecord = { raw: acting.raw, turn: t, retries: acting.retries, dropped: acting.dropped, clamped: acting.clamped, reqHash: acting.reqHash, view: drawnOn, looks };

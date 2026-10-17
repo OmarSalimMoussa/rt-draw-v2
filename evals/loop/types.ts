@@ -39,6 +39,8 @@ export type CaseInfo = {
   beat?: BeatId; ask: AskType; seed: number; originSession: string; send: number;
   championSha: string; tuningId: string; harnessTag: string; configId: string; recordedAt: string;
   hedged: boolean; beatDone: boolean;
+  /** Whether the driver's words (said or meant) match the planned ask type (scenarios.ts' ASK_WORDS). */
+  askDone?: boolean;
   /** e.g. "filled" (V12). */
   flags: string[];
 };

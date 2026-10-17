@@ -32,6 +32,20 @@ const QUOTA = {
   other: [0.15, 0.12, 0.15, 0.12, 0.12, 0.12, 0.12, 0.1],
 };
 export const quotaOf = (p: PersonaId) => (p === "first-timer" ? QUOTA.firstTimer : QUOTA.other);
+/**
+ * Words a send of each ask type uses, said or meant: the free ask-compliance check. Generous on purpose: it only has to
+ * catch drivers that ignore their asks (one pilot asked "bigger" on 6 of 10 first asks), never grade them.
+ */
+export const ASK_WORDS: Record<AskType, RegExp> = {
+  add: /\b(add|new|another|put|place|insert|create|make|want|need|include|also|give|show)\b/i,
+  remove: /\b(remove|delete|get rid|take (it |that |this |them )?(out|off|away)|drop|without|no more|lose|erase|hide|clear|don'?t need)\b/i,
+  move: /\b(move|put|drag|shift|slide|over|left|right|up|down|higher|lower|top|bottom|next to|beside|under|above|below|cent(er|re)|corner|side)\b/i,
+  resize: /\b(big|bigger|biggest|small|smaller|large|larger|wide|wider|narrow|narrower|tall|taller|short|shorter|size|resize|shrink|grow|expand|enlarge|tiny|huge|stretch|half|double)\b/i,
+  restyle: /\b(colou?rs?|red|blue|green|yellow|orange|purple|pink|black|white|gr[ae]y|brown|dark|darker|light|lighter|bold|style|font|border|rounded|round|shadow|background|fill|outline|thick|thin|bright|pastel|looks?|fancy|plain)\b/i,
+  retext: /\b(text|say|says|said|read|reads|word|words|wording|title|rename|call|called|name|label|caption|heading|headline|spell|write|written|change .+ to)\b/i,
+  reorder: /\b(order|reorder|swap|switch|first|last|before|after|above|below|top|bottom|front|back|behind|rearrange|sort|ahead|then)\b/i,
+  "new-page": /\b(pages?|screens?|tabs?|separate|section)\b/i,
+};
 
 /** About this share of sends get no beat (§2.2). */
 const NO_BEAT = 0.4;
@@ -39,10 +53,10 @@ const NO_BEAT = 0.4;
 const isBoard = (s: StartId) => s.startsWith("toyshop");
 
 type Box = { x: number; y: number; w: number; h: number };
-/** What a beat check reads besides the acting turn: this send's look turns before it, the screen it drew on and what's there (board px), the last send's meant. */
-export type BeatCtx = { send: number; looks: Turn[]; view: View; shapes: Box[]; pages: { name: string; box: Box }[]; lastMeant?: string };
+/** What a beat check reads besides the acting turn: this send's look turns before it, the screen it drew on and what's there (board px). */
+export type BeatCtx = { send: number; looks: Turn[]; view: View; shapes: Box[]; pages: { name: string; box: Box }[] };
 /** What a planned send knows about who drives it. */
-type Fit = { send: number; ask: AskType; pen: number; clarity: number; board: boolean };
+type Fit = { send: number; ask: AskType; pen: number; clarity: number; board: boolean; blank: boolean };
 
 export type Beat = {
   id: BeatId;
@@ -68,22 +82,31 @@ const anchor = (s: DrawStep) => (s.draw === "tap" ? s.at : s.draw === "arrow" ||
 /** Words that name a part of a page. */
 export const PART_NOUNS = /\b(header|footer|nav|navbar|navigation|menu|button|title|heading|headline|logo|image|photo|picture|card|banner|hero|sidebar|form|field|input|link|icon|label|list|table|chart|graph|grid|section|column|row|tab|map|price|search|bar|box|text|caption|page|avatar|calendar|player|cover|checklist|paragraph)s?\b/i;
 const POINTING = /\b(this|that|these|those|here|there)\b/i;
+/** Words that take (part of) an ask back. */
+const TAKE_BACK = /\b(no|nope|not|actually|wait|instead|rather|back|anymore|no longer|undo|revert|scratch that|never ?mind|forget|on second thought)\b/i;
+const MOOD = /\b(feel|feels|feeling|mood|vibe|vibes|atmosphere|cozy|cosy|calm|warm|cold|cheerful|gloomy|playful|serious|fancy|elegant|fun|sad|happy)\b/i;
+const contains = (a: Box, b: Box) => b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h;
+/** Shapes with no other shape inside them. */
+const leaves = (bs: Box[]) => bs.filter((a) => !bs.some((b) => b !== a && contains(a, b)));
 const pen = (f: Fit) => f.pen >= PEN_MIN;
+/** Something on the screen to point between: not a blank board's first send. */
+const content = (f: Fit) => pen(f) && !(f.blank && f.send === 1);
 const onBoard = (f: Fit) => f.board;
 const always = () => true;
 
 /** The doc's behaviours (§2.2's beat table); big-small is never picked: a style that starts big gets it on sends 1 and 2. */
 export const BEATS: Beat[] = [
-  { id: "amb-arrow", weight: 1, fits: pen, text: "draw one short arrow between two things, so it's unclear which end is the head. Say which one you meant only in \"meant\".",
+  { id: "amb-arrow", weight: 1, fits: content, text: "draw one short arrow between two things, so it's unclear which end is the head. Say which one you meant only in \"meant\".",
     check: (t, c) => draws(t).some((s) => s.draw === "arrow" && Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1]) / scale(c) >= 40 && Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1]) / scale(c) <= 120) },
   { id: "amb-shape", weight: 1, fits: pen, text: "sketch one quick shape that could be a box or a circle, over an empty spot where something new should go.",
     check: (t, c) => draws(t).some((s) => (s.draw === "box" || s.draw === "circle") && c.shapes.reduce((a, b) => a + overlap(boxOf(s.draw === "circle" ? s.around : s.box), b), 0) < 0.2 * (s.draw === "circle" ? s.around : s.box)[2] * (s.draw === "circle" ? s.around : s.box)[3]) },
-  { id: "two-cand", weight: 1, fits: pen, text: (side) => `say "this" or "that" while pointing between two similar things close together; you mean the ${side} one.`,
-    check: (t, c) => POINTING.test(said(t)) && draws(t).some((s) => c.shapes.filter((b) => distance(anchor(s), b) / scale(c) <= 80).length >= 2) },
+  { id: "two-cand", weight: 1, fits: content, text: (side) => `say "this" or "that" while pointing between two similar things close together; you mean the ${side} one.`,
+    // Leaf shapes only: a mark inside a card is "near" the card and its own text, which is no choice between two things.
+    check: (t, c) => POINTING.test(said(t)) && draws(t).some((s) => leaves(c.shapes).filter((b) => distance(anchor(s), b) / scale(c) <= 80).length >= 2) },
   { id: "contra", weight: 1, fits: always, text: "ask for something, then contradict part of it in the same breath; the last version is what you mean.",
-    check: (t) => says(t).length >= 2 || /\b(no|actually|wait)\b/i.test(said(t)) },
+    check: (t) => TAKE_BACK.test(said(t)) },
   { id: "mind", weight: 1, fits: (f) => f.send >= 2, text: "take back part of your last ask.",
-    check: (t, c) => /\b(back|instead|anymore|no longer|undo|revert|again|not)\b/i.test(t.meant) || (c.lastMeant ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 3 && t.meant.toLowerCase().includes(w)).length >= 2 },
+    check: (t) => TAKE_BACK.test(`${said(t)} ${t.meant}`) },
   { id: "pause-fix", weight: 1, fits: always, text: "start a sentence, stop for a long pause of 4 to 8 seconds (a pause step), then correct yourself.",
     check: (t) => t.steps.some((s, i) => "pause" in s && s.pause >= 4 && t.steps.slice(0, i).some((x) => "say" in x) && t.steps.slice(i + 1).some((x) => "say" in x)) },
   { id: "big-small", weight: 0, fits: () => false,
@@ -91,7 +114,8 @@ export const BEATS: Beat[] = [
       ? "this is your first send: make only the huge, vague ask, a sentence or two, and nothing smaller. Don't narrow it or take any of it back in this send, even if you usually change your mind mid-sentence; you'll press Enter and see what happens first."
       : "first rate the last result honestly. If it gave you what you asked for, stay ambitious and keep building on your big idea. If it disappointed you, scale back one step only: a little smaller or simpler than your last ask, not straight to the minimum, as you slowly realize what it can and can't do.",
     check: (t, c) => c.send > 1 ? says(t).length > 0 : says(t).length >= 1 && says(t).length <= 2 },
-  { id: "strange", weight: 1, fits: always, text: "make a mood-like ask instead of naming a part (like \"make it feel like rain\").", check: (t) => says(t).length > 0 },
+  { id: "strange", weight: 1, fits: always, text: "make a mood-like ask instead of naming a part (like \"make it feel like rain\").",
+    check: (t) => says(t).length > 0 && (MOOD.test(said(t)) || !PART_NOUNS.test(said(t))) },
   // Applies only after a disappointing send (applies()): satisfied drivers have nothing to undo.
   { id: "undo", weight: 2, fits: (f) => f.send >= 2, text: "if the last result wasn't what you meant: undo it first ({\"undo\": true}, alone in a turn), then ask again in other words.",
     check: (t, c) => [...c.looks, t].some((x) => x.steps.some((s) => "undo" in s)) && t.steps.some((s) => "say" in s || "draw" in s) },
@@ -113,27 +137,28 @@ const SIDES = ["left", "right", "upper", "lower"];
 export function plan(s: Scenario): Planned[] {
   const r = rng(s.seed ^ 0x2545f491);
   const st = styleOf(s.style);
-  // A style that starts big asks for an add on send 1; its other sends take that add out of
-  // their share, so its sessions still meet the quotas (as far as an add share allows).
+  // A style that starts big, or a blank board (removing, moving or restyling needs content), asks for an add on send 1;
+  // its other sends take that add out of their share, so its sessions still meet the quotas (as far as an add share allows).
   const q = quotaOf(s.persona);
-  const add = st.bigThenSmall && s.sends > 1 ? Math.max(0, (s.sends * q[0] - 1) / (s.sends - 1)) : q[0];
+  const firstAdd = (st.bigThenSmall || s.start === "blank") && s.sends > 1;
+  const add = firstAdd ? Math.max(0, (s.sends * q[0] - 1) / (s.sends - 1)) : q[0];
   const rest = q.map((x, i) => (i ? (x * (1 - add)) / (1 - q[0]) : add));
   const used = new Set<BeatId>();
   const out: Planned[] = [];
   for (let send = 1; send <= s.sends; send++) {
     // The same four draws every send, so one choice never reshuffles the next send's.
     const [a, none, pick, side] = [r(), r(), r(), r()];
-    const quota = st.bigThenSmall && send > 1 ? rest : q;
+    const quota = firstAdd && send > 1 ? rest : q;
     let i = 0;
     for (let acc = quota[0]; acc <= a && i < ASKS.length - 1; acc += quota[++i]);
-    let ask = ASKS[i];
+    let ask = firstAdd && send === 1 ? "add" : ASKS[i];
     let id: BeatId | undefined;
     if (st.bigThenSmall && send <= 2) {
       // A style that starts too big does so on send 1 (a whole new site: an add) and tones it down on send 2.
       id = "big-small";
       if (send === 1) ask = "add";
     } else if (none >= NO_BEAT) {
-      const fit = { send, ask, pen: st.pen, clarity: st.clarity, board: isBoard(s.start) };
+      const fit = { send, ask, pen: st.pen, clarity: st.clarity, board: isBoard(s.start), blank: s.start === "blank" };
       // Board beats may repeat within a session: only the toy-shop starts can carry them.
       const options = BEATS.filter((b) => (!used.has(b.id) || b.fits === onBoard) && b.fits(fit));
       let x = pick * options.reduce((t, b) => t + b.weight, 0);
@@ -157,12 +182,16 @@ function rows(set: SetId, prefix: string, sends: number, list: [PersonaId, Style
   return list.map(([persona, style, start, seed, target], i) => ({ id: `${prefix}-${target ?? start.replace(":", "-")}-${style.slice(0, 3)}-${pad(i + 1)}`, set, persona, style, target, start, sends, seed }));
 }
 
-/** The tuning bank's 32 sessions × 5 sends: first-timers 50% (every tuning target, all styles), explorers and breakers 25% each. */
+/**
+ * The tuning bank's 32 sessions × 5 sends: first-timers 50% (every tuning target, all styles), explorers and breakers 25% each.
+ * Three seeds moved when a blank board's first send became an add (t-airbnb-poi-03, t-bakery-tal-02, t-dashboard-pre-12), so
+ * every ask type but add keeps ≥ 13 planned cases and every beat ≥ 8.
+ */
 export const TUNING: Scenario[] = rows("tuning", "t", 5, [
-  ["first-timer", "typical", "blank", 1039, "bakery"], ["first-timer", "talker", "blank", 1316, "bakery"], ["first-timer", "pointer", "blank", 1591, "airbnb"],
+  ["first-timer", "typical", "blank", 1039, "bakery"], ["first-timer", "talker", "blank", 1436, "bakery"], ["first-timer", "pointer", "blank", 1595, "airbnb"],
   ["first-timer", "precise", "blank", 1856, "airbnb"], ["first-timer", "rambler", "blank", 2080, "pricing"], ["first-timer", "typical", "blank", 2499, "pricing"],
   ["first-timer", "talker", "blank", 2705, "music"], ["first-timer", "precise", "blank", 2795, "music"], ["first-timer", "pointer", "blank", 3011, "dentist"],
-  ["first-timer", "rambler", "blank", 3250, "dentist"], ["first-timer", "typical", "blank", 3542, "dashboard"], ["first-timer", "precise", "blank", 3821, "dashboard"],
+  ["first-timer", "rambler", "blank", 3250, "dentist"], ["first-timer", "typical", "blank", 3542, "dashboard"], ["first-timer", "precise", "blank", 3865, "dashboard"],
   ["first-timer", "talker", "blank", 4123, "repo"], ["first-timer", "pointer", "blank", 4385, "repo"], ["first-timer", "rambler", "blank", 4670, "bakery"],
   ["first-timer", "typical", "blank", 4798, "music"],
   ["explorer", "typical", "toyshop-home", 5215], ["explorer", "pointer", "toyshop-products", 5264], ["explorer", "talker", "toyshop-zoomed-out", 5567],
@@ -245,12 +274,16 @@ export type GateCase = {
   hedged: boolean; void: boolean;
   /** The driver's first words this send. */
   opener: string;
+  /** Its words match the planned ask (ASK_WORDS); absent on cases banked before the check existed. */
+  askDone?: boolean;
   /** The shape the send's first mark or the resolver's answer points at (first asks on a non-blank start). */
   firstTarget?: string;
 };
-export const GATES = { beatT: 6, beatH: 2, askT: 10, personaT: 30, familyT: 15, compliance: 0.8, targetShare: 0.4, targetMinAsks: 5, askBand: 0.1, opener: 0.15, hedged: 0.1, voids: 0.05 };
+export const GATES = { beatT: 6, beatH: 2, askT: 10, askCompliance: 0.5, personaT: 30, familyT: 15, compliance: 0.8, targetShare: 0.4, targetMinAsks: 5, askBand: 0.1, opener: 0.15, hedged: 0.1, voids: 0.05 };
 export const familyOf = (s: StartId) => (s.startsWith("toyshop") ? "toyshop" : s.startsWith("messy") ? "messy" : s.split(":")[0]);
 const OPENER = /^(okay|ok)\b[\s,.]*so\b/i;
+/** The shapes a start shows: a fixture's family shares them, each saved page has its own. */
+const screenOf = (s: StartId) => (/^(site|resume):/.test(s) ? s : familyOf(s));
 
 /** Every §2.3 gate the cases fail (none: the bank may be used). */
 export function gates(cases: GateCase[]): string[] {
@@ -265,15 +298,22 @@ export function gates(cases: GateCase[]): string[] {
     if (H.length && n(H) < GATES.beatH) fails.push(`beat ${b.id}: ${n(H)} complied held-out cases (< ${GATES.beatH})`);
   }
   for (const a of ASKS) if (T.filter((c) => c.ask === a).length < GATES.askT) fails.push(`ask ${a}: < ${GATES.askT} tuning cases`);
+  // The ask types above are the plan's: this is whether the drivers asked for them (add's words are too common to tell).
+  for (const a of ASKS.filter((x) => x !== "add")) {
+    const checked = T.filter((c) => c.ask === a && c.askDone !== undefined);
+    const done = checked.filter((c) => c.askDone).length;
+    if (checked.length >= GATES.askT && share(done, checked.length) < GATES.askCompliance) fails.push(`ask ${a}: the drivers' words match it on ${done}/${checked.length} tuning cases (< ${GATES.askCompliance})`);
+  }
   for (const p of ["first-timer", "explorer", "breaker"] as PersonaId[]) if (T.filter((c) => c.persona === p).length < GATES.personaT) fails.push(`persona ${p}: < ${GATES.personaT} tuning cases`);
   for (const f of ["blank", "toyshop", "clowns", "messy"]) if (T.filter((c) => familyOf(c.start) === f).length < GATES.familyT) fails.push(`start ${f}: < ${GATES.familyT} tuning cases`);
   const beaten = ok.filter((c) => c.beat);
   if (share(beaten.filter((c) => c.complied).length, beaten.length) < GATES.compliance) fails.push(`beat compliance ${beaten.filter((c) => c.complied).length}/${beaten.length} (< ${GATES.compliance})`);
-  // Target spread: a start screen whose first asks pile on one shape (measured once it has enough first asks).
-  for (const start of new Set(ok.map((c) => c.start))) {
-    const firsts = ok.filter((c) => c.start === start && c.send === 1 && c.firstTarget);
+  // Target spread: first asks that pile on one shape, per fixture family (the toy shop's starts share its shapes; no single
+  // start has the GATES.targetMinAsks sessions to be measured alone), per page for a site:/resume: start.
+  for (const screen of new Set(ok.map((c) => screenOf(c.start)))) {
+    const firsts = ok.filter((c) => screenOf(c.start) === screen && c.send === 1 && c.firstTarget);
     const top = Math.max(0, ...[...new Set(firsts.map((c) => c.firstTarget))].map((t) => firsts.filter((c) => c.firstTarget === t).length));
-    if (firsts.length >= GATES.targetMinAsks && share(top, firsts.length) > GATES.targetShare) fails.push(`start ${start}: one shape is the target of ${top}/${firsts.length} first asks`);
+    if (firsts.length >= GATES.targetMinAsks && share(top, firsts.length) > GATES.targetShare) fails.push(`start ${screen}: one shape is the target of ${top}/${firsts.length} first asks`);
   }
   ASKS.forEach((a, i) => {
     const want = share(T.reduce((s, c) => s + quotaOf(c.persona)[i], 0), T.length);

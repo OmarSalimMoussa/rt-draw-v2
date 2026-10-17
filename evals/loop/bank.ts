@@ -122,7 +122,7 @@ export function gateCases(p: Paths = paths()): Banked[] {
     const r = maybe<Readings>(at("readings.json"));
     out.push({
       id, recordedAt: info.recordedAt, set: info.set, persona: info.persona, start: info.start, send: info.send, ask: info.ask, beat: info.beat, complied: info.beatDone,
-      hedged: info.hedged, void: isVoid, opener: say?.say ?? "",
+      hedged: info.hedged, void: isVoid, opener: say?.say ?? "", askDone: info.askDone,
       // Target spread is about screens with something on them to point at.
       firstTarget: info.start === "blank" ? undefined : (r?.marks[0]?.targets[0] ?? r?.refs?.[0]?.ids[0]),
     });
