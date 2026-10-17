@@ -372,9 +372,21 @@ async function ladderCmd() {
 
 /** R8: the champion against itself in timed replay, shared: identical requests and scenes, TTFC ×1.00 ± 0.03, 0 calls. */
 async function aa(n: number): Promise<{ ok: boolean; detail: string }> {
-  const ids = ordered(banked(["tuning", "fresh"]), "aa").slice(0, n);
+  // A timed replay serves each request its banked reply, so only cases recorded on the commit both arms serve replay
+  // at 0 calls (top-ups and refreshes record on later champions): the champion's own if it has n, else the biggest
+  // group whose commit this clone has, else every case on the champion.
+  const all = banked(["tuning", "fresh"]);
+  const bySha = new Map<string, string[]>();
+  for (const id of all) {
+    const k = maybe<CaseInfo>(join(paths().bankCase(id), "case.json"))!.championSha;
+    bySha.set(k, [...(bySha.get(k) ?? []), id]);
+  }
+  const here = (sha: string) => tryGit(paths().repo, "cat-file", "-e", `${sha}^{commit}`) !== undefined;
+  const champion = championArm();
+  const sha = [...bySha].filter(([k, ids]) => ids.length >= n && here(k)).sort(([a, x], [b, y]) => Number(b === champion.sha) - Number(a === champion.sha) || y.length - x.length)[0]?.[0];
+  const ids = ordered(sha ? bySha.get(sha)! : all, "aa").slice(0, n);
   if (ids.length < n) return { ok: false, detail: `the bank has ${ids.length} tuning cases (want ${n})` };
-  const champ = championArm();
+  const champ: ArmSpec = sha && sha !== champion.sha ? { sha, tree: treeOf(sha) } : champion;
   return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
     const run = `aa-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     const { rows } = await runAB(rig, { run, kind: "aa", arms: { A: champ, B: champ }, mode: "replay", share: true, seed: run, cases: ids });
