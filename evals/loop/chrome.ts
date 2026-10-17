@@ -164,3 +164,33 @@ export async function capture(page: Page, o: { view?: View; width: number; quali
   const { data } = await page.send("Page.captureScreenshot", { format: "jpeg", quality: Math.round(o.quality * 100), clip: { ...clip, scale: o.width / clip.width } });
   return Buffer.from(data, "base64");
 }
+
+/** Luminance variance (0–255 scale) at or below which a capture is blank: t7 measured an emptied stage under it. */
+export const BLANK_VARIANCE = 25;
+/** A capture's luminance variance, decoded by the page itself. Under BLANK_VARIANCE it's blank. */
+export const captureVariance = (page: Page, jpeg: Buffer) =>
+  page.eval<number>(`(async () => {
+    const img = new Image(); img.src = "data:image/jpeg;base64,${jpeg.toString("base64")}"; await img.decode();
+    const c = Object.assign(document.createElement("canvas"), { width: img.naturalWidth, height: img.naturalHeight });
+    const g = c.getContext("2d"); g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data; let s = 0, s2 = 0;
+    for (let i = 0; i < d.length; i += 4) { const y = (d[i] + d[i + 1] + d[i + 2]) / 3; s += y; s2 += y * y; }
+    return s2 / (d.length / 4) - (s / (d.length / 4)) ** 2; })()`);
+
+/** Whether a rendered shape lies on the stage: only then can a capture be told blank (an empty board is one colour). */
+const SHOWS_SHAPES = `(() => { const s = document.querySelector(${JSON.stringify(STAGE_CLIP)}).getBoundingClientRect();
+  return [...document.querySelectorAll(${JSON.stringify(`${STAGE_CLIP} > g[data-id]`)})].some((g) => { const r = g.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.right > s.left && r.left < s.right && r.bottom > s.top && r.top < s.bottom; }); })()`;
+/** A capture of a stage that shows shapes, this close to one colour, never painted (v1 threw a baseline away over such captures). */
+const UNPAINTED_VARIANCE = 1;
+
+/** capture(), taken once more if the stage shows shapes but the image is one colour; `blank` when it still is (a §7.5 invariant). */
+export async function paintedCapture(page: Page, o: { width: number; quality: number }): Promise<{ jpeg: Buffer; blank: boolean }> {
+  let jpeg = await capture(page, o);
+  if (!(await page.eval<boolean>(SHOWS_SHAPES))) return { jpeg, blank: false };
+  for (let retry = true; ; retry = false) {
+    if ((await captureVariance(page, jpeg)) > UNPAINTED_VARIANCE) return { jpeg, blank: false };
+    if (!retry) return { jpeg, blank: true };
+    jpeg = await capture(page, o);
+  }
+}

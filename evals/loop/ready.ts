@@ -24,7 +24,7 @@ import { synthesize } from "../core/synth.ts";
 import { loadFixture } from "../fixtures/fixtures.ts";
 import { type FakeMode, type FakeRequest, startFakeApi } from "../mock/fake-api.ts";
 import type { Reply } from "./cache.ts";
-import { type Chrome, type Page, capture, launchChrome } from "./chrome.ts";
+import { BLANK_VARIANCE, type Chrome, type Page, capture, captureVariance, launchChrome } from "./chrome.ts";
 import { ask, gatewayStatus, spawnGateway } from "./client.ts";
 import { LOOP } from "./config.ts";
 import { inFactorySlice, managedSettingsHash, onAC, quiet, sampleLoad } from "./load.ts";
@@ -58,8 +58,6 @@ const ORDER = ["R1", "R7", "R9", "R10", "R13", "R3", "R11", "R12", "R2", "R4", "
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PORT = 5300;
-/** Luminance variance (0–255 scale) at or below which a capture is blank: t7 measured an emptied stage under it. */
-export const BLANK_VARIANCE = 25;
 const MIN_RAF = 30;
 const HEAP_CASES = 20;
 const STORM_MAX_MS = 5000;
@@ -320,16 +318,6 @@ type Side = {
 };
 type Pages = Awaited<ReturnType<typeof runPages>>;
 const UP = "new Promise((r) => { const t = () => (window.rtEval ? r() : setTimeout(t, 20)); t(); })";
-
-/** A capture's luminance variance, decoded by the page itself. Under BLANK_VARIANCE it's blank. */
-export const captureVariance = (page: Page, jpeg: Buffer) =>
-  page.eval<number>(`(async () => {
-    const img = new Image(); img.src = "data:image/jpeg;base64,${jpeg.toString("base64")}"; await img.decode();
-    const c = Object.assign(document.createElement("canvas"), { width: img.naturalWidth, height: img.naturalHeight });
-    const g = c.getContext("2d"); g.drawImage(img, 0, 0);
-    const d = g.getImageData(0, 0, c.width, c.height).data; let s = 0, s2 = 0;
-    for (let i = 0; i < d.length; i += 4) { const y = (d[i] + d[i + 1] + d[i + 2]) / 3; s += y; s2 += y * y; }
-    return s2 / (d.length / 4) - (s / (d.length / 4)) ** 2; })()`);
 
 /** The toy shop's home page with every doodle filled (the canned one), so a recolour needs no picture call. */
 function toyShop() {

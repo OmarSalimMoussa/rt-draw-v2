@@ -16,7 +16,7 @@ import type { Word } from "../../src/core/link.ts";
 import { draw, positionsFor } from "../judge/judge.ts";
 import { type Positions, caseFile } from "../judge/packet.ts";
 import { OVERUSE } from "../optimizer/patterns.ts";
-import { type Chrome, type Page, capture, launchChrome } from "./chrome.ts";
+import { type Chrome, type Page, launchChrome, paintedCapture } from "./chrome.ts";
 import { endCase, gatewayStatus, setMode } from "./client.ts";
 import { LOOP, configId } from "./config.ts";
 import type { RunMode } from "./gateway.ts";
@@ -189,14 +189,8 @@ export function begin(rig: Rig, s: RunSpec) {
     if (r.error) throw new Error(`gateway: ${r.error}`);
   });
 
-  async function fork(id: string, i: number, slot: number): Promise<Row> {
-    const dir = caseDir(s.run, id);
-    if (isDone(dir) && done.has(id)) return done.get(id)!;
-    const src = s.source?.(id);
-    if (src) for (const f of INPUT_FILES) if (existsSync(join(src, f)) && !existsSync(join(dir, f))) f.endsWith(".jpg") ? putImage(join(dir, f), readFileSync(join(src, f))) : put(join(dir, f), json(join(src, f)));
-    const at = <T>(f: string, run: string | undefined = s.run) => json<T>(caseFile(id, f, run));
-    const info = at<CaseInfo>("case.json"), input = at<CaseInput>("input.json"), before = at<SceneJSON>("before.scene.json");
-    const tabs = Object.fromEntries(await Promise.all(ARMS.map(async (a) => [a, await rig.tab(slot, a, s.arms[a].tree)] as const))) as Record<Arm, Tab>;
+  /** Both arms from freshly reloaded pages, sent the case at the same moment; what came back and what the gateway saw. */
+  async function sendBoth(id: string, slot: number, tabs: Record<Arm, Tab>, input: CaseInput, before: SceneJSON, first: Arm, payload: Record<Arm, SendInput>) {
     // A fresh page per case: the product keeps every call and span it ever made in memory.
     const origin = {} as Record<Arm, number>, sceneHash = {} as Record<Arm, string>;
     await Promise.all(ARMS.map(async (a) => {
@@ -208,33 +202,81 @@ export function begin(rig: Rig, s: RunSpec) {
       origin[a] = await page.eval<number>("performance.timeOrigin");
       sceneHash[a] = (await page.eval<{ sceneHash: string }>(`rtEval.load(${js({ scene: before, camera: input.camera, tuning: s.arms[a].tuning })})`)).sceneHash;
     }));
-    const first = firstArm(s.seed, i);
-    const sendOf = (a: Arm) => s.faults?.input?.(id, a, { words: input.words, strokes: input.strokes }) ?? { words: input.words, strokes: input.strokes };
-    const payload = { A: sendOf("A"), B: sendOf("B") };
+    const from = meter().length;
     // Both evaluations go out in the same tick, the first arm's first: "the same moment" through one CDP pipe.
     const sent = {} as Record<Arm, Promise<SendOutcome>>;
     for (const a of first === "A" ? ARMS : (["B", "A"] as Arm[])) sent[a] = tabs[a].page.eval<SendOutcome>(`rtEval.send(${js(payload[a])})`);
-    const out = { A: await sent.A, B: await sent.B };
+    // Settled, never raced: a page that fails must not leave the other arm's promise unhandled (it killed the process).
+    const settled = await Promise.allSettled(ARMS.map((a) => sent[a]));
     await s.faults?.afterSend?.(id);
     const end = (await endCase(s.run, id, rig.gateway)) as { loopP99Ms: number; calls: Record<string, RecordedReply[]> };
-    const lines = meter().filter((c) => c.case === id);
-    const enterAt = { A: origin.A + out.A.timing.enterAt, B: origin.B + out.B.timing.enterAt };
+    const lines = meter().slice(from).filter((c) => c.case === id);
+    const failed = settled.flatMap((x, k) => (x.status === "rejected" ? [`${ARMS[k]}'s page failed: ${String(x.reason).split("\n")[0]}`] : []));
+    const transport = lines.filter((c) => c.apiError && product(c));
+    const out = failed.length ? undefined : { A: (settled[0] as PromiseFulfilledResult<SendOutcome>).value, B: (settled[1] as PromiseFulfilledResult<SendOutcome>).value };
+    return { out, failed, transport, end, lines, origin, sceneHash };
+  }
+
+  /** A judge call that fails is tried once more, then the case is void (V7); the call cap stops the run instead. */
+  async function judged(id: string): Promise<string | undefined> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await s.judge!.judgeCase(id, positionsFor(order, s.seed).get(id)!);
+        return;
+      } catch (err) {
+        if (/call cap/.test(String(err))) throw err;
+        if (attempt === 2) return `V7: a judge call failed twice (${String(err).slice(0, 160)})`;
+      }
+    }
+  }
+
+  /** Sends one case (on its slot) and returns its judging and row, which run off the slot. */
+  async function fork(id: string, i: number, slot: number): Promise<() => Promise<Row>> {
+    const dir = caseDir(s.run, id);
+    if (isDone(dir) && done.has(id)) return async () => done.get(id)!;
+    const src = s.source?.(id);
+    if (src) for (const f of INPUT_FILES) if (existsSync(join(src, f)) && !existsSync(join(dir, f))) f.endsWith(".jpg") ? putImage(join(dir, f), readFileSync(join(src, f))) : put(join(dir, f), json(join(src, f)));
+    const at = <T>(f: string, run: string | undefined = s.run) => json<T>(caseFile(id, f, run));
+    const info = at<CaseInfo>("case.json"), input = at<CaseInput>("input.json"), before = at<SceneJSON>("before.scene.json");
+    const tabs = Object.fromEntries(await Promise.all(ARMS.map(async (a) => [a, await rig.tab(slot, a, s.arms[a].tree)] as const))) as Record<Arm, Tab>;
+    const first = firstArm(s.seed, i);
+    const sendOf = (a: Arm) => s.faults?.input?.(id, a, { words: input.words, strokes: input.strokes }) ?? { words: input.words, strokes: input.strokes };
+    const payload = { A: sendOf("A"), B: sendOf("B") };
+    const cls = s.classify?.(id) ?? { affected: true, class: s.cls ?? "Q" };
+    const row = (lines: CallLog[], o: { void?: string; overuse?: [boolean, boolean] } = {}) => {
+      const r = rowOf(s.run, { case: id, cluster: info.originSession, affected: cls.affected, class: cls.class, overuse: o.overuse ?? [false, false], ask: info.ask, beat: info.beat, firstArm: first, void: o.void }, lines);
+      appendRow(s.run, r);
+      return r;
+    };
+
+    // V7 (§2.7): a product call's transport error voids the attempt and re-sends the case once, then voids the case (never the run).
+    let x = await sendBoth(id, slot, tabs, input, before, first, payload);
+    if (x.transport.length || x.failed.length) x = await sendBoth(id, slot, tabs, input, before, first, payload);
+    const { out, end, lines } = x;
+    // A page that itself failed (the harness's bridge, Chrome): nothing to judge or record, a harness void.
+    if (!out) return async () => row(lines, { void: x.failed.join("; ") });
+    const enterAt = { A: x.origin.A + out.A.timing.enterAt, B: x.origin.B + out.B.timing.enterAt };
     const offset = Math.round((enterAt[first === "A" ? "B" : "A"] - enterAt[first]) * 10) / 10;
     const svg = {} as Record<Arm, string>;
+    const blank: Arm[] = [];
     for (const a of ARMS) {
       const o = out[a];
       const calls = lines.filter((c) => c.arm === a && product(c));
       const role = (r: RegExp) => calls.find((c) => r.test(c.role));
       svg[a] = await tabs[a].page.eval<string>(SVG_HASH);
+      const shot = await paintedCapture(tabs[a].page, { width: LOOP.judgePx, quality: LOOP.judgeQuality });
+      if (shot.blank) blank.push(a);
+      // An uncaught page exception is the arm's own product failure (§2.7), shown with its result.
+      const pageErrors = tabs[a].errors.map((e) => `page error: ${e.split("\n")[0]}`);
       writeArm(s.run, id, a, {
         "result.json": {
-          ops: o.ops, reply: o.reply, error: o.error, pics: o.pics, stopReasons: calls.map((c) => c.stopReason).filter((x): x is string => !!x),
+          ops: o.ops, reply: o.reply, error: [o.error, ...pageErrors].filter(Boolean).join("; ") || undefined, pics: o.pics, stopReasons: calls.map((c) => c.stopReason).filter((x): x is string => !!x),
           calls: calls.map((c) => ({ role: c.role, reqHash: c.reqHash, shared: c.shared, mode: c.mode, ms: c.ms, firstMs: c.firstMs, waitMs: c.waitMs, readyAtTake: c.readyAtTake, thinkingTokens: c.thinkingTokens })),
         },
         "timing.json": {
           ...o.timing, firstTextMs: role(/^draw$/)?.firstMs, resolverMs: role(/refs|resolve/)?.ms, picturesMs: o.pics?.ms, quiescedAt: Date.now(), gatewayLoopP99Ms: end.loopP99Ms,
         },
-        "spans.json": o.spans, "after.scene.json": o.after, "after.jpg": await capture(tabs[a].page, { width: LOOP.judgePx, quality: LOOP.judgeQuality }),
+        "spans.json": o.spans, "after.scene.json": o.after, "after.jpg": shot.jpeg,
       }, before, [input.camera, o.camera]);
       // The arm's calls as the bank records them (replies.json): what the diffscan compares, and a top-up deposits.
       put(join(dir, a, "replies.json"), end.calls[a] ?? []);
@@ -243,25 +285,24 @@ export function begin(rig: Rig, s: RunSpec) {
     const inputHash = { A: inputHashOf(payload.A), B: inputHashOf(payload.B) };
     const forkFile: ForkFile = {
       order: [first, first === "A" ? "B" : "A"], offsetsMs: [0, offset], sharedReqs: [...new Set(shared)], identicalAfter: js(out.A.after) === js(out.B.after) && svg.A === svg.B,
-      enterAt, pageOrigin: origin, cameras: { A: out.A.camera, B: out.B.camera }, svg, inputHash, sceneHash, loopP99Ms: end.loopP99Ms,
+      enterAt, pageOrigin: x.origin, cameras: { A: out.A.camera, B: out.B.camera }, svg, inputHash, sceneHash: x.sceneHash, loopP99Ms: end.loopP99Ms,
     };
     put(join(dir, "fork.json"), forkFile);
 
     // Per-case invariants (§7.5): any one voids the case (V9, V12's guard) and flags the run.
     const why: string[] = [];
     if (inputHash.A !== inputHash.B) why.push("V9: the arms were sent different inputs");
-    if (sceneHash.A !== sceneHash.B) why.push("V9: the arms loaded different before-scenes");
+    if (x.sceneHash.A !== x.sceneHash.B) why.push("V9: the arms loaded different before-scenes");
     if (Math.abs(offset) >= dispatchLimit()) why.push(`V9: dispatch offset ${Math.abs(offset)} ms ≥ the machine's ${dispatchLimit()} ms`);
     if (end.loopP99Ms > LOOP.eventLoopP99MaxMs) why.push(`V9: gateway event-loop p99 ${end.loopP99Ms.toFixed(1)} ms > ${LOOP.eventLoopP99MaxMs}`);
     if (lines.some((c) => c.cacheWrite1h > 0)) why.push("a 1-hour cache write");
     const stray = caseMetrics(s.run, id, lines).strayPictures;
     if (stray) why.push(`${stray} stray pictures (drawn for shapes the send didn't change)`);
-    const errors = ARMS.flatMap((a) => tabs[a].errors.map((e) => `page error in ${a}: ${e.split("\n")[0]}`));
-    why.push(...errors);
-    const transport = lines.filter((c) => c.apiError && product(c));
-    if (transport.length) why.push(`V7: ${transport[0].apiError}`);
+    for (const a of blank) why.push(`a blank capture of ${a}'s result (twice)`);
     for (const w of why) invariants.push({ case: id, why: w });
     if (why.length) appendLine(runFile(s.run, "invariants.jsonl"), { case: id, why });
+    // Still failing after the re-send: the case is void, counted only toward the void rate (§1.4 item 9).
+    const transport = x.transport.length ? `V7: ${x.transport.length} product calls failed twice (${x.transport[0].role}: ${x.transport[0].apiError})` : undefined;
 
     // Over-use (§1.4 item 8): the card's named detector on each arm's send.
     const det = s.card?.overuseDetector ? OVERUSE[s.card.overuseDetector] : undefined;
@@ -270,33 +311,49 @@ export function begin(rig: Rig, s: RunSpec) {
     const pointed = [...(r?.marks.flatMap((m) => m.targets) ?? []), ...(r?.refs?.flatMap((x) => x.ids) ?? [])];
     const overuse = ARMS.map((a) => !!det?.({ before, after: out[a].after, ops: out[a].ops, cameras: [input.camera, out[a].camera], pointed })) as [boolean, boolean];
 
-    if (s.judge && !why.length) await s.judge.judgeCase(id, positionsFor(order, s.seed).get(id)!);
-    runCaseDone(s.run, id);
-    const c = s.classify?.(id) ?? { affected: true, class: s.cls ?? "Q" };
-    const row = rowOf(s.run, { case: id, cluster: info.originSession, affected: c.affected, class: c.class, overuse, ask: info.ask, beat: info.beat, firstArm: first, void: why.length ? why.join("; ") : undefined }, lines);
-    appendRow(s.run, row);
-    return row;
+    return async () => {
+      const voided = why.length ? why.join("; ") : transport ?? (s.judge ? await judged(id) : undefined);
+      runCaseDone(s.run, id);
+      return row(lines, { void: voided, overuse });
+    };
   }
 
   return {
     order,
     invariants,
-    /** Runs these cases (in waves of the rig's slots, one smaller on a busy machine) and returns their rows in order. */
+    /**
+     * Runs these cases and returns their rows in order. A slot takes the next case as soon as its last one is sent
+     * (judging runs off the slot, under the gateway's eval-role limit); on a busy machine the last slot sits out.
+     */
     async add(ids: string[]): Promise<Row[]> {
       await ready;
       const at = ids.map((id) => (order.includes(id) ? order.indexOf(id) : order.push(id) - 1));
-      const rows: Row[] = [];
-      for (let k = 0; k < ids.length; ) {
-        const gate = await beforeWave(s.loadWaitMs);
-        const n = gate.ok ? rig.slots : Math.max(1, rig.slots - 1);
-        if (!gate.ok) appendLine(runFile(s.run, "load-gate.jsonl"), { ...gate.sample, at: new Date().toISOString(), slots: n });
-        rows.push(...(await Promise.all(ids.slice(k, k + n).map((id, j) => fork(id, at[k + j], j)))));
-        k += n;
-        if (rig.blocked.length) throw new Error(`run ${s.run} aborted: a page requested ${rig.blocked[0]} (outside its arm and /api/model)`);
-        const st = await gatewayStatus(rig.gateway);
-        if (st.capReached) throw new Error(`run ${s.run} stopped: the gateway's call cap (${st.cap}) is reached`);
-      }
-      return rows;
+      const rows: Promise<Row>[] = [];
+      let next = 0;
+      let stop: unknown;
+      const slot = async (k: number) => {
+        while (next < ids.length && !stop) {
+          const gate = await beforeWave(s.loadWaitMs);
+          if (!gate.ok) appendLine(runFile(s.run, "load-gate.jsonl"), { ...gate.sample, at: new Date().toISOString(), slots: Math.max(1, rig.slots - 1) });
+          if (!gate.ok && k > 0 && k === rig.slots - 1) continue;
+          if (next >= ids.length || stop) return;
+          const j = next++;
+          try {
+            const finish = await fork(ids[j], at[j], k);
+            rows[j] = finish();
+            rows[j].catch((err) => void (stop ??= err));
+            if (rig.blocked.length) throw new Error(`run ${s.run} aborted: a page requested ${rig.blocked[0]} (outside its arm and /api/model)`);
+            const st = await gatewayStatus(rig.gateway);
+            if (st.capReached) throw new Error(`run ${s.run} stopped: the gateway's call cap (${st.cap}) is reached`);
+          } catch (err) {
+            stop ??= err;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: rig.slots }, (_, k) => slot(k)));
+      const settled = await Promise.allSettled(rows);
+      if (stop) throw stop;
+      return settled.map((x) => (x as PromiseFulfilledResult<Row>).value);
     },
     flips: () => s.judge?.flips?.(),
     /** Each arm's share of upstream product calls that waited on a process still starting (the cold-start asymmetry). */
