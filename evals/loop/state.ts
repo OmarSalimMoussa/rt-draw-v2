@@ -96,8 +96,9 @@ export const RULES = { decisionMaxMin: 30, overrunsPerNight: 3, voidsInRow: 2, e
 /** The ladder's slots §6's 30 minutes assume (the PGX's). */
 const SLOTS_30MIN = 8;
 /**
- * A decision is closed as void (harness suspect) past 2× its class's $ per measured case (a retry storm or runaway pictures
- * raise that, a long legitimate path doesn't), or past 30 min of measuring at 8 slots (scaled for fewer).
+ * A decision is closed as void (harness suspect) past 2× its class's $ per measured case, counted without the candidate's
+ * own calls (a retry storm raises that; a long legitimate path or a costly candidate doesn't), or past 30 min of
+ * measuring at 8 slots (scaled for fewer).
  */
 export const overrun = (cls: DecisionClass, usd: number, measured: number, minutes: number, slots: number) =>
   usd > LOOP.decisionOverrun * CASE_USD[cls] * Math.max(1, measured) || minutes > RULES.decisionMaxMin * Math.max(1, SLOTS_30MIN / slots);

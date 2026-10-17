@@ -707,7 +707,8 @@ function loopState(): LoopState {
 /** Request hashes this run already paid for: a resumed run gets them from the cache (§6.5's resume cache). */
 const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError).map((c) => c.reqHash);
 /** List $ of the upstream calls of runs starting with `prefix`. */
-const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0), 0);
+/** A decision's live $ so far, the candidate arm's product calls left out: what the candidate itself costs is the cost veto's (usdRatio), never a harness overrun. */
+const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" && l.arm !== "B" ? l.listUsd : 0), 0);
 
 /** Rows for the fork cases drive.ts wrote to a run (G4 continuations, top-ups), each judged (a failed judge call voids its case). */
 async function forkedRows(run: string, ids: string[], judge: Judge, o: { seed: string; cls: Row["class"]; cluster: (id: string) => string }): Promise<Row[]> {
@@ -788,10 +789,10 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     record(d, run("g0"), undefined, o.owner ?? (verdict === "owner" ? reasons : []));
     return settle({ id, verdict, component: c.card.component, at: new Date().toISOString() });
   };
-  // More than 2× its class's $ per measured case, or past 30 min of measuring at 8 slots: harness suspect (§6.7).
+  // More than 2× its class's $ per measured case (the candidate's calls aside), or past 30 min of measuring at 8 slots: harness suspect (§6.7).
   const overBy = (cls: Decision["class"], measured: number, slots: number) => {
     const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0) / 60_000;
-    return overrun(cls, usd, measured, minutes, slots) ? `overran: $${usd.toFixed(2)} for ${measured} measured cases in ${minutes.toFixed(0)} min (class ${cls}: $${CASE_USD[cls]} a case)` : undefined;
+    return overrun(cls, usd, measured, minutes, slots) ? `overran: $${usd.toFixed(2)} (the candidate's calls aside) for ${measured} measured cases in ${minutes.toFixed(0)} min (class ${cls}: $${CASE_USD[cls]} a case)` : undefined;
   };
 
   // G0, free: the diff's gates, then (code cards) the typecheck and the scene round trip in the candidate's tree.
