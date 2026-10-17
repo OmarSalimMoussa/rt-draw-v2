@@ -4,7 +4,7 @@
 #   bash evals/loop/launch.sh stop
 # Laptop: a systemd user unit (its cgroup holds Chrome, Vite and Claude, so one stop takes them all) under the
 # runs' memory limit and a low CPU weight, with the sleep inhibitor held around it from this terminal. PGX
-# (aarch64): a window `loop` in the tmux session `rt`.
+# (aarch64): a window `loop` in the tmux session `rt` (or $RT_EVAL_TMUX, created when missing).
 # CPU is a weight (it yields to the owner's work), never a quota: under CPUQuota=600% a burst of Claude starts got
 # the whole unit throttled, and the gateway's event loop stalled 50-60 ms (V9 voids a case past 20 ms).
 # Neither sees this shell's variables (a unit gets the user manager's env, a tmux window the tmux server's), so

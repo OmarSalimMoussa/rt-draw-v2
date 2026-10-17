@@ -387,7 +387,7 @@ await new Promise((r) => setTimeout(r, process.argv.includes("--long") ? 60_000 
   mkdirSync(bin);
   writeFileSync(join(bin, "uname"), '#!/bin/sh\n[ "$1" = -m ] && echo aarch64 || exec /usr/bin/uname "$@"\n', { mode: 0o755 });
   writeFileSync(join(bin, "tmux"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${home}/tmux-$1.args"\n`, { mode: 0o755 });
-  const fakeEnv = { ...env, PATH: `${bin}:${env.PATH}` };
+  const fakeEnv = { ...env, PATH: `${bin}:${env.PATH}`, RT_EVAL_TMUX: "" }; // the default session, whatever the caller set
   execFileSync("bash", [launchSh, "first", "--cap", "7"], { cwd: home, env: fakeEnv, stdio: "ignore" });
   execFileSync("bash", [launchSh, "stop"], { cwd: home, env: fakeEnv, stdio: "ignore" });
   const tmuxArgs = (verb) => (existsSync(join(home, `tmux-${verb}.args`)) ? readFileSync(join(home, `tmux-${verb}.args`), "utf8").trim().split("\n") : []);
