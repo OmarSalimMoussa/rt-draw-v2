@@ -200,7 +200,8 @@ check(says(late[0], "keep") && late[0].counts.look === 80 && late[0].latency.ttf
 check(says(late[1], "revert") && late[1].counts.look === 80 && late[1].latency.ttfc.hi90 >= 1, `an unsure small gain isn't reverted at look 80: ${late[1].verdict} ${late[1].counts.look}`);
 const qFast = (s) => decide({ tuning: rows(80, { class: "Q", lat: () => 0.85, s }), heldout: rows(16), exhausted: true }, LAT, STATE);
 check(says(qFast((i) => [1, -1, 0, 0][i % 4]), "keep"), "a faster Q card with fidelity holding isn't kept");
-check(says(qFast((i) => [-1, -1, 0, 1][i % 4]), "revert", /fidelity Z/), "a faster Q card that loses fidelity (Z ≤ −1) is kept");
+check(says(qFast((i) => [-1, -1, 0, 1][i % 4]), "revert", /costs fidelity/) && qFast((i) => [-1, -1, 0, 1][i % 4]).counts.look === 32, "a faster Q card that clearly loses fidelity isn't reverted at look 32");
+check(says(qFast((i) => [1, -1, 0, 0][i % 4]), "keep") && qFast((i) => [1, -1, 0, 0][i % 4]).counts.look === 48, "a faster Q card with fidelity even is kept before look 48 (Z must clear 0 at 32)");
 const qWork = (workB) => decide({ tuning: rows(80, { class: "Q", lat: () => 0.85, s: SLIGHT_LOSS, workB }), heldout: rows(16), exhausted: true }, LAT, STATE);
 check(says(qWork(() => 3), "keep") && says(qWork(() => 2), "revert", /≤ -0.5/), "a visible-work drop doesn't tighten the quality floor to −0.5 (N6)");
 

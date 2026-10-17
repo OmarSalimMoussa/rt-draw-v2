@@ -74,15 +74,12 @@ const rateRise = (rows: Row[], f: (r: Row, arm: 0 | 1) => number, of: (r: Row, a
 };
 const x2 = (r: Ratio) => `×${r.est.toFixed(3)} (lo95 ${r.lo95.toFixed(3)}, hi90 ${r.hi90.toFixed(3)})`;
 
-/**
- * The fidelity floor a craft or latency keep must clear: tighter when visible work fell (N6), at look 32 or before (with
- * so few cases the −1.0 floor kept a ×0.85 latency win that lost fidelity at a .40 share 65% of the time), or in quality debt.
- */
-function qualityFloor(rows: Row[], debt: boolean): { ok: boolean; why: string } {
+/** The fidelity floor a craft or latency keep must clear: `floor`, or tighter when visible work fell (N6) or in quality debt. */
+function qualityFloor(rows: Row[], debt: boolean, floor: number): { ok: boolean; why: string } {
   const z = zOf(rows);
   if (debt) return { ok: z >= LOOP.qualDebtFloorZ, why: `quality debt: fidelity Z ${z.toFixed(2)} < ${LOOP.qualDebtFloorZ}` };
-  const floor = ratio(rows, (r, a) => r.work[a]) < LOOP.workMin || rows.length <= LOOP.looks[1] ? LOOP.workFloorZ : LOOP.qualityFloorZ;
-  return { ok: z > floor, why: `fidelity Z ${z.toFixed(2)} ≤ ${floor}` };
+  const f = ratio(rows, (r, a) => r.work[a]) < LOOP.workMin ? Math.max(floor, LOOP.workFloorZ) : floor;
+  return { ok: z > f, why: `fidelity Z ${z.toFixed(2)} ≤ ${f}` };
 }
 
 /** The latency veto (§1.4 item 2): either metric surely slower, and by more than LOOP.latVeto.est. */
@@ -90,8 +87,8 @@ export function latencyVeto(ratios: Partial<Record<Metric, Ratio>>): string[] {
   return Object.entries(ratios).flatMap(([m, r]) => (r && r.lo95 > LOOP.latVeto.lo95 && r.est > LOOP.latVeto.est ? [`latency veto: ${m} ${x2(r)}`] : []));
 }
 
-/** The goal-latency rule (§1.3) at each look; quality must hold for a keep. */
-function latencyRule(rows: Row[], m: Metric, holds: (rows: Row[]) => { ok: boolean; why: string }, exhausted: boolean) {
+/** The goal-latency rule (§1.3) at each look; quality must hold for a keep, and a futile quality ends it. */
+function latencyRule(rows: Row[], m: Metric, holds: (rows: Row[], look: number) => { ok: boolean; why: string; futile?: boolean }, exhausted: boolean) {
   const looks: Look[] = [];
   let why = "";
   for (let i = 0; i < LOOP.looks.length; i++) {
@@ -99,8 +96,9 @@ function latencyRule(rows: Row[], m: Metric, holds: (rows: Row[]) => { ok: boole
     if (rows.length < n) return { looks, next: exhausted ? undefined : n, why };
     const at = rows.slice(0, n);
     const r = pairedRatio(at, m);
-    const q = holds(at);
+    const q = holds(at, i);
     looks.push({ n, decisive: at.filter((x) => x.s).length, z: zOf(at) });
+    if (q.futile) return { looks, keep: false, n, why: q.why };
     if (!r) continue;
     const last = i === LOOP.looks.length - 1;
     if (i === 0 && r.est > LOOP.latFutility16) return { looks, keep: false, n, why: `${m} ${x2(r)} at look ${n}` };
@@ -142,13 +140,20 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
 
   let core: { looks: Look[]; keep?: boolean; n?: number; next?: number; why?: string };
   if (goal === "latency") {
-    const holds = (rows: Row[]) => (cls === "S" ? { ok: true, why: "" } : qualityFloor(rows, state.qualityDebt));
+    // Fidelity held tight early, looser with more cases, and a clear loss ends it: a floor that any later look could pass kept
+    // a ×0.85 card losing fidelity at a .40 share 35% of the time after G3 (now 22%; a neutral one 79% → 70%, simulated).
+    const holds = (rows: Row[], i: number) => {
+      if (cls === "S") return { ok: true, why: "" };
+      const z = zOf(rows);
+      if (i > 0 && z <= LOOP.latFutilityZ) return { ok: false, futile: true, why: `fidelity Z ${z.toFixed(2)} ≤ ${LOOP.latFutilityZ}: the speed costs fidelity` };
+      return qualityFloor(rows, state.qualityDebt, LOOP.latFloorZ[i]);
+    };
     core = latencyRule(live, card.metric ?? "ttfc", holds, exhausted);
   } else {
     core = ruleF(live, (r) => ((goal === "craft" ? r.sCraft : r.s) ?? 0), exhausted);
-    // A craft keep must not cost fidelity (N3).
+    // A craft keep must not cost fidelity (N3), held tighter at look 32 or before.
     if (core.keep && goal === "craft") {
-      const q = qualityFloor(live.slice(0, core.n), false);
+      const q = qualityFloor(live.slice(0, core.n), false, core.n! <= LOOP.looks[1] ? LOOP.workFloorZ : LOOP.qualityFloorZ);
       if (!q.ok) core = { ...core, keep: false, why: q.why };
     }
   }

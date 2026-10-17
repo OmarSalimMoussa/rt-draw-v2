@@ -9,6 +9,8 @@ export const LOOP = {
   rareMin: 32, topUpMaxSends: 48,
   // latency and craft goals (§1.3)
   latFutility16: 1.0, latKeepHi90: 1.0, latRevert48: 0.98, qualityFloorZ: -1.0, workFloorZ: -0.5,
+  // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on
+  latFloorZ: [Infinity, 0, -0.5, -1.0], latFutilityZ: -1.25,
   // vetoes and trust (§1.4)
   latVeto: { lo95: 1.0, est: 1.08 }, latDebtLo90: 1.05, qualDebtHi90: 0.5, qualDebtFloorZ: 0,
   heldoutVetoZ: -1.0, heldoutMax: 32,
