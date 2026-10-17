@@ -7,8 +7,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { type CanUseTool, type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
-import { MODEL_IDS, type MockApi, childEnv } from "../../dev/claude.ts";
-import { ask, gatewayStatus } from "../loop/client.ts";
+import { MODEL_IDS, type MockApi, type RateLimit, childEnv } from "../../dev/claude.ts";
+import { ask, gatewayStatus, recordSpend } from "../loop/client.ts";
 import { listUsd, meterAgent } from "../loop/meter.ts";
 import { paths } from "../loop/paths.ts";
 import { put } from "../loop/record.ts";
@@ -92,6 +92,12 @@ export type AgentRun = { role: keyof typeof TOOLS; run: string; cwd: string; sys
 export type AgentResult = { text: string; stop: "done" | "turns" | "minutes" | "usd" | "error"; error?: string; turns: number; minutes: number; usd: number; denied: string[] };
 
 const NONE = { inTokens: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, outTokens: 0 };
+/** A rate_limit_event's state, read as dev/claude.ts reads it for the gateway's calls (here: trees older than this harness lack an export). */
+function rateLimitOf(i: Record<string, unknown>): RateLimit {
+  const w = (i.unifiedWindows ?? {}) as Record<string, { utilization?: number; resetsAt?: number } | undefined>;
+  const own = (type: string) => (i.rateLimitType === type ? (i.utilization as number | undefined) : undefined);
+  return { status: String(i.status), fiveHour: w.five_hour?.utilization ?? own("five_hour"), sevenDay: w.seven_day?.utilization ?? own("seven_day"), resetsAt: w.five_hour?.resetsAt ?? (i.resetsAt as number | undefined) };
+}
 
 /** One capped agent session; its meter line is written however it ends. */
 export async function runAgent(a: AgentRun): Promise<AgentResult> {
@@ -99,6 +105,7 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
   const t0 = Date.now();
   const r: AgentResult = { text: "", stop: "done", turns: 0, minutes: 0, usd: 0, denied: [] };
   const usage = { ...NONE };
+  let rateLimit: RateLimit | undefined;
   const refuse = (tool: string, input: Record<string, unknown>) => {
     const why = a.rule(tool, input);
     if (why) r.denied.push(`${tool} ${JSON.stringify(input).slice(0, 160)}: ${why}`);
@@ -139,6 +146,8 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
         for (const k of Object.keys(usage) as (keyof typeof usage)[]) usage[k] += turn[k];
         r.usd += listUsd(MODEL, turn);
         if (r.usd >= a.caps.usd) end("usd");
+      } else if (m.type === "rate_limit_event") {
+        rateLimit = rateLimitOf(m.rate_limit_info as unknown as Record<string, unknown>);
       } else if (m.type === "result") {
         if (m.subtype === "success") r.text = m.result;
         else {
@@ -158,6 +167,8 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
   }
   r.minutes = (Date.now() - t0) / 60_000;
   meterAgent(p.calls, { at: new Date().toISOString(), run: a.run, role: a.role, agent: true, model: MODEL, totalCostUsd: r.usd, usage, turns: r.turns, minutes: r.minutes, token: a.token.slot });
+  // The slot's five-hour estimate and weekly allowance count this session too (no gateway: a check's agent, nothing to tell).
+  await recordSpend({ slot: a.token.slot, usd: r.usd, rateLimit }).catch(() => {});
   return r;
 }
 

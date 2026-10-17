@@ -4,7 +4,7 @@
 // and its env carries no token or key.
 import { type ChildProcess, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Effort, Thinking } from "../../dev/claude.ts";
+import type { Effort, RateLimit, Thinking } from "../../dev/claude.ts";
 import type { RunMode } from "./gateway.ts";
 import type { SlotN } from "./tokens.ts";
 
@@ -83,6 +83,8 @@ export async function ask(r: AskRequest, url = gatewayUrl): Promise<{ text: stri
  * checkpoints); cached: request hashes the diffscan found identical in both arms, served from the bank cache in a live run.
  */
 export const setMode = (run: string, mode: RunMode, o: { share?: boolean; cached?: string[] } = {}, url = gatewayUrl) => post("/run", { run, mode, ...o }, url);
+/** An agent session's list $ and last rate-limit state on its slot: the slot's window and week count agents too (§6.6). */
+export const recordSpend = (o: { slot: SlotN; usd: number; rateLimit?: RateLimit }, url = gatewayUrl) => post("/spend", o, url);
 /** The case is over: the gateway's event-loop delay p99 over it, and its calls per arm (replies.json's rows). */
 export const endCase = (run: string, caseId: string, url = gatewayUrl) => post("/case-end", { run, case: caseId }, url);
 export async function gatewayStatus(url = gatewayUrl) {

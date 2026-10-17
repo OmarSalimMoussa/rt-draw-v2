@@ -292,6 +292,12 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
         return json(res, 200, {});
       }
       if (path === "/case-end") return json(res, 200, endCase(b.run as string, b.case as string));
+      if (path === "/spend") {
+        // An agent session (run outside the gateway, on a slot's token): its $ and rate-limit state count on that slot.
+        if (!o.tokens.some((t) => t.slot === b.slot) || typeof b.usd !== "number") return json(res, 400, { error: "spend needs a loaded slot and usd" });
+        slots.record(b.slot as SlotN, { usd: b.usd, rateLimit: b.rateLimit as CallStats["rateLimit"] });
+        return json(res, 200, {});
+      }
       json(res, 404, { error: `no ${path}` });
     } catch (err) {
       if (!res.headersSent) json(res, 400, { error: err instanceof Error ? err.message : String(err) });
