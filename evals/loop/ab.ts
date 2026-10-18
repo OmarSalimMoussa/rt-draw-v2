@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { View } from "../../src/core/board.ts";
 import type { Stroke } from "../../src/core/ink.ts";
 import type { Word } from "../../src/core/link.ts";
-import { changeFrame, inside } from "../core/diff.ts";
+import { changeFrame, hidden } from "../core/diff.ts";
 import { draw, positionsFor } from "../judge/judge.ts";
 import { type Positions, caseFile } from "../judge/packet.ts";
 import { OVERUSE } from "../optimizer/patterns.ts";
@@ -271,7 +271,7 @@ export function begin(rig: Rig, s: RunSpec) {
     // What changed, framed the same in both arms, when either result's screen left it ("delete this, and show me home"):
     // the after captures alone hid such edits from the judge and the owner's labels.
     const frame = changeFrame(before, [out.A.after, out.B.after], out.A.camera.w / out.A.camera.h);
-    const offScreen = !!frame && ARMS.some((a) => !inside(frame, out[a].camera));
+    const offScreen = !!frame && ARMS.some((a) => hidden(before, out[a].after, out[a].camera));
     for (const a of ARMS) {
       const o = out[a];
       const calls = lines.filter((c) => c.arm === a && product(c));

@@ -14,7 +14,7 @@ import { arch } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { View } from "../../src/core/board.ts";
-import { changeFrame, inside } from "../core/diff.ts";
+import { changeFrame, hidden } from "../core/diff.ts";
 import { HitIndex } from "../../src/core/hittest.ts";
 import { promptOf } from "../../src/core/prompts.ts";
 import { plan, prompt } from "../../src/core/resolve.ts";
@@ -614,7 +614,7 @@ function fakeLabels() {
 /**
  * Packet version 2 for runs judged before it, from their saved scenes (0 calls): both arms framed on what changed when a
  * result's screen left it, added to the packet; those cases' fidelity verdicts move to judge/blind/, so calibration and
- * any reader judge them again with the framed images.
+ * any reader judge them again with the framed images. Rerunnable: a case that no longer needs a frame gets its verdicts back.
  */
 async function packetsCmd() {
   const runs = o.pos.slice(1);
@@ -631,22 +631,29 @@ async function packetsCmd() {
         cases++;
         const after = { A: maybe<SceneJSON>(join(dir, "A", "after.scene.json"))!, B: maybe<SceneJSON>(join(dir, "B", "after.scene.json"))! };
         const { cameras } = maybe<{ cameras: Record<Arm, View> }>(join(dir, "fork.json"))!;
-        const frame = changeFrame(maybe<SceneJSON>(caseFile(c, "before.scene.json", run))!, [after.A, after.B], cameras.A.w / cameras.A.h);
-        if (!frame || (["A", "B"] as Arm[]).every((a) => inside(frame, cameras[a]))) continue;
+        const before = maybe<SceneJSON>(caseFile(c, "before.scene.json", run))!;
+        const frame = changeFrame(before, [after.A, after.B], cameras.A.w / cameras.A.h);
+        const need = !!frame && (["A", "B"] as Arm[]).some((a) => hidden(before, after[a], cameras[a]));
         for (const a of ["A", "B"] as Arm[]) {
+          if (!need) {
+            rmSync(join(dir, a, "changed.jpg"), { force: true });
+            continue;
+          }
           const { page } = await rig.tab(0, a, trees[a === "A" ? 0 : 1]);
           await loadPage(page, run, c, after[a], cameras[a]);
-          putImage(join(dir, a, "changed.jpg"), await capture(page, { view: frame, width: LOOP.judgePx, quality: LOOP.judgeQuality }));
+          putImage(join(dir, a, "changed.jpg"), await capture(page, { view: frame!, width: LOOP.judgePx, quality: LOOP.judgeQuality }));
         }
         const p = readPacket(run, c);
-        put(join(dir, "judge", "packet.json"), { ...p, images: { ...p.images, ...framed(run, c, p.positions) } });
+        const { leftChanged: _l, rightChanged: _r, ...images } = p.images;
+        put(join(dir, "judge", "packet.json"), { ...p, images: { ...images, ...framed(run, c, p.positions) } });
+        // Verdicts judged without the frame go aside while the packet has one, and come back when it doesn't.
         for (const sub of ["", "v1", "v2"])
-          for (const f of ["fidelity-1.json", "fidelity-2.json"])
-            if (existsSync(join(dir, "judge", sub, f))) {
-              mkdirSync(join(dir, "judge", "blind", sub), { recursive: true });
-              renameSync(join(dir, "judge", sub, f), join(dir, "judge", "blind", sub, f));
-            }
-        done++;
+          for (const f of ["fidelity-1.json", "fidelity-2.json"]) {
+            const [live, blind] = [join(dir, "judge", sub, f), join(dir, "judge", "blind", sub, f)];
+            if (need && existsSync(live)) mkdirSync(dirname(blind), { recursive: true }), renameSync(live, blind);
+            if (!need && existsSync(blind) && !existsSync(live)) mkdirSync(dirname(live), { recursive: true }), renameSync(blind, live);
+          }
+        if (need) done++;
       }
     }, 1), true);
     say(`packets: ${run}: ${done} of ${cases} cases framed on what changed (their fidelity verdicts moved to judge/blind/), 0 calls`);

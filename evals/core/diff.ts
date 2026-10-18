@@ -134,5 +134,11 @@ export function changeFrame(before: SceneJSON, afters: SceneJSON[], aspect: numb
   return { x, y, w, h };
 }
 
-/** Whether frame `f` lies wholly inside view `v`. */
-export const inside = (f: View, v: View) => f.x >= v.x && f.y >= v.y && f.x + f.w <= v.x + v.w && f.y + f.h <= v.y + v.h;
+/** Whether a send changed a shape wholly off `camera` (where it is now; a removed one where it was): the screen left it. */
+export function hidden(before: SceneJSON, after: SceneJSON, camera: View): boolean {
+  const box = new Map([...before.shapes, ...after.shapes].map((s) => [s.id, s.box]));
+  return sceneDiff(before, after).changed.some((id) => {
+    const b = box.get(id)!;
+    return b.x >= camera.x + camera.w || b.x + b.w <= camera.x || b.y >= camera.y + camera.h || b.y + b.h <= camera.y;
+  });
+}
