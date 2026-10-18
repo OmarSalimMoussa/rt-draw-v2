@@ -14,7 +14,6 @@ import { arch } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { View } from "../../src/core/board.ts";
-import { SCREEN } from "../../src/core/board.ts";
 import { HitIndex } from "../../src/core/hittest.ts";
 import { promptOf } from "../../src/core/prompts.ts";
 import { plan, prompt } from "../../src/core/resolve.ts";
@@ -25,6 +24,7 @@ import { assemble, checkCalibration } from "../judge/calibrate.ts";
 import { canaryDue, runCanary } from "../judge/canary.ts";
 import { calibrationFile, combined, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
 import { caseFile, readPacket } from "../judge/packet.ts";
+import { writeDry } from "../mock/dry.ts";
 import { startFakeApi } from "../mock/fake-api.ts";
 import type { Label, PairRef } from "../pages/plugin.ts";
 import * as agents from "../optimizer/agents.ts";
@@ -53,7 +53,7 @@ import { acceptProbe, probe, probeDue, probeRefuses } from "./probe.ts";
 import { remetric } from "./remetric.ts";
 import { CASE_USD, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
-import { fakeApiReplies, stubPictures } from "./stubs.ts";
+import { stubPictures } from "./stubs.ts";
 import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Judged, Row, SceneJSON, SendOutcome } from "./types.ts";
@@ -327,12 +327,12 @@ function medianTimings(log: string, out: string): string {
 async function ladderCmd() {
   const champ = championArm();
   const work = join(paths().home, "ladder");
-  fakeApiReplies(join(work, "replies"), {
-    draw: promptOf("draw", DEFAULTS).system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), "draw-refs": promptOf("resolve", DEFAULTS).system, picture: promptOf("picture", DEFAULTS).system(DEFAULTS),
-  });
-  // The owner's logged timings, or --latency's (a rehearsal: evals/mock/dry.ts writes them).
+  // Sends shaped like a Q case's: every drawing reply adds 2 pictures, so a tab streams up to 3 calls and renders them
+  // (a recolour alone streamed 1 and let a laptop claim slots its real cases would overload).
+  const dry = writeDry(join(work, "dry"), { pictures: 2 });
+  // The owner's logged timings, or --latency's, else the dry run's medians (a fresh clone, as on the PGX, has no log).
   const log = str("latency") ?? (initFrom() && join(initFrom()!, ".data", "model-calls.jsonl"));
-  const api = await startFakeApi({ replies: join(work, "replies"), latency: log && existsSync(log) ? medianTimings(log, join(work, "latency.jsonl")) : undefined });
+  const api = await startFakeApi({ replies: dry.replies, latency: log && existsSync(log) ? medianTimings(log, join(work, "latency.jsonl")) : dry.latency });
   // Its own home: fake calls must not reach the loop's meter or slot state.
   const gw = await spawnGateway({ home: join(work, "gateway"), tokens: fakeTokens(), mockApi: api.url });
   try {

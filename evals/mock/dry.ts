@@ -67,11 +67,13 @@ function meant(reply: string): string {
 const judgeReplies = () =>
   ["yes", "partly", "no", "yes"].map((met) => JSON.stringify({ winner: "tie", confidence: 2, why: "dry: both alike", should: ["the asked change is made"], mustNot: ["nothing else moves"], met }));
 
-export function writeDry(dir: string) {
+/** The dry run's files in `dir`; with `pictures` (0–3), every drawing reply adds that many (the ladder's fixed shape). */
+export function writeDry(dir: string, o: { pictures?: number } = {}) {
   const replies = join(dir, "replies");
   mkdirSync(replies, { recursive: true });
   const put = (role: string, system: string, texts: string[]) => writeFileSync(join(replies, `${role}.${sha12(system)}.json`), JSON.stringify(texts));
-  for (const v of PROMPTS.draw) put("draw", v.system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), drawReplies());
+  const draws = drawReplies();
+  for (const v of PROMPTS.draw) put("draw", v.system(true, SCREEN.w, SCREEN.h, 0, SCREEN.w), o.pictures === undefined ? draws : [draws[o.pictures]]);
   for (const v of PROMPTS.resolve) put("draw-refs", v.system, ['{"refs": []}']);
   for (const v of PROMPTS.picture) put("picture", v.system(DEFAULTS), [stubReply("picture")]);
   const driver = readFileSync(DRIVER_REPLIES, "utf8").split("\n").filter(Boolean).map((l) => meant((JSON.parse(l) as { reply: string }).reply));

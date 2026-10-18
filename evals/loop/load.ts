@@ -12,8 +12,11 @@ import { LOOP } from "./config.ts";
 import { paths } from "./paths.ts";
 import type { LoadSample } from "./types.ts";
 
-/** The ladder (§7.6): slot counts tried in order, and how much worse than one slot a step may get. */
-export const LADDER = { slots: [1, 2, 4, 6, 8, 12], wallMax: 1.15, longTaskRiseMax: 0.2, longTaskFloorMs: 50 } as const;
+/**
+ * The ladder (§7.6): slot counts tried in order, and how much worse than one slot a step may get. 16 on top: Rule L's
+ * looks add 16 cases at a time, and the PGX ran 16 slots of 2-picture sends at ×1.00 (24 put the arms' Enter 35 ms apart).
+ */
+export const LADDER = { slots: [1, 2, 4, 6, 8, 12, 16], wallMax: 1.15, longTaskRiseMax: 0.2, longTaskFloorMs: 50 } as const;
 /** Before a wave: poll this often, for at most this long, then run one slot smaller. */
 const WAVE_POLL_MS = 5_000;
 const WAVE_WAIT_MS = 5 * 60_000;
@@ -130,6 +133,8 @@ export function step(slots: number, sends: WaveSend[], base?: Step): Step {
     s.wallX > LADDER.wallMax && `send wall ×${s.wallX.toFixed(2)} of one slot's`,
     base && s.longTasksMs > (1 + LADDER.longTaskRiseMax) * Math.max(base.longTasksMs, LADDER.longTaskFloorMs) && `long tasks ${s.longTasksMs} ms against ${base.longTasksMs}`,
     s.psiCpu >= LOOP.psiMax && `CPU pressure ${(s.psiCpu * 100).toFixed(0)}%`,
+    // V9 voids a case past the cap and any V9 stops the loop: a knee past it would stop the first run.
+    s.dispatchP99Ms > LOOP.dispatchOffsetCapMs && `the arms' Enter ${s.dispatchP99Ms.toFixed(1)} ms apart (V9's cap ${LOOP.dispatchOffsetCapMs} ms)`,
   ].filter(Boolean);
   if (why.length) Object.assign(s, { ok: false, why: why.join(", ") });
   return s;

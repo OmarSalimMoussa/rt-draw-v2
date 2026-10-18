@@ -47,11 +47,11 @@ without a user systemd manager it says so and prints the bare command instead.
 | a | `cd ~/projects/rt-draw-v2 && for c in evals/checks/t*.mjs; do node --import ./evals/loop/node-hooks.mjs "$c" \|\| break; done` | 0 | every line PASS, ~15 min |
 | b | `rte init --from ~/projects/rt-draw-v2 && cd ~/rt-eval/repo` | 0 | `init: … at eval-harness-1`, 1 s |
 | c | `rte ready --stub --mock-api` | 0 | `ready: ok`, 30 s |
-| d | `bash evals/loop/launch.sh ladder --max 4` | 0 | `ladder: 2 case slots`, 2 min |
+| d | `bash evals/loop/launch.sh ladder --max 4` | 0 | `ladder: 4 case slots` (fewer on a busy laptop), ~4 min |
 | 1 | `bash evals/loop/launch.sh smoke --cap 50` | 50 | `smoke: ok, ~36 calls`, $0.2, 2 min |
 | 2 | `bash evals/loop/launch.sh bake --cap 36` | 36 | ~31 picture calls, $0.1–0.3, 2 min; then the re-pin below |
 | 3 | `bash evals/loop/launch.sh probe --cap 10` | 10 | 8 driver calls, $0.1, 1 min (bank build runs it itself too) |
-| 4 | `bash evals/loop/launch.sh bank build --tuning 32 --heldout-gate 8 --heldout-chart 8 --cap 1900` | 1,900 | ~1,520 calls, ~$11.7 (5% of a window), ~50 min at 2 slots (the spec's ~19 min on the PGX assumed 8) |
+| 4 | `bash evals/loop/launch.sh bank build --tuning 32 --heldout-gate 8 --heldout-chart 8 --cap 1900` | 1,900 | ~1,520 calls, ~$11.7 (5% of a window), ~25 min at 4 slots here, ~10 min on the PGX at 16 (estimates) |
 | 5 | `rte aa --shared --cases 16 && rte bench freeze` | 0 | `aa: ok … ×1.00`, 2 min |
 | 6 | `bash evals/loop/launch.sh checkpoint --zero --cap 750` | 750 | ~600 calls, ~$5.1, ~20 min here (an estimate) |
 | 7 | `bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200`, label at http://localhost:5180/evals/label/ (60 clear fidelity + 30 craft), then `rte calib --check` | 200 | ~160 calls, ~$1.6, plus 25–30 min of your labelling |
@@ -79,13 +79,15 @@ git clone git@github.com:OmarSalimMoussa/rt-draw-v2.git ~/projects/rt-draw-v2   
 cd ~/projects/rt-draw-v2 && npm ci
 for c in evals/checks/t*.mjs; do node --import ./evals/loop/node-hooks.mjs "$c" || break; done   # t7 and t21 leave the laptop's systemd unit to the laptop
 rte init --from ~/projects/rt-draw-v2 && cd ~/rt-eval/repo
-rte ready --stub --mock-api && bash evals/loop/launch.sh ladder --max 12   # measured 2 slots on 2026-10-17
+rte ready --stub --mock-api && bash evals/loop/launch.sh ladder --max 16   # 16 slots, ~8 min
 ```
 
-Probed on 2026-10-17 from a bundle of this branch (0 calls): `npm ci` 5 s, tsc and all 22 checks pass, `ready: ok`
-in 26 s, and the ladder froze **2 case slots, twice** (4 slots ran ×1.18 and ×1.37 of one slot's send wall on an idle
-machine: load 0.1, no CPU pressure), not the 8 the spec planned for. At 2 slots the PGX measures a decision about as
-fast as the laptop (~20 min, not ~10); calls and $ don't change. The latency trust is the reason to run there.
+Measured on 2026-10-17 (0 calls): the ladder first froze **2 case slots** on an idle PGX. Every tab of an arm loaded
+from one host, and Chrome opens at most 6 connections per host, so the tabs' /api/model streams queued behind each
+other (never more than 6 calls in flight). Each tab now has a host of its own (`a0.localhost`, `b3.localhost`, …), and
+with sends shaped like a Q case's (2 pictures each) the PGX ran **16 slots at ×1.00** of one slot's send wall (load 0.2
+per core, CPU pressure 2.5%, the arms' Enter 8 ms apart); 24 put them 35 ms apart, past V9's 25 ms. The ladder now
+tops out at 16, a look's size. The latency trust is the reason to run there.
 
 Then write `~/.config/rt-eval/tokens.env` there (as in §0, chmod 600) and run the table's steps that haven't run yet, the
 same commands without `--quality-only`. A bank built on the laptop moves over instead of being rebuilt (saves ~$11.7):

@@ -284,7 +284,7 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
     ["slower at 6", { 1: { wall: 1000 }, 2: { wall: 1060, p99: 6 }, 4: { wall: 1140, p99: 12 }, 6: { wall: 1200 }, 8: { wall: 1300 } }, 12, 4, LOOP.dispatchOffsetCapMs, [1, 2, 4, 6]],
     ["pressure at 4", { 1: { wall: 1000 }, 2: { wall: 1000, p99: 7 }, 4: { wall: 1000, psi: 0.12 } }, 12, 2, LOOP.dispatchOffsetCapMs, [1, 2, 4]],
     ["long tasks at 2", { 1: { wall: 1000, lt: 40 }, 2: { wall: 1000, lt: 70 } }, 12, 1, LOOP.dispatchOffsetCapMs, [1, 2]],
-    ["offset over the cap", { 1: { wall: 1000 }, 2: { wall: 1000, p99: 40 }, 4: { wall: 2000 } }, 12, 2, LOOP.dispatchOffsetCapMs, [1, 2, 4]],
+    ["offset over the cap", { 1: { wall: 1000 }, 2: { wall: 1000, p99: 40 }, 4: { wall: 2000 } }, 12, 1, LOOP.dispatchOffsetCapMs, [1, 2]], // V9 would void its cases
     ["--max 4", { 1: { wall: 1000 }, 2: { wall: 1000 }, 4: { wall: 1000, p99: 9 } }, 4, 4, LOOP.dispatchOffsetCapMs, [1, 2, 4]],
   ];
   for (const [name, spec, max, slots, limit, steps] of scenarios) {
@@ -294,7 +294,7 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
     check(m.slots === slots && m.dispatchLimitMs === limit && saved.slots === slots && saved.dispatchLimitMs === limit, `ladder "${name}": knee ${m.slots}, limit ${m.dispatchLimitMs} ms (want ${slots}, ${limit})`);
     check(ran.join() === steps.join(), `ladder "${name}" ran slots ${ran} (want ${steps}: it stops at the first step past the knee)`);
   }
-  check(LADDER.slots.join() === "1,2,4,6,8,12", "the ladder's slots aren't §7.6's 1, 2, 4, 6, 8, 12");
+  check(LADDER.slots.join() === "1,2,4,6,8,12,16", "the ladder's slots aren't 1, 2, 4, 6, 8, 12, 16 (§7.6's, plus a look's 16)");
   let busy;
   await ladder(wave({ 1: { wall: 1000, psi: 0.3 } }), 12, join(home, "busy-machine.json")).catch((e) => (busy = e));
   check(busy && !existsSync(join(home, "busy-machine.json")), "a machine under pressure at one slot still got a machine.json");
