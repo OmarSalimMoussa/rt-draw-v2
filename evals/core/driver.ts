@@ -113,6 +113,8 @@ const SKETCHES = ["wave", "zigzag", "blob"];
  */
 export function parseTurn(reply: string, view: View): { turn: Turn; dropped: Dropped[]; clamped: number } {
   const o = JSON.parse(firstObject(reply)) as Record<string, unknown>;
+  // A bare step ({"undo": true} on the PGX's smoke) isn't a turn: retried, where it ended the session as "nothing to do".
+  if (!Array.isArray(o.steps) && o.stop !== true) throw new Error("no steps list");
   const k = view.w / DRIVE_VIEW.screenW;
   const dropped: Dropped[] = [];
   let clamped = 0;
@@ -283,9 +285,13 @@ export function describeMarks(steps: Step[], v: View): string[] {
   });
 }
 
+/** How an undo reads in the driver's message, and a second one with nothing left to take back. */
+export const UNDID = "undid your last send";
+export const NOTHING_TO_UNDO = "tried to undo again, but your last send was already undone";
+
 /** A move by hand (or an undo) as the driver remembers it, without numbers. */
 export function describeMove(s: ViewStep | { undo: true }, v: View): string {
-  if ("undo" in s) return "undid your last send";
+  if ("undo" in s) return UNDID;
   if ("zoom" in s) return `zoomed ${s.zoom}`;
   if ("look" in s) return `zoomed in on ${place(centre(s.look), v)}`;
   const [dx, dy] = s.scroll;
@@ -313,9 +319,11 @@ export function userMessage(card: Card, history: Past[], beat: { id: BeatId; tex
     ? `Your sends so far:\n${describePast(history).join("\n")}\n\nThe first picture is your screen when you pressed Enter on send ${n}, with your ink; the second is your screen now`
     : "Both pictures show your screen as you open the product";
   const moved = looked.length
-    ? `, after you moved the view without pressing Enter (${looked.join("; ")}).${history.at(-1)?.satisfaction ? ` You've already rated send ${n}.` : ""}${looked.length >= DRIVE_VIEW.maxLooks ? " You've looked around enough: act on what you see now, or stop." : ""}`
+    ? `, after you did this without pressing Enter: ${looked.join("; ")}.${history.at(-1)?.satisfaction ? ` You've already rated send ${n}.` : ""}${looked.length >= DRIVE_VIEW.maxLooks ? " You've looked around enough: act on what you see now, or stop." : ""}`
     : ".";
-  const task = `The kind of change you ask for this send: ${ASKS[ask]} (you pick what, where and how).${beat ? ` This send's twist: ${beat.text}` : ""}${p.id === "first-timer" ? "" : ` Fill "testing" with your plan or guess for this send.`}`;
+  // Once the undo is done the twist says so: repeating "undo it first" had a driver undo twice and then give up.
+  const twist = beat && (beat.id === "undo" && looked.some((l) => l.includes(UNDID)) ? "you've undone the last result: now ask again in other words." : beat.text);
+  const task = `The kind of change you ask for this send: ${ASKS[ask]} (you pick what, where and how).${twist ? ` This send's twist: ${twist}` : ""}${p.id === "first-timer" ? "" : ` Fill "testing" with your plan or guess for this send.`}`;
   return `${who}\n\n${how}\n\n${now}${moved}\n\n${task}\n\nYou have at most ${sendsLeft} more send${sendsLeft === 1 ? "" : "s"} before you have to leave. What do you do next?`;
 }
 

@@ -14,7 +14,7 @@ import { groupStrokes, readMark } from "../../src/core/marks.ts";
 import { parseReply } from "../../src/core/resolve.ts";
 import { Scene } from "../../src/core/scene.ts";
 import { sceneDiff } from "../core/diff.ts";
-import { type Dropped, type Past, RETRY, type Turn, describeMarks, describeMove, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
+import { type Dropped, NOTHING_TO_UNDO, type Past, RETRY, type Turn, describeMarks, describeMove, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
 import { personaOf, styleOf, targetOf } from "../core/personas.ts";
 import { ASK_WORDS, type Scenario, applies, beatOf, plan } from "../core/scenarios.ts";
 import { type Step, isView, synthesize } from "../core/synth.ts";
@@ -268,10 +268,11 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
       const view = (page: Page) => page.eval(`rtEval.setView(${js(st.camera)})`);
       // An undo restores the scene before the last send in every arm (0 calls).
       const undo = async () => {
-        if (!st.undoTo) return;
+        if (!st.undoTo) return false;
         start = st.scene = st.undoTo;
         st.undoTo = undefined;
         for (const a of arms) await pages[a]!.eval(`rtEval.restore(${js(start)})`);
+        return true;
       };
 
       // Turns: looking around (view moves by hand, an undo) until the driver acts, at most DRIVE_VIEW.maxLooks.
@@ -340,8 +341,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
         const moves: string[] = [];
         for (const step of t.steps) {
           if ("undo" in step) {
-            await undo();
-            moves.push(describeMove(step, drawnOn));
+            moves.push((await undo()) ? describeMove(step, drawnOn) : NOTHING_TO_UNDO);
           } else if (isView(step)) {
             moves.push(describeMove(step, st.camera));
             st.camera = moveView(step, st.camera);

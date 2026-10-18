@@ -221,6 +221,11 @@ check(D.isLook(r.turn) && near(r.turn.steps[0].scroll[0], 96 * k) && r.turn.step
 r = one([{ undo: true }]);
 check(D.isLook(r.turn) && "undo" in r.turn.steps[0] && one([{ say: "hi" }, { undo: true }]).dropped[0]?.why === "undo after a say or draw", "undo steps aren't parsed as a look, or an undo after a say isn't dropped");
 check(D.isLook(one([]).turn) && D.isLook(one([{ pause: 2 }]).turn), "an empty turn isn't a look");
+let bare;
+try { D.parseTurn('{"undo": true}', START); } catch (e) { bare = e; }
+check(bare && D.parseTurn('{"meant": "done", "stop": true}', START).turn.stop, "a bare step without a steps list parses as a turn (it ended a session), or a stop without one doesn't");
+const undoBeat = { id: "undo", text: "undo it first, then ask again" };
+check(D.userMessage(card, past.slice(0, 1), undoBeat, "add", 2, [D.UNDID]).includes("now ask again") && D.userMessage(card, past.slice(0, 1), undoBeat, "add", 2).includes("undo it first"), "after the undo twist is done the message still says to undo first");
 let threw = false;
 try {
   D.parseTurn("I can't do that.", START);
