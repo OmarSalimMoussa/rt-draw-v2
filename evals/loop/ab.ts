@@ -206,9 +206,33 @@ export function begin(rig: Rig, s: RunSpec) {
   const started = Date.now();
   const sampler = setInterval(() => appendLine(runFile(s.run, "load.ndjson"), sampleLoad()), 5000);
   sampler.unref();
-  const ready = setMode(s.run, s.mode, { share: s.share, cached: s.cached }, rig.gateway).then((r) => {
-    if (r.error) throw new Error(`gateway: ${r.error}`);
+  const warmRun = `${s.run}~warm`;
+  const warmed = new Set<number>();
+  const ready = Promise.all([
+    setMode(s.run, s.mode, { share: s.share, cached: s.cached }, rig.gateway),
+    s.mode === "live" ? setMode(warmRun, "scan", { warm: true }, rig.gateway) : {},
+  ]).then((rs) => {
+    for (const r of rs) if (r.error) throw new Error(`gateway: ${r.error}`);
   });
+
+  /**
+   * A slot's first case in a live run goes out once first as a warm-up scan (the bank's replies at once, 0 calls) that
+   * starts the Claude processes each arm's calls take, and waits until they're up: every case then finds its processes
+   * waiting, as a send mid-session does. Cold, checkpoint 0's first 16 cases waited 0.2–0.9 s per call on starting
+   * processes (CPU pressure 32%), and a gateway kept across decisions could leave one arm's pools warm, not the other's.
+   */
+  async function warmUp(id: string, slot: number, tabs: Record<Arm, Tab>, input: CaseInput, before: SceneJSON, payload: Record<Arm, SendInput>) {
+    await Promise.all(ARMS.map(async (a) => {
+      const { page } = tabs[a];
+      page.labels = { run: warmRun, case: id, arm: a, slot };
+      await page.reload();
+      await page.eval(UP);
+      await page.eval(`rtEval.load(${js({ scene: before, camera: input.camera, tuning: s.arms[a].tuning })})`);
+      // The arm's own failure shows in the timed send; a warm-up only has to make its calls.
+      await page.eval(`rtEval.send(${js(payload[a])})`).catch(() => {});
+    }));
+    await endCase(warmRun, id, rig.gateway);
+  }
 
   /** Both arms from freshly reloaded pages, sent the case at the same moment; what came back and what the gateway saw. */
   async function sendBoth(id: string, slot: number, tabs: Record<Arm, Tab>, input: CaseInput, before: SceneJSON, first: Arm, payload: Record<Arm, SendInput>) {
@@ -258,6 +282,10 @@ export function begin(rig: Rig, s: RunSpec) {
       return r;
     };
 
+    if (s.mode === "live" && !warmed.has(slot)) {
+      warmed.add(slot);
+      await warmUp(id, slot, tabs, input, before, payload);
+    }
     // V7 (§2.7): a product call's transport error voids the attempt and re-sends the case once, then voids the case (never the run).
     let x = await sendBoth(id, slot, tabs, input, before, first, payload);
     if (x.transport.length || x.failed.length) x = await sendBoth(id, slot, tabs, input, before, first, payload);

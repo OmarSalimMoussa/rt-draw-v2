@@ -149,6 +149,8 @@ writeFileSync(join(caseDir, "replies.json"), JSON.stringify([
   { role: "picture", ordinal: 7, subject: "a red kite", reqHash: c2.calls.A[0].reqHash, cacheFile: c2.calls.A[0].cacheFile, offsets: [] },
 ]));
 await setMode("scan1", "scan");
+await sleep(300);
+const poolsScan = JSON.stringify((await gatewayStatus()).pools);
 const n3 = upstream();
 const scanLabels = { run: "scan1", case: "bank-c1", arm: "B", slot: 0 };
 const exact = await product(scanLabels, { model: "sonnet", system: DRAW, user: U1, from: "draw" });
@@ -160,6 +162,23 @@ check(exact.text === LONG && exact.done?.scan === "hit" && exact.done?.mode === 
 check(sDraw.text === LONG && sDraw.done?.scan === "standin", `scan stand-in by role and ordinal: ${sDraw.done?.scan} ${JSON.stringify(sDraw.text.slice(0, 20))}`);
 check(sPic.text === "ok" && sPic.done?.scan === "standin", `scan stand-in by picture subject: ${sPic.done?.scan} ${JSON.stringify(sPic.text)}`);
 check(sMiss.text === "" && sMiss.done?.scan === "miss" && !sMiss.done?.error, `scan miss: ${sMiss.done?.scan} ${JSON.stringify(sMiss.text)}`);
+await sleep(100);
+check(JSON.stringify((await gatewayStatus()).pools) === poolsScan, `a plain scan started processes: ${JSON.stringify((await gatewayStatus()).pools)}`);
+// A warm scan (ab.ts' warm-up send, a slot's first in a live run): served as a scan, 0 calls, but each call and warm
+// request starts the processes it would take, and the case's end waits until they're up for the timed send.
+await setMode("warm1", "scan", { warm: true });
+const n6 = upstream();
+const wLabels = { run: "warm1", case: "bank-c1", arm: "A", slot: 6 };
+const wDraw = await product(wLabels, { model: "sonnet", system: DRAW, user: "a request the bank never saw", from: "draw" });
+const wPic = await (await fetch(`${gw.url}/api/model`, { method: "POST", headers: { "content-type": "application/json", ...Object.fromEntries(Object.entries(wLabels).map(([k, v]) => [`x-rt-${k}`, String(v)])) }, body: JSON.stringify({ model: "sonnet", system: "picture sys", warm: 2 }) })).json();
+await endCase("warm1", "bank-c1");
+const wKeys = Object.entries((await gatewayStatus()).pools).filter(([k]) => k.startsWith("A|6|"));
+check(upstream() === n6 && wDraw.done?.scan === "standin" && wPic.warming === 2, `a warm scan: ${upstream() - n6} upstream, ${wDraw.done?.scan}, warming ${wPic.warming}`);
+check(wKeys.map(([, n]) => n).sort().join() === "1,2", `a warm scan's pools for A slot 6: ${JSON.stringify(wKeys)} (want one draw process, two picture)`);
+const wLive = await product({ run: "w2", case: "c9", arm: "A", slot: 6 }, { model: "sonnet", system: DRAW, user: `${tag("w2")} the timed send`, from: "draw" });
+check(wLive.done?.warm === true && wLive.done?.readyAtTake === true, `the timed send after a warm scan didn't take a started process: warm ${wLive.done?.warm}, readyAtTake ${wLive.done?.readyAtTake}`);
+await endCase("w2", "c9");
+check((await setMode("warm2", "live", { warm: true })).error === "only a scan warms", "a warm live run was accepted");
 
 // ---- Replay: the recorded offsets, on the requester's own clock.
 await setMode("rep1", "replay");

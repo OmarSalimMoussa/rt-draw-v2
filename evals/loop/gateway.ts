@@ -11,7 +11,7 @@
 // behaves like one user's server; eval roles run at most 6 at once and never pool.
 // A run is live (fresh calls, shared inside a case unless the run says share: false),
 // replay (cached replies on their own clock) or scan (instant: a hit, else the case's
-// stand-in, else empty). Only eval calls resume from the cache within their run: a
+// stand-in, else empty; a warm scan also starts the processes its calls would take). Only eval calls resume from the cache within their run: a
 // product call is a fresh sample (or the other arm's, shared) in every live run,
 // except the request hashes the run names as identical in both arms (the diffscan
 // found them): those come from the bank cache on their recorded clock, for both.
@@ -39,6 +39,8 @@ const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 const LOOP_RESOLUTION_MS = 10;
 const LATE_MAX_MS = 1000;
+/** A warm scan's case end waits this long, at most, for the processes it started to finish starting. */
+const WARM_WAIT_MS = 20_000;
 /**
  * Starting a Claude process blocks this loop ~6–12 ms (20–27 ms measured on the busy shared laptop): every start
  * goes through one queue, this far apart, so the starts of two arms and several slots never stack. A call that has
@@ -59,7 +61,7 @@ type Out = {
   /** refused before any call (the cap): no meter line */ refused?: boolean;
 };
 /** A case's loop delays by whole ms (the last bucket: LATE_MAX_MS and more), a fixed size however long the case runs. */
-type CaseState = { lates: Uint32Array; ordinals: Map<string, number>; calls: Record<string, RecordedReply[]> };
+type CaseState = { lates: Uint32Array; ordinals: Map<string, number>; calls: Record<string, RecordedReply[]>; /** a warm scan's processes, settled once up */ ups: Promise<void>[] };
 
 const flat = (s: CallStats) => ({
   inTokens: s.inTokens, outTokens: s.outTokens, cacheRead: s.cacheRead, cacheWrite: s.cacheWrite, write5m: s.write5m, write1h: s.write1h, thinkingTokens: s.thinkingTokens,
@@ -75,7 +77,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   const tokenOf = (slot: SlotN) => o.tokens.find((t) => t.slot === slot)!.token;
   const pool = new Pool();
   const flights = new Flights();
-  const runs = new Map<string, { mode: RunMode; share: boolean; cached?: Set<string> }>();
+  const runs = new Map<string, { mode: RunMode; share: boolean; cached?: Set<string>; warm?: boolean }>();
   const cases = new Map<string, CaseState>();
   // The loop's delay, sampled every LOOP_RESOLUTION_MS into each open case: how late a tick ran, less the time spent
   // starting processes since the last one. The starts are the harness's own and spaced (SPAWN_GAP_MS); counted, a
@@ -108,9 +110,17 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   };
   const later = (f: () => void, first = false) => (first ? spawnQueue.unshift(f) : spawnQueue.push(f), pump());
   const queued = (s: () => Proc, first = false) => new Promise<Proc>((r) => later(() => r(s()), first));
-  /** Tops a pool key up to `keep` waiting processes, one start per turn. */
-  const topUp = (key: string, keep: number, s: () => Proc) => {
-    for (let k = 1; k <= Math.min(keep, MAX_WARM); k++) later(() => pool.warm(key, k, s));
+  /** Tops a pool key up to `keep` waiting processes, one start per turn; `ups` gets a promise per turn, settled once its starts are up. */
+  const topUp = (key: string, keep: number, s: () => Proc, ups?: Promise<void>[]) => {
+    for (let k = 1; k <= Math.min(keep, MAX_WARM); k++) {
+      let settle = () => {};
+      ups?.push(new Promise<void>((r) => (settle = r)));
+      later(() => {
+        const started: Proc[] = [];
+        pool.warm(key, k, () => (started.push(s()), started.at(-1)!));
+        void Promise.allSettled(started.map((x) => x.ready)).then(() => settle());
+      });
+    }
   };
   const poolKey = (a: Pick<Ask, "arm" | "slot" | "req">, slot: SlotN) => `${a.arm ?? "-"}|${a.slot ?? "-"}|t${slot}|${keyOf(a.req.model, a.req.system, a.req.effort as Effort, a.req.thinking as Thinking)}`;
 
@@ -120,7 +130,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     let c = cases.get(key);
     if (!c) {
       slots.boundary();
-      cases.set(key, (c = { lates: new Uint32Array(LATE_MAX_MS + 1), ordinals: new Map(), calls: {} }));
+      cases.set(key, (c = { lates: new Uint32Array(LATE_MAX_MS + 1), ordinals: new Map(), calls: {}, ups: [] }));
     }
     return c;
   }
@@ -180,7 +190,9 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   }
 
   async function serve(a: Ask, onText: (t: string) => void): Promise<Out> {
-    const { mode, share, cached } = runs.get(a.run) ?? { mode: "live", share: true };
+    const { mode, share, cached, warm } = runs.get(a.run) ?? { mode: "live", share: true };
+    // A warm scan (ab.ts' warm-up send, a slot's first in a live run) starts the processes each call would take.
+    if (warm && a.page) topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined);
     // An eval call this run already made (a resume); in replay and scan any product reply the cache holds; in live the run's named ones.
     const hit = !a.page || mode !== "live" || cached?.has(a.hash) ? readReply(p, a.hash, a.run, !a.page) : undefined;
     if (hit) {
@@ -248,10 +260,11 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!r) return json(res, 400, { error });
     const c = base.case ? caseOf(base.run, base.case) : undefined;
     if (b.user === undefined) {
-      // A scan or replay serves every reply from the cache: a process warmed for it would never be used.
-      if ((runs.get(base.run)?.mode ?? "live") !== "live") return json(res, 200, { warming: 0 });
+      // A scan or replay serves every reply from the cache: a process warmed for it would never be used (but a warm scan's are).
+      const run = runs.get(base.run);
+      if ((run?.mode ?? "live") !== "live" && !run?.warm) return json(res, 200, { warming: 0 });
       const keep = keepOf(b.warm, MAX_WARM);
-      topUp(poolKey({ ...base, req: r }, slots.current), keep, start(r, slots.current));
+      topUp(poolKey({ ...base, req: r }, slots.current), keep, start(r, slots.current), c?.ups);
       return json(res, 200, { warming: keep });
     }
     const ordKey = `${base.arm}|${base.role}`;
@@ -275,9 +288,10 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   }
 
   /** The case is over: its loop delay p99 (above the timer's own resolution) and its calls per arm. */
-  function endCase(run: string, id: string) {
+  async function endCase(run: string, id: string) {
     const c = cases.get(`${run}|${id}`);
     if (!c) return { loopP99Ms: 0, calls: {} };
+    if (c.ups.length) await Promise.race([Promise.all(c.ups), new Promise((r) => setTimeout(r, WARM_WAIT_MS).unref())]);
     cases.delete(`${run}|${id}`);
     flights.drop(`${run}|${id}`);
     const n = c.lates.reduce((a, x) => a + x, 0);
@@ -301,10 +315,11 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       if (path === "/call") return await evalCall(res, b, arrived);
       if (path === "/run") {
         if (!["live", "replay", "scan"].includes(b.mode as string)) return json(res, 400, { error: "mode is live, replay or scan" });
-        runs.set(b.run as string, { mode: b.mode as RunMode, share: b.share !== false, cached: b.cached ? new Set(b.cached as string[]) : undefined });
+        if (b.warm && b.mode !== "scan") return json(res, 400, { error: "only a scan warms" });
+        runs.set(b.run as string, { mode: b.mode as RunMode, share: b.share !== false, cached: b.cached ? new Set(b.cached as string[]) : undefined, warm: b.warm === true });
         return json(res, 200, {});
       }
-      if (path === "/case-end") return json(res, 200, endCase(b.run as string, b.case as string));
+      if (path === "/case-end") return json(res, 200, await endCase(b.run as string, b.case as string));
       if (path === "/spend") {
         // An agent session (run outside the gateway, on a slot's token): its $ and rate-limit state count on that slot.
         if (!o.tokens.some((t) => t.slot === b.slot) || typeof b.usd !== "number") return json(res, 400, { error: "spend needs a loaded slot and usd" });

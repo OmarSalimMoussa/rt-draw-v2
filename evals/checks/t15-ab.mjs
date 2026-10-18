@@ -293,6 +293,10 @@ if (import.meta.main) {
   const ckLines = readFileSync(p.calls, "utf8").split("\n").filter((l) => l.includes('"run":"ck-0"')).map((l) => JSON.parse(l)).filter((l) => /^(draw|picture|resolve|describe|camera)/.test(l.role));
   check(JSON.stringify(ck.rows.map((x) => x.case).sort()) === JSON.stringify([...b1].sort()), `the checkpoint ran ${ck.rows.map((x) => x.case).join(",")} (want B1's ${b1.join(",")})`);
   check(ckLines.length > 0 && ckLines.every((l) => l.shared === "-" && l.mode === "live"), `the checkpoint shared or cached a product call (${[...new Set(ckLines.map((l) => `${l.mode}/${l.shared}`))].join(", ")})`);
+  // Each slot's first case went out first as a warm-up scan: every timed call took a process that had finished starting.
+  const cold = ckLines.filter((l) => l.readyAtTake !== true);
+  check(!cold.length, `${cold.length} of the checkpoint's ${ckLines.length} product calls waited on a starting process (${cold.map((l) => `${l.arm} ${l.role} ${l.case}`).slice(0, 4).join(", ")})`);
+  check(readFileSync(p.calls, "utf8").split("\n").some((l) => l.includes('"run":"ck-0~warm"') && JSON.parse(l).mode === "scan"), "the checkpoint's warm-up sends weren't scans under ck-0~warm");
   check(ck.rows.every((x) => x.void || (existsSync(join(caseDir("ck-0", x.case), "judge", "fidelity-1.json")) && existsSync(join(caseDir("ck-0", x.case), "judge", "craft.json")))), "a checkpoint case wasn't judged by fidelity and craft");
   check(ck.rows.filter((x) => !x.void).length >= 6, `the checkpoint voided ${ck.rows.filter((x) => x.void).map((x) => x.void).join("; ")}`);
   const a = aaPass(ck.rows);
