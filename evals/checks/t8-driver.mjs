@@ -221,6 +221,8 @@ check(D.isLook(r.turn) && near(r.turn.steps[0].scroll[0], 96 * k) && r.turn.step
 r = one([{ undo: true }]);
 check(D.isLook(r.turn) && "undo" in r.turn.steps[0] && one([{ say: "hi" }, { undo: true }]).dropped[0]?.why === "undo after a say or draw", "undo steps aren't parsed as a look, or an undo after a say isn't dropped");
 check(D.isLook(one([]).turn) && D.isLook(one([{ pause: 2 }]).turn), "an empty turn isn't a look");
+r = one([{ say: "hm, what's down here..." }, { scroll: [0, 300] }]);
+check(D.isLook(r.turn) && r.turn.steps.length === 1 && one([{ say: "this" }, { draw: "tap", at: [100, 100] }]).turn.steps.length === 2, "words while only moving the view still press Enter, or words with a draw are lost");
 let bare;
 try { D.parseTurn('{"undo": true}', START); } catch (e) { bare = e; }
 check(bare && D.parseTurn('{"meant": "done", "stop": true}', START).turn.stop, "a bare step without a steps list parses as a turn (it ended a session), or a stop without one doesn't");

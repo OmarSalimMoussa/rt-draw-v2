@@ -96,9 +96,9 @@ const always = () => true;
 
 /** The doc's behaviours (§2.2's beat table); big-small is never picked: a style that starts big gets it on sends 1 and 2. */
 export const BEATS: Beat[] = [
-  { id: "amb-arrow", weight: 1, fits: content, text: "draw one short arrow between two things, so it's unclear which end is the head. Say which one you meant only in \"meant\".",
+  { id: "amb-arrow", weight: 1, fits: content, text: "draw one short arrow, 40 to 120 pixels long, between two things, so it's unclear which end is the head. Say which one you meant only in \"meant\".",
     check: (t, c) => draws(t).some((s) => s.draw === "arrow" && Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1]) / scale(c) >= 40 && Math.hypot(s.to[0] - s.from[0], s.to[1] - s.from[1]) / scale(c) <= 120) },
-  { id: "amb-shape", weight: 1, fits: pen, text: "sketch one quick shape that could be a box or a circle, over an empty spot where something new should go.",
+  { id: "amb-shape", weight: 1, fits: pen, text: "draw one quick box or circle (either one: your hand is sloppy) over an empty spot where something new should go.",
     check: (t, c) => draws(t).some((s) => (s.draw === "box" || s.draw === "circle") && c.shapes.reduce((a, b) => a + overlap(boxOf(s.draw === "circle" ? s.around : s.box), b), 0) < 0.2 * (s.draw === "circle" ? s.around : s.box)[2] * (s.draw === "circle" ? s.around : s.box)[3]) },
   { id: "two-cand", weight: 1, fits: content, text: (side) => `say "this" or "that" while pointing between two similar things close together; you mean the ${side} one.`,
     // Leaf shapes only: a mark inside a card is "near" the card and its own text, which is no choice between two things.
@@ -119,7 +119,7 @@ export const BEATS: Beat[] = [
   // Applies only after a disappointing send (applies()): satisfied drivers have nothing to undo.
   { id: "undo", weight: 2, fits: (f) => f.send >= 2, text: "if the last result wasn't what you meant: undo it first ({\"undo\": true}, alone in a turn), then ask again in other words.",
     check: (t, c) => [...c.looks, t].some((x) => x.steps.some((s) => "undo" in s)) && t.steps.some((s) => "say" in s || "draw" in s) },
-  { id: "offscreen", weight: 4, fits: onBoard, text: "refer by name to something on a page you can't see right now.",
+  { id: "offscreen", weight: 4, fits: onBoard, text: "name another page of the site that isn't on your screen right now (like \"the about page\"), without scrolling to it.",
     check: (t, c) => c.pages.some((p) => !overlap(p.box, c.view) && new RegExp(`\\b${p.name.replace(/[^\w ]/g, "")}\\b`, "i").test(said(t))) },
   { id: "camera-ask", weight: 4, fits: onBoard, text: "ask the product out loud to show you something.", check: (t) => /\b(show|go to|take me|bring me|jump to)\b/i.test(said(t)) },
   { id: "by-hand", weight: 4, fits: onBoard, text: "scroll or zoom yourself to find what you want first, before you ask.", check: (_, c) => c.looks.some((x) => x.steps.some(isView)) },

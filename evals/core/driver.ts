@@ -10,7 +10,7 @@ import type { View } from "../../src/core/board.ts";
 import { DRIVE_VIEW } from "../loop/config.ts";
 import type { AskType, BeatId } from "../loop/types.ts";
 import { PEN_MIN, type Persona, type Style, type Target } from "./personas.ts";
-import type { DrawStep, Step, ViewStep } from "./synth.ts";
+import { type DrawStep, type Step, type ViewStep, isView } from "./synth.ts";
 
 /** The harness's numbers for the driver's hand, by name. Frozen for the optimizer, like SYNTH and DRIVE_VIEW. */
 export const DRIVE = {
@@ -182,6 +182,9 @@ export function parseTurn(reply: string, view: View): { turn: Turn; dropped: Dro
       acted ||= "draw" in step || "say" in step;
     }
   }
+  // Moving the view is a turn of its own (the prompt says so): words said while only scrolling or zooming are thinking
+  // aloud, not a request. Sent, "hm, what's down here..." pressed Enter, and the bank's by-hand looks went unrecorded.
+  if (!drew && steps.some(isView)) steps.splice(0, steps.length, ...steps.filter((s) => !("say" in s)));
   const sat = num(o.satisfaction);
   const meant = text(o.meant) ?? "";
   const turn: Turn = {
@@ -215,7 +218,7 @@ Steps, in the order you do them:
 - moving the view by hand, like on a trackpad: {"scroll": [dx, dy]} moves what you see by that many pixels (positive to see what's right of or below the screen), {"zoom": "in"} or {"zoom": "out"} goes twice as close or far, {"look": [x, y, w, h]} zooms in on that part of the screenshot. To look at something you can't see yet, only move the view that turn: you don't press Enter, and you get the new screen next turn;
 - {"undo": true} takes your last send back (the board goes back to how it was before it). Do it alone in a turn, like moving the view.
 
-Talk like a person thinking out loud: casual, sometimes vague, with "..." where you pause. No stage directions, no lists, no markdown.
+Talk like a person thinking out loud: casual, sometimes vague, with "..." where you pause. Start each send your own way, not the same opener every time (no "okay so" habit). No stage directions, no lists, no markdown.
 
 Reply with ONLY one JSON object, no prose around it:
 {"saw": "after an earlier send: one line on what changed on screen, in your words",
