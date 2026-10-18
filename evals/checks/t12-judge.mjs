@@ -285,6 +285,16 @@ for (const id of r1Cases) rec.put(join(rec.caseDir(R1, id), "done"), "x\n");
 const again = J.judging(R1, { seed: S1, craft: "sampled" });
 check(again.both() && JSON.stringify(again.flips()) === JSON.stringify({ audited: 16, flipped: 15 }) && up2() === 32, `a resumed run's flips: ${JSON.stringify(again.flips())}, both ${again.both()}`);
 
+// ---- Craft when a screen left the change: the two framed shots in the packet's order, not one arm's new page against the other's old one.
+const pk5 = json(judgeFile(R2, n5, "packet.json"));
+const shot = (a) => Buffer.concat([JPEG, Buffer.from(`framed ${a}`)]);
+for (const a of ["A", "B"]) writeFileSync(join(rec.caseDir(R2, n5), a, "changed.jpg"), shot(a));
+const sent = async (p) => (await J.craftCall(R2, p, 1), api2.requests.at(-1).imageSha);
+const framedSent = await sent({ ...pk5, images: { ...pk5.images, leftChanged: `${pk5.positions.left}/changed.jpg`, rightChanged: `${pk5.positions.right}/changed.jpg` } });
+check(JSON.stringify(framedSent) === JSON.stringify([pk5.positions.left, pk5.positions.right].map((a) => sha12(shot(a).toString("base64")))), `craft on a framed packet sent ${JSON.stringify(framedSent)}, not the two framed shots`);
+// Without frames (part 1's craft call on the same packet), the after screens.
+check(JSON.stringify(craftReq.imageSha) === JSON.stringify([pk5.images.left, pk5.images.right].map((f) => sha12(readFileSync(join(rec.caseDir(R2, n5), f)).toString("base64")))), `craft without frames sent ${JSON.stringify(craftReq.imageSha)}, not the after screens`);
+
 // ---- Calibration end to end: checkpoint 0's A/A (44 cases), a contrast run (4), probes, labels, variant 1 then 2.
 const SC = "seed-calib", AA = "cp0", CON = "contrast";
 const aaIds = Array.from({ length: 44 }, (_, i) => `c-aa-${i}`), conIds = Array.from({ length: 4 }, (_, i) => `c-con-${i}`);

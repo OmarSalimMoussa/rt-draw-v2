@@ -613,7 +613,7 @@ function fakeLabels() {
 /** §4.5: the contrast run and the label pairs, or the labels against the judge. */
 /**
  * Packet version 2 for runs judged before it, from their saved scenes (0 calls): both arms framed on what changed when a
- * result's screen left it, added to the packet; those cases' fidelity verdicts move to judge/blind/, so calibration and
+ * result's screen left it, added to the packet; those cases' fidelity and craft verdicts move to judge/blind/, so calibration and
  * any reader judge them again with the framed images. Rerunnable: a case that no longer needs a frame gets its verdicts back.
  */
 async function packetsCmd() {
@@ -648,7 +648,7 @@ async function packetsCmd() {
         put(join(dir, "judge", "packet.json"), { ...p, images: { ...images, ...framed(run, c, p.positions) } });
         // Verdicts judged without the frame go aside while the packet has one, and come back when it doesn't.
         for (const sub of ["", "v1", "v2"])
-          for (const f of ["fidelity-1.json", "fidelity-2.json"]) {
+          for (const f of ["fidelity-1.json", "fidelity-2.json", "craft.json"]) {
             const [live, blind] = [join(dir, "judge", sub, f), join(dir, "judge", "blind", sub, f)];
             if (need && existsSync(live)) mkdirSync(dirname(blind), { recursive: true }), renameSync(live, blind);
             if (!need && existsSync(blind) && !existsSync(live)) mkdirSync(dirname(live), { recursive: true }), renameSync(blind, live);
@@ -656,7 +656,7 @@ async function packetsCmd() {
         if (need) done++;
       }
     }, 1), true);
-    say(`packets: ${run}: ${done} of ${cases} cases framed on what changed (their fidelity verdicts moved to judge/blind/), 0 calls`);
+    say(`packets: ${run}: ${done} of ${cases} cases framed on what changed (their fidelity and craft verdicts moved to judge/blind/), 0 calls`);
   }
 }
 

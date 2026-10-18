@@ -202,8 +202,9 @@ const pairs: Handler = () => {
       const framed = (f?: string) => (f ? { changed: url(p, f) } : {});
       const sides = [{ image: url(p, k.images.left), ...framed(k.images.leftChanged), changes: k.changes.left }, { image: url(p, k.images.right), ...framed(k.images.rightChanged), changes: k.changes.right }];
       const [l, r] = p.swap ? [sides[1], sides[0]] : sides;
-      // The craft pass shows the screens only: no words, no change lists.
-      if (p.question === "craft") return { id: p.id, question: p.question, left: { image: l.image }, right: { image: r.image } };
+      // The craft pass shows the screens only, as the craft judge sees them (framed on what changed when a screen left it): no words, no change lists.
+      const shot = (s: { image: string; changed?: string }) => (s.changed ? { image: s.changed, framed: true } : { image: s.image });
+      if (p.question === "craft") return { id: p.id, question: p.question, left: shot(l), right: shot(r) };
       return { id: p.id, question: p.question, said: k.said, meant: k.meant, hedged: k.hedged, targetParts: k.targetParts, before: url(p, k.images.before), left: l, right: r };
     }),
   });

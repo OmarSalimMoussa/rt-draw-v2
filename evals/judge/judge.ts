@@ -36,8 +36,8 @@ export function save(file: string, data: unknown) {
  * every banked expectation (same text, same model). Logged on every verdict; a new one starts an era.
  */
 export function judgeId(role: Role, served: string | undefined, variant: P.Variant = 1): string {
-  // Only fidelity reads a version-2 packet (the framed images): the other roles keep version 1's ids, and their banked work.
-  const parts = { text: P.template(role, variant), packet: role === "fidelity" ? PACKET_VERSION : 1, px: LOOP.judgePx, quality: LOOP.judgeQuality, effort: JUDGE.effort, model: MODEL_IDS[JUDGE.model], served: served ?? null, sdk: SDK_VERSION };
+  // Fidelity and craft read a version-2 packet (the framed images): expectations and miss checks keep version 1's ids, and their banked work.
+  const parts = { text: P.template(role, variant), packet: role === "fidelity" || role === "craft" ? PACKET_VERSION : 1, px: LOOP.judgePx, quality: LOOP.judgeQuality, effort: JUDGE.effort, model: MODEL_IDS[JUDGE.model], served: served ?? null, sdk: SDK_VERSION };
   return sha(JSON.stringify(parts)).slice(0, 16);
 }
 
@@ -146,9 +146,14 @@ export async function fidelityCall(packetRun: string, p: Packet, positions: Posi
   return verdictOf(r.text, positions, r.judgeId, variant);
 }
 
-/** One craft call: the two after images only, no words. */
+/**
+ * One craft call: two images, no words. The after screens; or, when a result's screen left what changed, both framed on
+ * it, so the judge compares what each arm made rather than one arm's new page against the other's untouched one.
+ */
 export async function craftCall(packetRun: string, p: Packet, variant: P.Variant, callRun = packetRun): Promise<Judged> {
-  const r = await call("craft", P.craft[variant](), [p.images.left, p.images.right].map((f) => imageOf(p.case, f, packetRun)), callRun, p.case, variant);
+  const i = p.images;
+  const shots = i.leftChanged && i.rightChanged ? [i.leftChanged, i.rightChanged] : [i.left, i.right];
+  const r = await call("craft", P.craft[variant](), shots.map((f) => imageOf(p.case, f, packetRun)), callRun, p.case, variant);
   return verdictOf(r.text, p.positions, r.judgeId, variant);
 }
 

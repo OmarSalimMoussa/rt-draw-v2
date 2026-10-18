@@ -187,6 +187,12 @@ const standing = standingLabels(labels).map((l) => [l.pair, l.question, l.label,
 check(JSON.stringify(standing) === JSON.stringify([["p0", "fidelity", "B", "clear"], ["p1", "fidelity", "B", "clear"], ["p2", "fidelity", "A", "slight"], ["p3", "fidelity", "tie", null], ["p4", "craft", "B", "slight"]]), `the standing labels are ${JSON.stringify(standing)}`);
 check(lineCount(labels) === 7, `labels.jsonl has ${lineCount(labels)} lines (want 1 + 5 labels + 1 undo, nothing removed)`);
 
+// ---- A craft pair where a screen left the change: each side shows its framed shot, as the craft judge sees them.
+put(join(home, "runs/calib1/cases/c4/judge/packet.json"), JSON.stringify({ ...packet("c4", "A", "B"), images: { before: "before-ink.jpg", left: "A/after.jpg", right: "B/after.jpg", leftChanged: "A/changed.jpg", rightChanged: "B/changed.jpg" } }));
+put(join(home, "labels/pairs.json"), JSON.stringify([...PAIRS, { id: "p5", run: "calib1", case: "c4", question: "craft", subset: "aa", swap: true }]));
+const framedCraft = (await (await get("/api/eval/pairs")).json()).pairs.find((p) => p.id === "p5");
+check(framedCraft?.left.image.endsWith("f=B%2Fchanged.jpg") && framedCraft.right.image.endsWith("f=A%2Fchanged.jpg") && framedCraft.left.framed && !framedCraft.left.changes && !framedCraft.said, `a framed craft pair shows ${JSON.stringify(framedCraft)}`);
+
 // ---- "Your sends": the recorded send drawn with its ink; meant saved to the server.
 await page.eval(`document.querySelector('[data-tab="sends"]').click()`);
 let sendView;

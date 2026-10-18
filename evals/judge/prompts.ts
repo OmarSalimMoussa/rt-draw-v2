@@ -49,7 +49,7 @@ export const fidelity: Record<Variant, (s: StepView, e: ExpectationView, changes
     'Reply with JSON only: {"left": "yes"|"partly"|"no", "right": "yes"|"partly"|"no", "winner": "left"|"right"|"tie", "confidence": 1|2|3, "why": "one line"}',
 };
 
-/** Craft: the two after images only, no words. */
+/** Craft: the two results' screens only (framed on what changed when a screen left it), no words. */
 export const craft: Record<Variant, () => string> = {
   1: () => `The images are, in order: the left page, the right page.\nIgnore what was asked. Which page is the better wireframe: ${CRAFT_POINTS}? Tie if equal. Reply with JSON only: ${VERDICT}`,
   2: () =>

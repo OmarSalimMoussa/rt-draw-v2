@@ -40,6 +40,8 @@ export type FakeRequest = {
   /** sha12 of each system block (Claude Code adds its own blocks before ours). */
   systemSha: string[]; ttls: string[]; beta: string; firstUser: string; thinking?: unknown; effort?: string;
   images: number; assistantTurns: number;
+  /** sha12 of each image's base64 data, in order. */
+  imageSha: string[];
 };
 
 const sha12 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);
@@ -202,6 +204,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
       beta: String(req.headers["anthropic-beta"] ?? ""), firstUser: first ? textOf(first.content) : "", thinking: b.thinking, effort: b.output_config?.effort,
       images: b.messages.flatMap((m) => (typeof m.content === "string" ? [] : m.content)).filter((x) => x.type === "image").length,
       assistantTurns: b.messages.filter((m) => m.role === "assistant").length,
+      imageSha: b.messages.flatMap((m) => (typeof m.content === "string" ? [] : m.content)).filter((x) => x.type === "image").map((x) => sha12(String((x.source as { data?: string } | undefined)?.data ?? ""))),
     };
     requests.push(rec);
     maxInFlight = Math.max(maxInFlight, ++inFlight);
