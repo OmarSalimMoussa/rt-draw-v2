@@ -125,8 +125,9 @@ export const BEATS: Beat[] = [
   { id: "by-hand", weight: 4, fits: onBoard, text: "scroll or zoom yourself to find what you want first, before you ask.", check: (_, c) => c.looks.some((x) => x.steps.some(isView)) },
   { id: "sketch", weight: 1, fits: pen, text: "sketch a wave, a zigzag or a blob where something goes (a chart, a squiggle, a logo).", check: (t) => draws(t).some((s) => s.draw === "sketch") },
   { id: "no-names", weight: 1.5, fits: (f) => f.clarity <= 0.4, text: "don't name any part of the page; only point and use vague words.", check: (t) => !PART_NOUNS.test(said(t)) },
-  { id: "add-new", weight: 1.5, fits: (f) => f.ask === "add", text: "add something that isn't on the page yet, not a change to what's there.",
-    check: (t) => PART_NOUNS.test(t.meant) && /\b(add|new|another|extra|put|also)\b/i.test(`${said(t)} ${t.meant}`) },
+  // "Isn't on the page yet" meant nothing on a blank page: drivers added things there and said they'd skipped the twist.
+  { id: "add-new", weight: 1.5, fits: (f) => f.ask === "add", text: "this send adds a new part to the page (say it as an addition), rather than changing something already there.",
+    check: (t) => PART_NOUNS.test(t.meant) && /\b(add|new|another|extra|put|also|appears?)\b/i.test(`${said(t)} ${t.meant}`) },
 ];
 export const beatOf = (id: BeatId) => BEATS.find((b) => b.id === id)!;
 

@@ -250,7 +250,18 @@ function behaviour(b: Style): string[] {
 }
 
 /** Who drives: the persona, its style, and for a first-timer the site it remembers. */
-export type Card = { persona: Persona; style: Style; target?: Target };
+/** How a session's person starts a send: one per session (drive.ts picks it by seed), so 35-39% of a bank's sends didn't open alike. */
+export const HABITS = [
+  "you jump straight into what you want, no warm-up words",
+  "you often start with \"hmm\" or \"right\"",
+  "you start by naming the thing you're looking at",
+  "you start with a question (\"can you...\", \"could it...\")",
+  "you start with what bugs you (\"this is too...\", \"I don't like...\")",
+  "you start with \"I want\" or \"let's\"",
+  "you start with a little reaction to the screen (\"oh\", \"huh\", \"nice\")",
+  "you start with \"so\" or \"alright\", then get to it",
+];
+export type Card = { persona: Persona; style: Style; target?: Target; habit?: string };
 /** One past send as the driver remembers it: words, marks by kind and coarse place (describeMarks), what it meant, its rating. */
 export type Past = { said: string; marks: string[]; meant: string; satisfaction?: number; feeling?: string };
 
@@ -316,7 +327,7 @@ export function describePast(past: Past[]): string[] {
 export function userMessage(card: Card, history: Past[], beat: { id: BeatId; text: string } | undefined, ask: AskType, sendsLeft: number, looked: string[] = []): string {
   const { persona: p, style, target } = card;
   const who = `Who you are: ${p.who}\n\nWhat you know about the product: ${p.knows}\n\nWhat you want: ${p.wants}${target ? `\n\nThe site you have in mind: ${target.memory}. You remember it only roughly; keep it in your head and never recite it. Ask for it the way a person would, a piece or two at a time, in your own words.` : ""}`;
-  const how = `How you behave:\n${behaviour(style).map((l) => `- ${l}`).join("\n")}`;
+  const how = `How you behave:\n${[...behaviour(style), ...(card.habit ? [`Starting a send: ${card.habit}.`] : [])].map((l) => `- ${l}`).join("\n")}`;
   const n = history.length;
   const now = n
     ? `Your sends so far:\n${describePast(history).join("\n")}\n\nThe first picture is your screen when you pressed Enter on send ${n}, with your ink; the second is your screen now`

@@ -223,6 +223,7 @@ check(D.isLook(r.turn) && "undo" in r.turn.steps[0] && one([{ say: "hi" }, { und
 check(D.isLook(one([]).turn) && D.isLook(one([{ pause: 2 }]).turn), "an empty turn isn't a look");
 r = one([{ say: "hm, what's down here..." }, { scroll: [0, 300] }]);
 check(D.isLook(r.turn) && r.turn.steps.length === 1 && one([{ say: "this" }, { draw: "tap", at: [100, 100] }]).turn.steps.length === 2, "words while only moving the view still press Enter, or words with a draw are lost");
+check(D.HABITS.length >= 6 && D.HABITS.every((h) => !/\bok(ay)?\b/i.test(h)) && D.userMessage({ ...card, habit: D.HABITS[2] }, [], undefined, "add", 3).includes(`Starting a send: ${D.HABITS[2]}`), "the opener habits are few, prime \"okay\", or don't reach the message");
 let bare;
 try { D.parseTurn('{"undo": true}', START); } catch (e) { bare = e; }
 check(bare && D.parseTurn('{"meant": "done", "stop": true}', START).turn.stop, "a bare step without a steps list parses as a turn (it ended a session), or a stop without one doesn't");

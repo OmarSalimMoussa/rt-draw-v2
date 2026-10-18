@@ -14,7 +14,7 @@ import { groupStrokes, readMark } from "../../src/core/marks.ts";
 import { parseReply } from "../../src/core/resolve.ts";
 import { Scene } from "../../src/core/scene.ts";
 import { sceneDiff } from "../core/diff.ts";
-import { type Dropped, NOTHING_TO_UNDO, type Past, RETRY, type Turn, describeMarks, describeMove, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
+import { type Dropped, HABITS, NOTHING_TO_UNDO, type Past, RETRY, type Turn, describeMarks, describeMove, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
 import { personaOf, styleOf, targetOf } from "../core/personas.ts";
 import { ASK_WORDS, type Scenario, applies, beatOf, plan } from "../core/scenarios.ts";
 import { type Step, isView, synthesize } from "../core/synth.ts";
@@ -218,7 +218,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
   const name = origin ?? `${o.bank}-s${pad(o.session)}`;
   const plans = plan({ ...s, sends: Math.max(s.sends, to) });
   const style = styleOf(s.style);
-  const card = { persona: personaOf(s.persona), style, target: s.target && targetOf(s.target) };
+  const card = { persona: personaOf(s.persona), style, target: s.target && targetOf(s.target), habit: HABITS[s.seed % HABITS.length] };
   const traits = { mess: style.mess, disfluency: style.disfluency };
   const arms: Arm[] = o.fork ? ["A", "B"] : ["A"];
   const out: Session = { scenario: s.id, cases: [], banked: [], ended: "out of sends" };
