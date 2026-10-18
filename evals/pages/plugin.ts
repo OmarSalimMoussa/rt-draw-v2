@@ -199,7 +199,8 @@ const pairs: Handler = () => {
     progress: { clear, clearGoal: LOOP.calib.clear, craft, craftGoal: LOOP.calib.craftPairs, labelled: done.length },
     pairs: left.map((p) => {
       const k = packetOf(p);
-      const sides = [{ image: url(p, k.images.left), changes: k.changes.left }, { image: url(p, k.images.right), changes: k.changes.right }];
+      const framed = (f?: string) => (f ? { changed: url(p, f) } : {});
+      const sides = [{ image: url(p, k.images.left), ...framed(k.images.leftChanged), changes: k.changes.left }, { image: url(p, k.images.right), ...framed(k.images.rightChanged), changes: k.changes.right }];
       const [l, r] = p.swap ? [sides[1], sides[0]] : sides;
       // The craft pass shows the screens only: no words, no change lists.
       if (p.question === "craft") return { id: p.id, question: p.question, left: { image: l.image }, right: { image: r.image } };

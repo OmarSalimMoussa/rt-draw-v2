@@ -32,14 +32,18 @@ export const expectation = (s: StepView) =>
   (s.targetParts ? ` The site they have in mind, as context only: ${s.targetParts}. Parts they haven't asked for yet would be running ahead.` : "") +
   ' Before seeing any result, write what a good result of this step looks like. Reply with JSON only: {"should": [1-4 short lines of what should change], "mustNot": [1-2 short lines of what must not change]}';
 
-/** Fidelity: before, left and right, with both change lists. */
-export const fidelity: Record<Variant, (s: StepView, e: ExpectationView, changes: { left: string[]; right: string[] }) => string> = {
-  1: (s, e, c) =>
-    `The images are, in order: the board before with their red ink, the left result, the right result. ${INK}\n` +
+/** Which image is which; `framed`: two more follow, both results framed on where the board changed (the screen had left it). */
+const imagesLine = (framed?: boolean) =>
+  `The images are, in order: the board before with their red ink, the left result, the right result${framed ? ", then the left and right results again, both framed on the part of the board that changed (their screens moved away from it)" : ""}.`;
+
+/** Fidelity: before, left and right (and both framed on the change, when a screen left it), with both change lists. */
+export const fidelity: Record<Variant, (s: StepView, e: ExpectationView, changes: { left: string[]; right: string[] }, framed?: boolean) => string> = {
+  1: (s, e, c, framed) =>
+    `${imagesLine(framed)} ${INK}\n` +
     `They said: "${s.said}". They meant: "${meant(s)}". ${expected(e)} Left changed: ${list(c.left)}. Right changed: ${list(c.right)}. ` +
     `Which result does what they meant in this step, better? ${RULES} Reply with JSON only: ${VERDICT}`,
-  2: (s, e, c) =>
-    `The images are, in order: the board before with their red ink, the left result, the right result. ${INK}\n` +
+  2: (s, e, c, framed) =>
+    `${imagesLine(framed)} ${INK}\n` +
     `They said: "${s.said}". They meant: "${meant(s)}". ${expected(e)} Left changed: ${list(c.left)}. Right changed: ${list(c.right)}. ` +
     `First, for each side separately: did it do what they meant in this step (yes, partly or no)? Then: which result does it better? ${RULES} ` +
     'Reply with JSON only: {"left": "yes"|"partly"|"no", "right": "yes"|"partly"|"no", "winner": "left"|"right"|"tie", "confidence": 1|2|3, "why": "one line"}',

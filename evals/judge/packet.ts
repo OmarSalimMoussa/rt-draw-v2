@@ -15,7 +15,7 @@ import type { Arm, CaseInfo, CaseInput, Expectation, Meant, Packet } from "../lo
 import type { StepView } from "./prompts.ts";
 
 /** Part of every judgeId: a change to how packets are built is a change to the judge. */
-export const PACKET_VERSION = 1;
+export const PACKET_VERSION = 2;
 
 export type Positions = Packet["positions"];
 
@@ -63,12 +63,18 @@ export function writePacket(runId: string, caseId: string, positions: Positions,
   const packet: Packet = {
     case: caseId, ...stepOf(caseId, runId),
     expectation: { should: e.should, mustNot: e.mustNot },
-    images: { before: "before-ink.jpg", left: `${positions.left}/after.jpg`, right: `${positions.right}/after.jpg` },
+    images: { before: "before-ink.jpg", left: `${positions.left}/after.jpg`, right: `${positions.right}/after.jpg`, ...framed(runId, caseId, positions) },
     changes: { left: changes(positions.left), right: changes(positions.right) },
     positions,
   };
   put(join(caseDir(runId, caseId), "judge", "packet.json"), packet);
   return packet;
+}
+
+/** The framed captures (ab.ts' changed.jpg) as packet images, when both arms have one. */
+export function framed(runId: string, caseId: string, positions: Positions): Pick<Packet["images"], "leftChanged" | "rightChanged"> {
+  const has = (arm: Arm) => existsSync(join(caseDir(runId, caseId), arm, "changed.jpg"));
+  return has(positions.left) && has(positions.right) ? { leftChanged: `${positions.left}/changed.jpg`, rightChanged: `${positions.right}/changed.jpg` } : {};
 }
 
 export const readPacket = (runId: string, caseId: string): Packet => json<Packet>(join(caseDir(runId, caseId), "judge", "packet.json"));

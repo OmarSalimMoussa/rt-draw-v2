@@ -13,10 +13,11 @@ import { join } from "node:path";
 import type { View } from "../../src/core/board.ts";
 import type { Stroke } from "../../src/core/ink.ts";
 import type { Word } from "../../src/core/link.ts";
+import { changeFrame, inside } from "../core/diff.ts";
 import { draw, positionsFor } from "../judge/judge.ts";
 import { type Positions, caseFile } from "../judge/packet.ts";
 import { OVERUSE } from "../optimizer/patterns.ts";
-import { type Chrome, type Page, launchChrome, paintedCapture } from "./chrome.ts";
+import { type Chrome, type Page, capture, launchChrome, paintedCapture } from "./chrome.ts";
 import { endCase, gatewayStatus, setMode } from "./client.ts";
 import { LOOP, configId } from "./config.ts";
 import { eachSlot } from "./drive.ts";
@@ -267,6 +268,10 @@ export function begin(rig: Rig, s: RunSpec) {
     const offset = Math.round((enterAt[first === "A" ? "B" : "A"] - enterAt[first]) * 10) / 10;
     const svg = {} as Record<Arm, string>;
     const blank: Arm[] = [];
+    // What changed, framed the same in both arms, when either result's screen left it ("delete this, and show me home"):
+    // the after captures alone hid such edits from the judge and the owner's labels.
+    const frame = changeFrame(before, [out.A.after, out.B.after], out.A.camera.w / out.A.camera.h);
+    const offScreen = !!frame && ARMS.some((a) => !inside(frame, out[a].camera));
     for (const a of ARMS) {
       const o = out[a];
       const calls = lines.filter((c) => c.arm === a && product(c));
@@ -274,6 +279,8 @@ export function begin(rig: Rig, s: RunSpec) {
       svg[a] = await tabs[a].page.eval<string>(SVG_HASH);
       const shot = await paintedCapture(tabs[a].page, { width: LOOP.judgePx, quality: LOOP.judgeQuality });
       if (shot.blank) blank.push(a);
+      const changed = offScreen ? await capture(tabs[a].page, { view: frame, width: LOOP.judgePx, quality: LOOP.judgeQuality }) : undefined;
+      if (changed) await tabs[a].page.eval(`rtEval.setView(${js(o.camera)})`);
       // An uncaught page exception is the arm's own product failure (§2.7), shown with its result.
       const pageErrors = tabs[a].errors.map((e) => `page error: ${e.split("\n")[0]}`);
       writeArm(s.run, id, a, {
@@ -284,7 +291,7 @@ export function begin(rig: Rig, s: RunSpec) {
         "timing.json": {
           ...o.timing, firstTextMs: role(/^draw$/)?.firstMs, resolverMs: role(/refs|resolve/)?.ms, picturesMs: o.pics?.ms, quiescedAt: Date.now(), gatewayLoopP99Ms: end.loopP99Ms,
         },
-        "spans.json": o.spans, "after.scene.json": o.after, "after.jpg": shot.jpeg,
+        "spans.json": o.spans, "after.scene.json": o.after, "after.jpg": shot.jpeg, "changed.jpg": changed,
       }, before, [input.camera, o.camera]);
       // The arm's calls as the bank records them (replies.json): what the diffscan compares, and a top-up deposits.
       put(join(dir, a, "replies.json"), end.calls[a] ?? []);

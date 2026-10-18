@@ -14,6 +14,7 @@ import { arch } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { View } from "../../src/core/board.ts";
+import { changeFrame, inside } from "../core/diff.ts";
 import { HitIndex } from "../../src/core/hittest.ts";
 import { promptOf } from "../../src/core/prompts.ts";
 import { plan, prompt } from "../../src/core/resolve.ts";
@@ -23,7 +24,7 @@ import { loadFixture } from "../fixtures/fixtures.ts";
 import { assemble, checkCalibration } from "../judge/calibrate.ts";
 import { canaryDue, runCanary } from "../judge/canary.ts";
 import { calibrationFile, combined, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
-import { caseFile, readPacket } from "../judge/packet.ts";
+import { caseFile, framed, readPacket } from "../judge/packet.ts";
 import { writeDry } from "../mock/dry.ts";
 import { startFakeApi } from "../mock/fake-api.ts";
 import type { Label, PairRef } from "../pages/plugin.ts";
@@ -48,7 +49,7 @@ import { type MeterCall, readMeter, rollup } from "./meter.ts";
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { ready } from "./ready.ts";
-import { caseDir, put, runFile, voidCase } from "./record.ts";
+import { caseDir, put, putImage, runFile, voidCase } from "./record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "./probe.ts";
 import { remetric } from "./remetric.ts";
 import { CASE_USD, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
@@ -67,7 +68,8 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
-  status                               remetric <run>                       gc --trees`;
+  status                               remetric <run>                       gc --trees
+  packets <run>… (frames the changes a run's after captures missed, 0 calls)`;
 const CO_AUTHOR = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
 /** R8 and `aa`'s default: 16 cases, the champion against itself in timed replay. */
 const AA_CASES = 16;
@@ -609,6 +611,48 @@ function fakeLabels() {
 }
 
 /** §4.5: the contrast run and the label pairs, or the labels against the judge. */
+/**
+ * Packet version 2 for runs judged before it, from their saved scenes (0 calls): both arms framed on what changed when a
+ * result's screen left it, added to the packet; those cases' fidelity verdicts move to judge/blind/, so calibration and
+ * any reader judge them again with the framed images.
+ */
+async function packetsCmd() {
+  const runs = o.pos.slice(1);
+  if (!runs.length) throw new Error("packets <run>…");
+  for (const run of runs) {
+    const info = maybe<{ arms: Record<Arm, { tree: string }> }>(runFile(run, "run.json"));
+    if (!info) throw new Error(`no run ${run}`);
+    const trees = [info.arms.A.tree, info.arms.B.tree];
+    let cases = 0, done = 0;
+    await withGateway((gw) => withRig(gw, trees, async (rig) => {
+      for (const c of readdirSync(runFile(run, "cases")).sort()) {
+        const dir = caseDir(run, c);
+        if (!existsSync(join(dir, "judge", "packet.json")) || !existsSync(join(dir, "fork.json"))) continue;
+        cases++;
+        const after = { A: maybe<SceneJSON>(join(dir, "A", "after.scene.json"))!, B: maybe<SceneJSON>(join(dir, "B", "after.scene.json"))! };
+        const { cameras } = maybe<{ cameras: Record<Arm, View> }>(join(dir, "fork.json"))!;
+        const frame = changeFrame(maybe<SceneJSON>(caseFile(c, "before.scene.json", run))!, [after.A, after.B], cameras.A.w / cameras.A.h);
+        if (!frame || (["A", "B"] as Arm[]).every((a) => inside(frame, cameras[a]))) continue;
+        for (const a of ["A", "B"] as Arm[]) {
+          const { page } = await rig.tab(0, a, trees[a === "A" ? 0 : 1]);
+          await loadPage(page, run, c, after[a], cameras[a]);
+          putImage(join(dir, a, "changed.jpg"), await capture(page, { view: frame, width: LOOP.judgePx, quality: LOOP.judgeQuality }));
+        }
+        const p = readPacket(run, c);
+        put(join(dir, "judge", "packet.json"), { ...p, images: { ...p.images, ...framed(run, c, p.positions) } });
+        for (const sub of ["", "v1", "v2"])
+          for (const f of ["fidelity-1.json", "fidelity-2.json"])
+            if (existsSync(join(dir, "judge", sub, f))) {
+              mkdirSync(join(dir, "judge", "blind", sub), { recursive: true });
+              renameSync(join(dir, "judge", sub, f), join(dir, "judge", "blind", sub, f));
+            }
+        done++;
+      }
+    }, 1), true);
+    say(`packets: ${run}: ${done} of ${cases} cases framed on what changed (their fidelity verdicts moved to judge/blind/), 0 calls`);
+  }
+}
+
 async function calib() {
   openHistory();
   if (o.f["fake-labels"]) return fakeLabels();
@@ -1257,7 +1301,7 @@ async function gc() {
 const COMMANDS: Record<string, () => Promise<number | void>> = {
   init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
   checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, status,
-  remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc,
+  remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc, packets: packetsCmd,
 };
 
 if (import.meta.main) {

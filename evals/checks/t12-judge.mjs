@@ -386,4 +386,14 @@ check(existsSync(join(home, "history", "judge", "ids.json")) && Object.keys(json
 await gw2.close();
 await Promise.all([api1.close(), api2.close()]);
 if (!existsSync(join(home, "meter", "calls.jsonl"))) fail("no meter file");
+
+// The framed view (packet version 2): an edit off the final screen is framed for both arms, on the screen's shape.
+const D = await import("../core/diff.ts");
+const PR = await import("../judge/prompts.ts");
+const cart = { v: 1, width: 4000, height: 2000, groups: {}, shapes: [{ id: "row", kind: "rect", box: { x: 2000, y: 1200, w: 300, h: 40 } }, { id: "home", kind: "frame", box: { x: 0, y: 0, w: 1280, h: 800 } }] };
+const gone = { ...cart, shapes: cart.shapes.filter((x) => x.id !== "row") };
+const f = D.changeFrame(cart, [gone, cart], 1.6);
+check(f && D.inside({ x: 2000, y: 1200, w: 300, h: 40 }, f) && Math.abs(f.w / f.h - 1.6) < 1e-9 && !D.inside(f, { x: 0, y: -60, w: 1280, h: 800 }) && D.changeFrame(cart, [cart], 1.6) === undefined, `the change frame is wrong: ${JSON.stringify(f)}`);
+const step = { said: "delete this", meant: "the row is gone", hedged: false };
+check(PR.fidelity[1](step, { should: [], mustNot: [] }, { left: [], right: [] }, true).includes("framed on the part of the board that changed") && !PR.fidelity[1](step, { should: [], mustNot: [] }, { left: [], right: [] }).includes("framed"), "the fidelity prompt doesn't name the framed images, or names them when there are none");
 finish();

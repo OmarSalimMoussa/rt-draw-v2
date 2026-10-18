@@ -115,3 +115,24 @@ export function sceneDiff(before: SceneJSON, after: SceneJSON, cameras?: [View, 
   const work = changed.length + pictures + chars / DIFF.charsPerWork;
   return { changes, changed, pictured, work, empty: work === 0 };
 }
+
+/**
+ * The board area a send changed in any of `afters` (changed shapes where they are now, and where they were), padded
+ * and widened to `aspect`; undefined when nothing changed. One frame for both arms, so their framed captures compare.
+ */
+export function changeFrame(before: SceneJSON, afters: SceneJSON[], aspect: number, pad = 40): View | undefined {
+  const was = new Map(before.shapes.map((s) => [s.id, s.box]));
+  const boxes = afters.flatMap((after) => {
+    const now = new Map(after.shapes.map((s) => [s.id, s.box]));
+    return sceneDiff(before, after).changed.flatMap((id) => [now.get(id), was.get(id)].filter((b): b is View => !!b));
+  });
+  if (!boxes.length) return;
+  let x = Math.min(...boxes.map((b) => b.x)) - pad, y = Math.min(...boxes.map((b) => b.y)) - pad;
+  let w = Math.max(...boxes.map((b) => b.x + b.w)) + pad - x, h = Math.max(...boxes.map((b) => b.y + b.h)) + pad - y;
+  if (w / h < aspect) [x, w] = [x - (h * aspect - w) / 2, h * aspect];
+  else [y, h] = [y - (w / aspect - h) / 2, w / aspect];
+  return { x, y, w, h };
+}
+
+/** Whether frame `f` lies wholly inside view `v`. */
+export const inside = (f: View, v: View) => f.x >= v.x && f.y >= v.y && f.x + f.w <= v.x + v.w && f.y + f.h <= v.y + v.h;

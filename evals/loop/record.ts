@@ -157,7 +157,11 @@ export function writeRun(info: RunInfo) {
 }
 
 /** One arm's send in a run case. */
-export type ArmFiles = { "result.json": ArmResult; "timing.json": ArmTiming; "spans.json": SpanJSON[]; "after.scene.json": SceneJSON; "after.jpg": Uint8Array };
+export type ArmFiles = {
+  "result.json": ArmResult; "timing.json": ArmTiming; "spans.json": SpanJSON[]; "after.scene.json": SceneJSON; "after.jpg": Uint8Array;
+  /** The after-scene framed on what changed, when the product left the screen elsewhere (both arms or neither). */
+  "changed.jpg"?: Uint8Array;
+};
 const ARM_FILES = ["result.json", "timing.json", "spans.json", "after.scene.json", "after.jpg", "changes.json"];
 
 /** Writes an arm's files and its change list (the frozen sceneDiff against the case's before-scene; cameras [before, after]). */

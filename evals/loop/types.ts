@@ -94,7 +94,8 @@ export type Fork = { order: Arm[]; offsetsMs: number[]; sharedReqs: string[]; id
 export type Packet = {
   case: string; said: string; meant: string; hedged: boolean; targetParts?: string;
   expectation: { should: string[]; mustNot: string[] };
-  images: { before: string; left: string; right: string };
+  /** leftChanged/rightChanged: the results framed on what changed, when a result's screen left it (packet version 2). */
+  images: { before: string; left: string; right: string; leftChanged?: string; rightChanged?: string };
   changes: { left: string[]; right: string[] };
   positions: { left: Arm; right: Arm };
 };

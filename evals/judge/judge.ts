@@ -36,7 +36,8 @@ export function save(file: string, data: unknown) {
  * every banked expectation (same text, same model). Logged on every verdict; a new one starts an era.
  */
 export function judgeId(role: Role, served: string | undefined, variant: P.Variant = 1): string {
-  const parts = { text: P.template(role, variant), packet: PACKET_VERSION, px: LOOP.judgePx, quality: LOOP.judgeQuality, effort: JUDGE.effort, model: MODEL_IDS[JUDGE.model], served: served ?? null, sdk: SDK_VERSION };
+  // Only fidelity reads a version-2 packet (the framed images): the other roles keep version 1's ids, and their banked work.
+  const parts = { text: P.template(role, variant), packet: role === "fidelity" ? PACKET_VERSION : 1, px: LOOP.judgePx, quality: LOOP.judgeQuality, effort: JUDGE.effort, model: MODEL_IDS[JUDGE.model], served: served ?? null, sdk: SDK_VERSION };
   return sha(JSON.stringify(parts)).slice(0, 16);
 }
 
@@ -137,8 +138,11 @@ export async function missCheck(caseId: string, run: string, changes: string[]):
 export async function fidelityCall(packetRun: string, p: Packet, positions: Positions, variant: P.Variant, callRun = packetRun): Promise<Judged> {
   const flipped = positions.left !== p.positions.left;
   const changes = flipped ? { left: p.changes.right, right: p.changes.left } : p.changes;
-  const images = [p.images.before, ...(flipped ? [p.images.right, p.images.left] : [p.images.left, p.images.right])].map((f) => imageOf(p.case, f, packetRun));
-  const r = await call("fidelity", P.fidelity[variant](p, p.expectation, changes), images, callRun, p.case, variant);
+  const i = p.images;
+  const framed = !!(i.leftChanged && i.rightChanged);
+  const sides = flipped ? [i.right, i.left, ...(framed ? [i.rightChanged!, i.leftChanged!] : [])] : [i.left, i.right, ...(framed ? [i.leftChanged!, i.rightChanged!] : [])];
+  const images = [i.before, ...sides].map((f) => imageOf(p.case, f, packetRun));
+  const r = await call("fidelity", P.fidelity[variant](p, p.expectation, changes, framed), images, callRun, p.case, variant);
   return verdictOf(r.text, positions, r.judgeId, variant);
 }
 

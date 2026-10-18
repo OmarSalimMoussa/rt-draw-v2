@@ -12,7 +12,7 @@ import { $, fontsReady, shell } from "../../src/ui.ts";
 
 shell("", "Labels for the eval's judges: pick the better result the way the judge is asked to, one key per pair (~15 s each, ~25–30 min once). Your labels and your recorded sends stay on the server. No model call.");
 
-type Side = { image: string; changes?: string[] };
+type Side = { image: string; changed?: string; changes?: string[] };
 type Pair = { id: string; question: "fidelity" | "craft"; said?: string; meant?: string; hedged?: boolean; targetParts?: string; before?: string; left: Side; right: Side };
 type Pairs = { total: number; progress: { clear: number; clearGoal: number; craft: number; craftGoal: number; labelled: number }; pairs: Pair[]; error?: string };
 type Send = { id: string; at?: string; recordedAt: string; input: { word: string }[] | string; strokes: Stroke[]; scene: { width: number; height: number; shapes: Shape[]; groups?: Record<string, string[]> }; view?: { x: number; y: number; w: number; h: number }; meant?: string };
@@ -54,7 +54,7 @@ function showPair() {
     host.innerHTML = `<div class="card"><h2>${data?.error ? "Can't load the pairs" : data?.total ? "All labelled" : "No pairs yet"}</h2><p class="muted">${esc(data?.error ?? (data?.total ? `${head}. Next: rte calib --check.` : "They appear after checkpoint 0 and the contrast run: rte calib --contrast draw.model=0 --cap 200."))}</p></div>`;
     return;
   }
-  const side = (name: string, s: Side) => `<figure><figcaption>${name}</figcaption><img src="${esc(s.image)}" alt="${name} result">${s.changes ? `<ul>${s.changes.map((c) => `<li>${esc(c)}</li>`).join("") || "<li>nothing changed</li>"}</ul>` : ""}</figure>`;
+  const side = (name: string, s: Side) => `<figure><figcaption>${name}</figcaption><img src="${esc(s.image)}" alt="${name} result">${s.changed ? `<figcaption>${name}, where it changed (the screen moved away)</figcaption><img src="${esc(s.changed)}" alt="${name} result where it changed">` : ""}${s.changes ? `<ul>${s.changes.map((c) => `<li>${esc(c)}</li>`).join("") || "<li>nothing changed</li>"}</ul>` : ""}</figure>`;
   const words = pair.question === "fidelity"
     ? `<div><b>They said:</b> ${esc(pair.said)}</div><div><b>They meant:</b> ${esc(pair.meant)}${pair.hedged ? " <i>(they were unsure)</i>" : ""}</div>${pair.targetParts ? `<div class="muted">The site they have in mind, as context only: ${esc(pair.targetParts)}</div>` : ""}<figure class="before"><figcaption>before, with their ink</figcaption><img src="${esc(pair.before)}" alt="before"></figure>`
     : `<div class="muted">The screens only: ignore what was asked.</div>`;
