@@ -36,7 +36,7 @@ const B = (key: string, value: 0 | 1, name: string, doc: string): Knob => ({ key
 /** A patch on a purpose-built model's output (see the top of this file). */
 const patch = (model: string, k: Knob, neutral?: number): Knob => ({ ...k, patches: model, neutral });
 /** Which of a role's prompt texts it is asked with (src/core/prompts.ts; 0 is the shipped text). */
-const P = (role: keyof typeof PROMPTS): Knob => K(PROMPT_KNOB[role], 0, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
+const P = (role: keyof typeof PROMPTS, value = 0): Knob => K(PROMPT_KNOB[role], value, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
 
 export const KNOBS: Knob[] = [
   // Ink: how strokes are drawn and when a stroke is a dot.
@@ -172,7 +172,8 @@ export const KNOBS: Knob[] = [
   K("picture.timeoutMs", 120000, 5000, 300000, 5000, "a picture call still going after this long is stopped and counts as failed (its shape stays a placeholder)", "ms"),
   K("picture.copies", 1, 1, 3, 1, "copies of each picture call sent at once: the first to stream is kept, the others are dropped (each copy pays its input)"),
   K("picture.copyAfterMs", 0, 0, 3000, 100, "with picture.copies above 1: a copy after the first goes out only when no text has come this long (0: all at once)", "ms"),
-  P("picture"),
+  P("picture", 2),
+  K("picture.strokeWidth", 3, 1, 6, 0.5, "with the short-stroke picture prompt: the outline width every element has unless it says its own stroke-width", "px"),
   B("picture.noThink", 0, "no thinking", "on: ask the API not to think; off: the model decides"),
 
   // Board: what a model is shown of an infinite board.

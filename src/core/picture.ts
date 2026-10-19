@@ -203,7 +203,9 @@ export function renderPicture(parent: SVGElement, els: El[], box: { x: number; y
     const a = el.attrs;
     const n = (k: string) => Number(a[k] ?? 0);
     const fill = a.fill && a.fill !== "none" ? a.fill : undefined;
-    const opts: Options = { seed: i + 1, roughness: t["picture.roughness"], stroke: a.stroke ?? (fill ? "none" : "#1e1e1e"), strokeWidth: a["stroke-width"] ? Number(a["stroke-width"]) : 2, fill, fillStyle: "solid" };
+    // Under the short-stroke prompt every element is outlined (filled ones too) unless it says otherwise.
+    const outlined = promptOf("picture", t).name === "short-stroke";
+    const opts: Options = { seed: i + 1, roughness: t["picture.roughness"], stroke: a.stroke ?? (fill && !outlined ? "none" : "#1e1e1e"), strokeWidth: a["stroke-width"] ? Number(a["stroke-width"]) : outlined ? t["picture.strokeWidth"] : 2, fill, fillStyle: "solid" };
     if (opts.stroke === "none") opts.strokeWidth = 0;
     const pts = () => (a.points.match(/-?\d*\.?\d+/g) ?? []).map(Number).reduce<[number, number][]>((acc, v, j, arr) => (j % 2 ? acc : [...acc, [v, arr[j + 1] ?? 0]]), []);
     let node: SVGGElement;

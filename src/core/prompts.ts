@@ -87,6 +87,16 @@ Example (a smiling sun in a 100 x 100 box):
 <circle cx="50" cy="50" r="28" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>
 <path d="M38 56 Q50 66 62 56" fill="none" stroke="#1e1e1e" stroke-width="3"/>`;
 
+// The short-stroke variant: every element is already outlined in #1e1e1e at the default width, so the model writes stroke and stroke-width only when they differ.
+const pictureRulesShort = (t: Tuning) => `Use only these elements, each on its own line and self-closing: <path d="..."/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>.
+Attributes: geometry, fill, stroke, stroke-width. Absolute coordinates, no transforms, no groups, no style attribute.
+At most ${t["picture.maxPaths"]} elements and ${t["picture.colors"]} colors (hex, like #e8590c; fill="none" for outlines).
+Every element is outlined in near-black #1e1e1e at stroke-width ${t["picture.strokeWidth"]} unless it says otherwise, so leave out stroke and stroke-width when they are those. Write stroke="none" on a fill-only detail (a pupil, a highlight), or another stroke color or stroke-width where you want one.
+Example (a smiling sun in a 100 x 100 box):
+<circle cx="50" cy="50" r="28" fill="#ffd43b"/>
+<path d="M38 56 Q50 66 62 56" fill="none"/>
+<circle cx="42" cy="44" r="3" fill="#1e1e1e" stroke="none"/>`;
+
 export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: DescribeText[]; picture: PictureText[]; resolveJev: ResolveJevText[]; drawThink: DrawThinkText[] } = {
   draw: [{ name: "shipped", system: drawShipped }],
   resolve: [{ name: "shipped", system: RESOLVE_SHIPPED }],
@@ -124,6 +134,16 @@ Each message gives the box (x right, y down, 0 0 at the top left). Fill most of 
 ${pictureRules(t)}`,
       user: (subject, w, h) => `Doodle: ${subject}
 The box is ${w} wide and ${h} tall.`,
+    },
+    // Shipped layout, but outlines are the default: the model leaves out stroke="#1e1e1e" stroke-width and the renderer supplies them (picture.ts).
+    {
+      name: "short-stroke",
+      system: () => PICTURE_SYSTEM,
+      user: (subject, w, h, t) => `Doodle: ${subject}
+
+${PICTURE_LOOK}
+The box is ${w} wide and ${h} tall (x right, y down, 0 0 at the top left). Fill most of it, centered, and keep everything inside it.
+${pictureRulesShort(t)}`,
     },
   ],
 };
