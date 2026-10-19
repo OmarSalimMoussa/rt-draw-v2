@@ -66,7 +66,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
   aa --shared --cases n                bench freeze                         human freeze
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
-  sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfc|ttd] --cap n
+  sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfc|ttd] [--owner-ok] --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
        [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
@@ -914,7 +914,8 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     if (err instanceof LockfileDiffers) return gate("owner", [err.message]);
     throw err;
   }
-  const g = g0({ diff: diffOf(p.repo, base, cand), tree });
+  const g = g0({ diff: diffOf(p.repo, base, cand), tree, ownerOk: c.card.ownerOk });
+  if (g.waived) say(`${id}: the owner waived ${g.waived.length} owner finding${g.waived.length > 1 ? "s" : ""}: ${g.waived.join("; ").slice(0, 300)}`);
   if (g.verdict !== "pass") return gate(g.verdict === "owner" ? "owner" : "revert", g.reasons);
 
   // A knob card is one tree with two tunings (§7.2).
@@ -1444,7 +1445,7 @@ async function stopAfterCmd() {
 
 async function decideCmd() {
   const branch = o.pos[1];
-  if (!branch) throw new Error("decide <branch> [--goal latency --metric ttfc|ttd] --cap n");
+  if (!branch) throw new Error("decide <branch> [--goal latency --metric ttfc|ttd] [--owner-ok] --cap n");
   // The owner's own change, judged on what it's for: fidelity by default, or a speed change (one the loop's gates sent
   // to the owner and the owner wants measured) on its metric.
   const goal = str("goal") ?? "fidelity", metric = str("metric");
@@ -1454,7 +1455,7 @@ async function decideCmd() {
   needBank();
   openHistory();
   const st = readState() ?? newState(nextEpoch());
-  const card: HypothesisCard = { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: goal as HypothesisCard["goal"], ...(goal === "latency" ? { metric: metric as "ttfc" | "ttd" } : {}), classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
+  const card: HypothesisCard = { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: goal as HypothesisCard["goal"], ...(goal === "latency" ? { metric: metric as "ttfc" | "ttd" } : {}), ...(o.f["owner-ok"] ? { ownerOk: true } : {}), classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
   const c: CardState = { id: `d-${branch.replace(/[^\w-]+/g, "-")}`, card, branch, status: "built", cand: git(paths().repo, "rev-parse", branch) };
   const d = await withGateway(async (gw) => ((await rebased(gw, st, c)) ? decideCard(gw, st, c) : undefined));
   return d?.verdict === "keep" ? 0 : 1;

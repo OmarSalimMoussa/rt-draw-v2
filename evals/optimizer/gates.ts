@@ -36,7 +36,10 @@ const matches = (path: string, patterns: string[]) => patterns.some((p) => glob(
 
 export type FileDiff = { path: string; from?: string; added: string[]; removed: string[] };
 export type Finding = { verdict: "reject" | "owner"; why: string };
-export type G0Result = { verdict: "pass" | "reject" | "owner"; reasons: string[]; /** set when scene.ts changed */ scenes?: { loaded: number; failed: string[] } };
+export type G0Result = {
+  verdict: "pass" | "reject" | "owner"; reasons: string[]; /** set when scene.ts changed */ scenes?: { loaded: number; failed: string[] };
+  /** the owner findings the owner waived (rte decide --owner-ok) */ waived?: string[];
+};
 
 /** A unified diff (git diff) per file: its path (and a rename's source), added and removed lines. */
 export function parseDiff(text: string): FileDiff[] {
@@ -264,9 +267,12 @@ export function sceneRoundTrip(tree: string, files: string[]): { loaded: number;
  * G0 on a candidate: the diff's checks first (cheapest), then, given its tree, the typecheck and the scene round trip.
  * Any finding stops it: a reject wins over an owner item.
  */
-export function g0(o: { diff: string; tree?: string; scenes?: string[] }): G0Result {
+export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?: boolean }): G0Result {
   const files = parseDiff(o.diff);
-  const found = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files)];
+  const all = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files)];
+  // The owner's say-so (rte decide --owner-ok) waives the findings that are the owner's call; a reject still stands.
+  const waived = o.ownerOk ? all.filter((f) => f.verdict === "owner") : [];
+  const found = all.filter((f) => !waived.includes(f));
   let scenes: G0Result["scenes"];
   if (!found.length && o.tree) {
     found.push(...typecheck(o.tree));
@@ -275,7 +281,7 @@ export function g0(o: { diff: string; tree?: string; scenes?: string[] }): G0Res
       if (scenes.failed.length) found.push({ verdict: "owner", why: `scene format: ${scenes.failed.length} banked before-scenes don't load through the candidate's Scene.fromJSON (${scenes.failed[0]})` });
     }
   }
-  return { verdict: found.some((f) => f.verdict === "reject") ? "reject" : found.length ? "owner" : "pass", reasons: found.map((f) => f.why), ...(scenes ? { scenes } : {}) };
+  return { verdict: found.some((f) => f.verdict === "reject") ? "reject" : found.length ? "owner" : "pass", reasons: found.map((f) => f.why), ...(waived.length ? { waived: waived.map((f) => f.why) } : {}), ...(scenes ? { scenes } : {}) };
 }
 
 /**
