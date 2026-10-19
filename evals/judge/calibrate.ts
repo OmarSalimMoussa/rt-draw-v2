@@ -44,6 +44,19 @@ const shapes = (p: Pair, arm: Arm) => json<SceneJSON>(join(caseDir(p.run, p.case
 const changes = (p: Pair, arm: Arm) => json<string[]>(join(caseDir(p.run, p.case), arm, "changes.json")).length;
 
 /**
+ * A top-up ("more": fewer than 40 clear): fidelity pairs for contrast cases judged since pairs.json was written, put
+ * after the fidelity pairs already there, so every labelled pair, probe and repeat keeps its id and place.
+ */
+export function topUpContrast(contrast: string): PairRef[] {
+  const have = maybe<PairRef[]>(pairsFile()) ?? [];
+  const known = new Set(have.map((p) => p.id));
+  const add: PairRef[] = judgedCases(contrast).map((c) => ({ id: `f:${contrast}:${c}`, run: contrast, case: c, question: "fidelity" as const, subset: "contrast" })).filter((p) => !known.has(p.id));
+  const at = have.findIndex((p) => p.question === "craft");
+  put(pairsFile(), at < 0 ? [...have, ...add] : [...have.slice(0, at), ...add, ...have.slice(at)]);
+  return add;
+}
+
+/**
  * Writes labels/pairs.json from checkpoint 0 (`aa`) and the contrast run, after building the "did
  * nothing" probes (their before-scene side captured by `capture`: 0 model calls) and judging what has
  * no verdict yet: the probes' fidelity and the contrast cases' craft (~30 calls; checkpoint cases have both).

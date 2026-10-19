@@ -6,7 +6,7 @@
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t12-judge.mjs
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
@@ -329,6 +329,19 @@ const nothingSide = probePk.positions.left === "B" ? "left" : "right";
 check(probePk.changes[nothingSide].length === 0 && json(join(rec.caseDir(C.CALIB.probeRun, probe.case), "B", "after.scene.json")).shapes.length === BEFORE.shapes.length && existsSync(judgeFile(C.CALIB.probeRun, probe.case, "fidelity-1.json")),
   "a did-nothing probe's packet or verdict");
 check(up2() - u0 === 8 + probeAudits + 4, `assemble made ${up2() - u0} calls, want ${8 + probeAudits + 4} (8 probes, ${probeAudits} audits, 4 contrast craft)`);
+// A top-up ("more"): a contrast case judged since goes after the fidelity pairs; every pair already there keeps its id and place.
+const pairsBefore = readFileSync(join(home, "labels", "pairs.json"), "utf8");
+const extra = "c-con-extra", extraPos = J.positionsFor([extra], SC).get(extra);
+bankCase(extra);
+runCase(CON, extra);
+K.writePacket(CON, extra, extraPos, exp(extra));
+rec.put(judgeFile(CON, extra, "fidelity-1.json"), judged("left", 3, extraPos));
+const added = C.topUpContrast(CON), topped = json(join(home, "labels", "pairs.json"));
+check(added.length === 1 && added[0].id === `f:${CON}:${extra}` && topped.findIndex((p) => p.id === added[0].id) === fid.length && JSON.stringify(topped.filter((p) => p.id !== added[0].id)) === JSON.stringify(pairs),
+  `the top-up moved a pair or added the wrong ones: ${JSON.stringify(added)}`);
+check(C.topUpContrast(CON).length === 0, "a second top-up added the same pair again");
+writeFileSync(join(home, "labels", "pairs.json"), pairsBefore);
+rmSync(rec.caseDir(CON, extra), { recursive: true });
 // The owner's labels: the first 20 fidelity pairs against the judge, the rest with it; every 7th slight; repeats as first given; 30 craft labels with the judge.
 const judgeArm = (p) => { const f1 = json(judgeFile(p.run, p.case, "fidelity-1.json")); const f2p = judgeFile(p.run, p.case, "fidelity-2.json"); return J.combined(f1, existsSync(f2p) ? json(f2p) : undefined); };
 const labels = [];

@@ -21,7 +21,7 @@ import { plan, prompt } from "../../src/core/resolve.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
 import { TUNING } from "../core/scenarios.ts";
 import { loadFixture } from "../fixtures/fixtures.ts";
-import { assemble, checkCalibration } from "../judge/calibrate.ts";
+import { assemble, checkCalibration, topUpContrast } from "../judge/calibrate.ts";
 import { canaryDue, runCanary } from "../judge/canary.ts";
 import { calibrationFile, combined, judgeId, judging, lastServed, positionsFor, variants } from "../judge/judge.ts";
 import { caseFile, framed, readPacket } from "../judge/packet.ts";
@@ -65,7 +65,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
   aa --shared --cases n                bench freeze                         human freeze
-  checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
+  checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
   status                               remetric <run>                       gc --trees
@@ -681,9 +681,12 @@ async function calib() {
   if (!ck0) throw new Error("no checkpoint 0 yet: its A/A pairs are most of the label set");
   const champ = championArm();
   const run = "calib-contrast";
-  const ids = ordered(banked(["tuning", "fresh"]), run).slice(0, LOOP.calib.contrast);
+  // --more n (calib --check said "more"): n further cases into the same run, their pairs appended to the label set.
+  const more = num("more") ?? 0;
+  const ids = ordered(banked(["tuning", "fresh"]), run).slice(0, LOOP.calib.contrast + more);
   await withGateway((gw) => withRig(gw, [champ.tree], async (rig) => {
     await runAB(rig, { run, kind: "calib", arms: { A: champ, B: { ...champ, tuning: { [knob]: Number(value) } } }, mode: "live", share: true, seed: run, judge: judging(run, { seed: run, craft: "none" }), cases: ids });
+    if (more) return void say(`calib: ${topUpContrast(run).length} more fidelity pairs appended to labels/pairs.json: label them at /evals/label/, then rte calib --check --cap n`);
     const page = (await rig.tab(0, "A", champ.tree)).page;
     // One page: assemble() asks for its probes' captures at once, and two loads racing on one page never finished.
     let busy: Promise<unknown> = Promise.resolve();
