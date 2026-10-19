@@ -36,19 +36,60 @@ export async function send(scene: Scene, input: SendInput, t: Tuning, hooks: Sen
   const { draw = () => {}, signal, parent } = hooks;
   // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
   const pictures = t["draw.fillPictures"] ? pictureFiller(scene, t, draw, signal, parent) : undefined;
-  const prompt = await buildPrompt(scene, input.strokes, input.words, t, parent, camera);
-  hooks.onPrompt?.(prompt);
+  let guess: Promise<Prompt | undefined> | undefined;
+  const final = buildPrompt(scene, input.strokes, input.words, t, parent, camera, (g) => (guess = g));
   let gliding: Promise<void> = Promise.resolve();
-  const result = await run(scene, prompt, t, (r) => {
+  const onOp = (r: OpResult) => {
     hooks.onOp?.(r);
     if (r.camera && hooks.setView) gliding = hooks.setView(r.camera, t["camera.easeMs"]);
     draw();
     pictures?.kick();
-  }, undefined, signal, parent);
+  };
+  const { prompt, result } = await drawOn(scene, guess, final, t, onOp, hooks, parent);
   hooks.onReply?.(result);
   const pics = await pictures?.finish();
   spanSync("final redraw", parent, () => draw());
   // The send ends once the screen has arrived where the last camera op sent it.
   await gliding;
   return { prompt, result, pics };
+}
+
+/**
+ * The drawing call. With a guess (resolve.speculate) it starts on the guessed prompt, its ops held back; once the
+ * resolver answers, a final prompt exactly the same lets them land (the resolver's wait saved), any other drops that
+ * call and draws on the final prompt, as without a guess.
+ */
+async function drawOn(scene: Scene, guess: Promise<Prompt | undefined> | undefined, final: Promise<Prompt>, t: Tuning, onOp: (r: OpResult) => void, hooks: SendHooks, parent?: TraceContext): Promise<{ prompt: Prompt; result: SendResult }> {
+  const { signal } = hooks;
+  const plain = async (p: Prompt, spec?: string) => {
+    hooks.onPrompt?.(p);
+    return { prompt: spec ? { ...p, features: { ...p.features, spec } } : p, result: await run(scene, p, t, onOp, undefined, signal, parent) };
+  };
+  const g = await guess;
+  if (!g) return plain(await final, guess ? "no guess" : undefined);
+  const call = new AbortController();
+  const abort = () => call.abort();
+  signal?.addEventListener("abort", abort);
+  let open!: (ok: boolean) => void;
+  const gate = new Promise<boolean>((r) => (open = r));
+  const early = run(scene, g, t, onOp, undefined, call.signal, parent, gate);
+  try {
+    const f = await final;
+    // The same text names the same pictures (each view's box and size), taken of a scene nothing changed meanwhile.
+    const same = f.system === g.system && f.user === g.user && f.thinking === g.thinking && f.images.length === g.images.length;
+    open(same);
+    if (same) {
+      hooks.onPrompt?.(f);
+      return { prompt: { ...f, features: { ...f.features, spec: "hit" } }, result: await early };
+    }
+    call.abort();
+    await early;
+    return plain(f, "miss");
+  } catch (err) {
+    open(false);
+    call.abort();
+    throw err;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
 }

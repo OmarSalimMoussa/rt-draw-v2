@@ -57,6 +57,7 @@ type Ask = {
   /** performance.now() when the request was sent (x-rt-at) or got here: every offset counts from it */ t0: number;
   /** an arm page's call (pooled, shared), not an eval role's */ page: boolean;
   req: Req; hash: string; images: string[]; warm?: number; token?: SlotN;
+  /** the page went away (it dropped the call: resolve.speculate, a cancel): a call no other arm follows stops */ gone?: AbortSignal;
 };
 type Out = {
   text: string; stats: Record<string, unknown>; mode: CallMode; shared: Shared; scan?: "hit" | "standin" | "miss"; error?: string; cacheFile?: string; chunks: Chunk[];
@@ -161,6 +162,10 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token), a.page), waiting: false, readyAtTake: false };
     if (a.page) topUp(key, keepOf(a.warm, MAX_WARM), start(a.req, token));
     const timer = setTimeout(() => taken.proc.q.close(), TIMEOUT_MS);
+    // A page that dropped its call stops it, unless another arm's identical call is waiting on this one.
+    const stop = () => !flight?.followers.size && taken.proc.q.close();
+    if (a.gone?.aborted) stop();
+    a.gone?.addEventListener("abort", stop);
     const chunks: Chunk[] = [];
     let waitMs: number | undefined;
     const head = { warm: taken.waiting, readyAtTake: taken.readyAtTake, token };
@@ -188,6 +193,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       return { text: "", stats: { ...head, ...(s ? flat(s) : {}), ms: since(), waitMs }, mode: "live", shared: "-", error, chunks, upstream: { usd, token } };
     } finally {
       clearTimeout(timer);
+      a.gone?.removeEventListener("abort", stop);
       taken.proc.q.close();
       if (!a.page) evalDone();
     }
@@ -299,7 +305,9 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     c?.ordinals.set(ordKey, ordinal + 1);
     const a: Ask = { ...base, ordinal, t0: sentAt(h("at"), arrived), page: true, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], warm: b.warm as number | undefined };
     res.setHeader("content-type", "application/x-ndjson");
-    const out = await serveAndRecord(a, (t) => res.write(`${JSON.stringify({ text: t })}\n`));
+    const gone = new AbortController();
+    res.on("close", () => !res.writableEnded && gone.abort());
+    const out = await serveAndRecord({ ...a, gone: gone.signal }, (t) => res.write(`${JSON.stringify({ text: t })}\n`));
     res.end(`${JSON.stringify({ done: true, model: b.model, modelId: r.model, ...out.stats, reqHash: a.hash, shared: out.shared, mode: out.mode, scan: out.scan, error: out.error })}\n`);
   }
 

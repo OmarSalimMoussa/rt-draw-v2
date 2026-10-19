@@ -31,13 +31,14 @@ chmodSync(tokensFile, 0o600);
 const { startFakeApi } = await import("../mock/fake-api.ts");
 const { gatewayStatus, setMode, spawnGateway } = await import("../loop/client.ts");
 const { paths } = await import("../loop/paths.ts");
-const { PROMPTS } = await import("../../src/core/prompts.ts");
+const { PROMPTS, promptOf } = await import("../../src/core/prompts.ts");
 const { runScript } = await import("../../src/core/ops.ts");
-const { asPage } = await import("../../src/core/board.ts");
+const { SCREEN, asPage } = await import("../../src/core/board.ts");
 const { HitIndex } = await import("../../src/core/hittest.ts");
 const { groupStrokes } = await import("../../src/core/marks.ts");
 const { caseInput, resolve } = await import("../../src/core/resolve.ts");
-const { buildPrompt } = await import("../../src/core/draw.ts");
+const { buildPrompt, run: runDraw } = await import("../../src/core/draw.ts");
+const { send } = await import("../../src/core/send.ts");
 const { tune } = await import("../../src/core/tuning.ts");
 
 const { scene } = runScript(asPage(readFileSync(join(ROOT, "src/fixtures/clowns.ops.txt"), "utf8"), "page", "Home"));
@@ -45,6 +46,8 @@ const [A, B] = scene.stacked().filter((s) => s.kind !== "frame").map((s) => s.id
 const CLAUDE_REFS = JSON.stringify({ refs: [{ phrase: "the clown", ids: [B] }] });
 mkdirSync(join(work, "replies"));
 writeFileSync(join(work, "replies", `resolver.${sha(PROMPTS.resolve[0].system).slice(0, 12)}.txt`), CLAUDE_REFS);
+// The drawing model's reply on the canvas (resolve.speculate's check): one move of the clown the resolver names.
+writeFileSync(join(work, "replies", `draw.${sha(promptOf("draw", tune({})).system(false, scene.width, scene.height, 0, SCREEN.w)).slice(0, 12)}.txt`), `move(${B}, 10 20 300 200)`);
 const api = await startFakeApi({ replies: join(work, "replies") });
 const jevReqs = () => api.requests.filter((r) => r.path === "/v1/systemone");
 const claudeReqs = () => api.requests.filter((r) => r.path.endsWith("/v1/messages"));
@@ -152,6 +155,39 @@ check(deep.thinking === undefined && deep.features.thinkP === 0.8, `the think ro
 const j1 = jevReqs().length;
 const plain = await buildPrompt(scene, [], typed, tune({ "draw.sendScreenshot": 0, "draw.sendRefs": 0 }));
 check(plain.thinking === undefined && plain.features.thinkP === undefined && jevReqs().length === j1, "the default asked Jev about thinking");
+
+// ---- resolve.speculate: the drawing call starts on Jev's guess, its ops held until the resolver answers; the same
+// prompt lets them land (one drawing call), another drops that call and draws again on the answer.
+const spec = tune({ "resolve.speculate": 1, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
+const fresh = () => runScript(asPage(readFileSync(join(ROOT, "src/fixtures/clowns.ops.txt"), "utf8"), "page", "Home")).scene;
+const said = "make the clown with the balloon bigger";
+const draws = () => api.requests.filter((r) => r.role === "draw").length;
+async function speculated(jev) {
+  api.set({ jev });
+  run = `p${++k}`;
+  const sc = fresh(), d0 = draws(), j0 = jevReqs().length, ops = [];
+  const { prompt, result } = await send(sc, { strokes: [], words: said }, spec, { onOp: (r) => ops.push(r) });
+  return { sc, prompt, result, ops, draws: draws() - d0, jev: jevReqs().length - j0 };
+}
+const hit = await speculated({ [B]: 0.9 });
+check(hit.prompt.features.spec === "hit" && hit.draws === 1 && hit.jev === 1 && hit.ops.length === 1 && hit.ops[0].ok && hit.sc.get(B).box.w === 300 && !hit.result.error,
+  `a right guess: spec ${hit.prompt.features.spec}, ${hit.draws} drawing calls, ${hit.ops.length} ops, error ${hit.result.error}`);
+check(/^References \(resolved before this call\): /m.test(hit.prompt.user) && hit.prompt.user.includes(`: ${B}\n`) && !/→/.test(hit.prompt.user), `the references as ids alone: ${hit.prompt.user.split("\n").find((l) => l.startsWith("References"))}`);
+const miss = await speculated({ [A]: 0.9 });
+check(miss.prompt.features.spec === "miss" && miss.draws === 2 && miss.ops.length === 1 && miss.sc.get(B).box.w === 300 && miss.prompt.refs.via === "model" && miss.prompt.user.includes(`: ${B}\n`),
+  `a wrong guess: spec ${miss.prompt.features.spec}, ${miss.draws} drawing calls, ${miss.ops.length} ops applied`);
+const none = await speculated({});
+check(none.prompt.features.spec === "miss" && none.draws === 2, `a guess of nothing against the answer ${B}: spec ${none.prompt.features.spec}, ${none.draws} drawing calls`);
+// The gate itself: ops wait for it; a shut gate applies none.
+for (const open of [true, false]) {
+  const sc = fresh(), at = [];
+  let opened = 0;
+  const gate = new Promise((r) => setTimeout(() => ((opened = performance.now()), r(open)), 300));
+  const p = await buildPrompt(sc, [], said, spec);
+  const r = await runDraw(sc, p, spec, () => at.push(performance.now()), undefined, undefined, undefined, gate);
+  if (open) check(at.length === 1 && at[0] >= opened && sc.get(B).box.w === 300 && !r.error, `an open gate: ${at.length} ops, first ${at[0] - opened} ms after it opened`);
+  else check(!at.length && sc.get(B).box.w !== 300 && /dropped/.test(r.error ?? ""), `a shut gate applied ${at.length} ops (error ${r.error})`);
+}
 globalThis.fetch = realFetch;
 
 // ---- The dev server's route: a Jev call on the fake API with the fake key, never .env's.

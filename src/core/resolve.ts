@@ -148,6 +148,20 @@ export async function resolve(words: Word[], strokes: Stroke[], marks: Mark[], s
   return { ...p, ids, refs: ids.length ? [{ phrase: "(their words and ink)", ids }] : [], via: "jev", jev, hints, prompt: { system: "", user: jev.prompt!.user, images: 0 }, reply: jev.reply, stats: jev.stats, features: { ...features, refs: ids.length ? 1 : 0, droppedIds: 0 } };
 }
 
+/**
+ * A guess at the references for resolve.speculate: Jev's yes/no per candidate, the ids at or above resolve.jevYes.
+ * Undefined when there's nothing to hide (the ink settles it, or the resolver isn't Claude's) or Jev failed.
+ */
+export async function guessRefs(words: Word[], marks: Mark[], scene: Scene, hits: HitIndex, t: Tuning, from: string, parent?: TraceContext): Promise<Resolution | undefined> {
+  const p = plan(words, marks, scene, hits, t);
+  const engine = Math.round(t["resolve.engine"]);
+  if (p.inkIds || engine === 1 || engine === 2) return undefined;
+  const jev = await askJev(p, scene, t, from, parent);
+  if (jev.error) return undefined;
+  const ids = p.jevCandidates.filter((id) => (jev.yes[id] ?? 0) >= t["resolve.jevYes"]);
+  return { ...p, ids, refs: ids.length ? [{ phrase: "(a guess)", ids }] : [], via: "jev", jev, reply: jev.reply, stats: jev.stats, features: { ...p.features, refs: ids.length ? 1 : 0, droppedIds: 0 } };
+}
+
 /** Jev's yes/no per candidate; a failed call comes back as its error (Claude then decides). */
 async function askJev(p: Plan, scene: Scene, t: Tuning, from: string, parent?: TraceContext): Promise<JevPart> {
   const v = promptOf("resolveJev", t);
