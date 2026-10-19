@@ -120,12 +120,8 @@ export type Facts = {
   /** When product calls failed as overloaded (529). */
   overloads: number[];
   diskGb: number; daysLeft?: number; onAC?: boolean;
-  /** This leg (the loop since it last started or resumed): when, list $ spent, decisions and checkpoints made. */
-  leg?: { start: number; usd: number; decisions: number; checkpoints: number };
-  /** The review stops for this leg (config.ts' REVIEW, or --review-*); 0 is off. */
-  review?: { decisions: number; minutes: number; usd: number; checkpoint: number };
 };
-export type Action = { do: "stop" | "pause" | "owner" | "skip" | "review"; why: string; until?: number; component?: string };
+export type Action = { do: "stop" | "pause" | "owner" | "skip"; why: string; until?: number; component?: string };
 
 /** Every rule of §6.7 that fires on these facts (none: carry on). Pauses carry the time to look again. */
 export function rules(f: Facts): Action[] {
@@ -158,17 +154,38 @@ export function rules(f: Facts): Action[] {
   if (f.diskGb < LOOP.diskPauseGb) out.push({ do: "pause", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskPauseGb}`, until: f.now + RULES.recheckMs });
   if (f.diskGb < LOOP.diskOwnerGb) out.push({ do: "owner", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskOwnerGb}${f.daysLeft !== undefined ? `, ~${f.daysLeft.toFixed(1)} days left at this pace` : ""}` });
   if (f.onAC === false) out.push({ do: "pause", why: "on battery: new cases wait for AC", until: f.now + RULES.recheckMs });
-  // Review stops: the owner looks before the loop goes on (a stop above says why first).
-  if (f.leg && f.review) {
-    const { leg, review: r } = f;
-    const min = (f.now - leg.start) / 60_000;
-    const hit = [
-      r.decisions > 0 && leg.decisions >= r.decisions && `${leg.decisions} decisions (review every ${r.decisions})`,
-      r.minutes > 0 && min >= r.minutes && `${Math.round(min)} min (review every ${r.minutes})`,
-      r.usd > 0 && leg.usd >= r.usd && `$${leg.usd.toFixed(2)} list spent (review every $${r.usd})`,
-      r.checkpoint > 0 && leg.checkpoints > 0 && `${leg.checkpoints} checkpoint${leg.checkpoints > 1 ? "s" : ""} ran`,
-    ].filter(Boolean);
-    if (hit.length) out.push({ do: "review", why: `review stop: ${hit.join(", ")} since this leg started` });
-  }
+  return out;
+}
+
+/** What the owner's notices are read from: this leg (the loop since it last started or resumed) and the night cap. */
+export type NoticeFacts = {
+  now: number;
+  leg: { start: number; usd: number; decisions: number; checkpoints: string[] };
+  every: { decisions: number; minutes: number; usd: number; checkpoint: number; soon: number };
+  nightUsd: number; nightCapUsd: number;
+};
+export type Notice = { key: string; kind: "soon" | "reached" | "checkpoint" | "stopped"; why: string };
+
+/**
+ * The owner's notices due on these facts and not yet `sent` (by key): a heads-up as each step of `every` comes near (its
+ * `soon` share) and a notice when it's reached; one per checkpoint; and two before the night cap, which stops the loop.
+ * None of them stops anything.
+ */
+export function notices(f: NoticeFacts, sent: Set<string>): Notice[] {
+  const out: Notice[] = [];
+  const add = (key: string, kind: Notice["kind"], why: string) => !sent.has(key) && !out.some((n) => n.key === key) && out.push({ key, kind, why });
+  const steps = (name: string, value: number, step: number, unit: (x: number) => string, soon: boolean) => {
+    if (!(step > 0)) return;
+    const k = Math.floor(value / step);
+    if (k >= 1) add(`${name}:${k}`, "reached", `${unit(value)} this leg (a notice every ${unit(step)})`);
+    if (soon && value >= (k + f.every.soon) * step) add(`${name}:${k + 1}:soon`, "soon", `${unit(value)} this leg; ${unit((k + 1) * step)} soon`);
+  };
+  steps("usd", f.leg.usd, f.every.usd, (x) => `$${x.toFixed(2)} list`, true);
+  steps("minutes", (f.now - f.leg.start) / 60_000, f.every.minutes, (x) => `${Math.round(x)} min`, true);
+  steps("decisions", f.leg.decisions, f.every.decisions, (x) => `${x} decision${x === 1 ? "" : "s"}`, false);
+  if (f.every.checkpoint > 0) for (const id of f.leg.checkpoints) add(`checkpoint:${id}`, "checkpoint", `checkpoint ${id} ran`);
+  for (const share of [f.every.soon, 0.95])
+    if (share > 0 && f.nightCapUsd > 0 && f.nightUsd >= share * f.nightCapUsd && f.nightUsd < f.nightCapUsd)
+      add(`night:${share}`, "soon", `the night cap is ${Math.round((100 * f.nightUsd) / f.nightCapUsd)}% spent ($${f.nightUsd.toFixed(2)} of $${f.nightCapUsd.toFixed(2)}): the loop stops there`);
   return out;
 }

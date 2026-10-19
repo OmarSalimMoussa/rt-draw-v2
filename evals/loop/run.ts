@@ -9,7 +9,7 @@
 // --port n (the first arm server's, default 5300) and --fakes <module> (checks: a canned critic, engineer, judge).
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { arch } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -37,7 +37,7 @@ import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, t
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
-import { DRIVE_VIEW, LOOP, REVIEW, configId } from "./config.ts";
+import { DRIVE_VIEW, LOOP, NOTIFY, configId } from "./config.ts";
 import { type ScanResult, compareCase, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
 import { closedPort } from "./gateway.ts";
@@ -49,10 +49,10 @@ import { type MeterCall, readMeter, rollup } from "./meter.ts";
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { ready } from "./ready.ts";
-import { caseDir, put, putImage, runFile, voidCase } from "./record.ts";
+import { appendLine, caseDir, put, putImage, runFile, voidCase } from "./record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "./probe.ts";
 import { remetric } from "./remetric.ts";
-import { CASE_USD, type CardState, type Decided, type Facts, type State, lock, newState, overrun, readState, rules, saveState, stampNow } from "./state.ts";
+import { CASE_USD, type CardState, type Decided, type Facts, type Notice, type State, lock, newState, notices, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { stubPictures } from "./stubs.ts";
 import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
@@ -68,7 +68,8 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
-       [--review-decisions n] [--review-minutes m] [--review-usd x] [--review-checkpoint 0|1]   (stops for the owner; 0 is off)
+       [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
+  stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
   status                               remetric <run>                       gc --trees
   packets <run>… (frames the changes a run's after captures missed, 0 calls)`;
 const CO_AUTHOR = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
@@ -1048,11 +1049,76 @@ const nextEpoch = () => Math.max(0, ...historyRows("epochs.jsonl").map((e) => e.
 let readyAtStart = false;
 let diskAtStart: { at: number; gb: number } | undefined;
 let nightWindows: number = LOOP.nightWindows;
-/** This leg of the loop (since it last started or resumed) and its review stops (config.ts' REVIEW). */
-let leg = { start: Date.now() };
-let review: Record<keyof typeof REVIEW, number> = { ...REVIEW };
 /** $ a meter line spent: an agent session's cost, an upstream call's list $ (a follower and a replay pay nothing). */
 const paidUsd = (l: ReturnType<typeof readMeter>[number]) => ("agent" in l ? l.totalCostUsd : l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0);
+
+/** The meter read as it grows: $ and upstream calls since `from` (ms), by role, without rereading the whole file. */
+class MeterTail {
+  private off = 0;
+  private rest = "";
+  usd = 0;
+  calls = 0;
+  byRole: Record<string, number> = {};
+  constructor(private file: string, private from: number) {}
+  read(): this {
+    if (!existsSync(this.file)) return this;
+    const size = statSync(this.file).size;
+    if (size <= this.off) return this;
+    const buf = Buffer.alloc(size - this.off);
+    const fd = openSync(this.file, "r");
+    try {
+      readSync(fd, buf, 0, buf.length, this.off);
+    } finally {
+      closeSync(fd);
+    }
+    this.off = size;
+    const parts = (this.rest + buf.toString("utf8")).split("\n");
+    this.rest = parts.pop() ?? "";
+    for (const raw of parts) {
+      if (!raw.trim()) continue;
+      const l = JSON.parse(raw) as ReturnType<typeof readMeter>[number];
+      if (Date.parse(l.at) < this.from) continue;
+      const usd = paidUsd(l);
+      this.usd += usd;
+      if (!("agent" in l) && usd > 0) this.calls++;
+      this.byRole[l.role] = (this.byRole[l.role] ?? 0) + usd;
+    }
+    return this;
+  }
+}
+
+/** This leg of the loop (since it last started or resumed): its notices (config.ts' NOTIFY), the meter since it began. */
+let leg = { start: Date.now(), every: { ...NOTIFY } as Record<keyof typeof NOTIFY, number>, sent: new Set<string>(), spent: new MeterTail("", 0), night: new MeterTail("", 0) };
+const stopFile = () => join(paths().home, "stop.request");
+/** A long step (a decision, a checkpoint) still gets its notices: the clock and the meter are looked at this often. */
+const NOTICE_MS = 60_000;
+let noticeChain: Promise<void> = Promise.resolve();
+/** Sends the notices due (and `extra`): the log and notices.jsonl, each once per leg. Never stops anything. */
+const notify = (gw: string, st: State, extra?: Omit<Notice, "key">) => (noticeChain = noticeChain.then(() => notifyNow(gw, st, extra)).catch((err) => say(`notice: skipped (${msg(err)})`)));
+async function notifyNow(gw: string, st: State, extra?: Omit<Notice, "key">) {
+  const spent = leg.spent.read(), night = leg.night.read();
+  const s = (await gatewayStatus(gw)) as { slots: SlotStatus[] };
+  const W = s.slots.reduce((a, x) => a + x.windowUsd, 0) / Math.max(1, s.slots.length);
+  const decided = st.recent.filter((d) => Date.parse(d.at) >= leg.start);
+  const cks = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).filter((c) => Date.parse(c.at) >= leg.start);
+  const due = notices({ now: Date.now(), leg: { start: leg.start, usd: spent.usd, decisions: decided.length, checkpoints: cks.map((c) => c.id) }, every: leg.every, nightUsd: night.usd, nightCapUsd: nightWindows * W }, leg.sent);
+  if (extra) due.push({ key: `${extra.kind}:${Date.now()}`, ...extra });
+  if (!due.length) return;
+  const rows = new Map(historyRows("decisions.jsonl").map((d) => [d.id, d]));
+  const minutes = (Date.now() - leg.start) / 60_000;
+  const byRole = Object.entries(spent.byRole).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([role, usd]) => `${role} $${usd.toFixed(2)}`);
+  const summary = {
+    epoch: st.epoch, champion: championSha(), minutes: Math.round(minutes), calls: spent.calls, listUsd: spent.usd, byRole, nightUsd: night.usd, nightCapUsd: nightWindows * W,
+    decided: decided.map((d) => ({ id: d.id, verdict: d.verdict, change: rows.get(d.id)?.card?.change ?? d.component, why: rows.get(d.id)?.reasons.slice(0, 2) })),
+    checkpoints: cks.map((c) => ({ id: c.id, trust: c.trust, share: c.share.all?.share })),
+    stop: "rte stop-after (before the next step: nothing lost; loop --resume goes on)",
+  };
+  for (const n of due) {
+    leg.sent.add(n.key);
+    appendLine(join(paths().home, "notices.jsonl"), { at: new Date().toISOString(), ...n, ...summary });
+    say(`loop: NOTICE (${n.kind}): ${n.why}; this leg ${summary.minutes} min, ${summary.calls} calls, $${spent.usd.toFixed(2)} list${byRole.length ? ` (${byRole.slice(0, 3).join(", ")})` : ""}, ${decided.length} decisions${n.kind === "stopped" ? "" : `; to stop: ${summary.stop}`}`);
+  }
+}
 type SlotStatus = { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; resetsAt?: number; status?: string; usdThisWindow: number; windowUsd: number; usd7d: number; why?: string };
 
 async function facts(gw: string, st: State, error?: string): Promise<Facts> {
@@ -1061,7 +1127,6 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   const nightStart = Date.parse(st.nightStart);
   const lines = readMeter(paths().calls);
   const nightUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < nightStart ? 0 : paidUsd(l)), 0);
-  const legUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < leg.start ? 0 : paidUsd(l)), 0);
   const fs = statfsSync(paths().home);
   const gb = (fs.bavail * fs.bsize) / 1e9;
   diskAtStart ??= { at: Date.now(), gb };
@@ -1070,13 +1135,19 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
     now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
     blocked: st.blocked, emptyEpochs: st.emptyEpochs ?? 0, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
     daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
-    leg: { start: leg.start, usd: legUsd, decisions: st.recent.filter((d) => Date.parse(d.at) >= leg.start).length, checkpoints: historyRows("checkpoints.jsonl").filter((c) => Date.parse(c.at) >= leg.start).length },
-    review,
   };
 }
 
 /** §6.7 before new work: true when a rule stops the loop (it says why); pauses wait here. */
 async function halt(gw: string, st: State, error?: string): Promise<boolean> {
+  await notify(gw, st);
+  // The owner asked for a stop (rte stop-after): here, between steps, nothing is lost.
+  if (existsSync(stopFile())) {
+    rmSync(stopFile());
+    say("loop: STOP: as the owner asked (rte stop-after); loop --resume goes on from here");
+    await notify(gw, st, { kind: "stopped", why: "stopped as asked (rte stop-after); loop --resume goes on from here" });
+    return true;
+  }
   for (;;) {
     const acts = rules(await facts(gw, st, error));
     const noted = acts.filter((a) => a.do === "owner" || a.do === "stop" || a.do === "skip");
@@ -1084,40 +1155,17 @@ async function halt(gw: string, st: State, error?: string): Promise<boolean> {
     for (const a of acts) if (a.do === "skip" && !st.paused.includes(a.component!)) st.paused.push(a.component!);
     if (noted.length) commitHistory(`owner list: ${noted.map((a) => a.why).join("; ").slice(0, 100)}`);
     const stop = acts.find((a) => a.do === "stop");
-    if (stop) return say(`loop: STOP: ${stop.why}`), true;
-    const look = acts.find((a) => a.do === "review");
-    if (look) return reviewStop(st, look.why), true;
+    if (stop) {
+      say(`loop: STOP: ${stop.why}`);
+      await notify(gw, st, { kind: "stopped", why: `the loop stopped: ${stop.why}` });
+      return true;
+    }
     const pauses = acts.filter((a) => a.do === "pause");
     if (!pauses.length) return false;
     const until = Math.max(...pauses.map((a) => a.until!));
     say(`loop: pause until ${new Date(until).toISOString()}: ${pauses.map((a) => a.why).join("; ")}`);
     await sleep(Math.max(1000, until - Date.now()));
   }
-}
-
-/** A review stop: what this leg decided and spent, where to look, how to go on; $RT_EVAL_HOME/review.json for a watcher. */
-function reviewStop(st: State, why: string) {
-  const p = paths();
-  const rows = new Map(historyRows("decisions.jsonl").map((d) => [d.id, d]));
-  const decided = st.recent.filter((d) => Date.parse(d.at) >= leg.start).map((d) => {
-    const row = rows.get(d.id);
-    return { id: d.id, verdict: d.verdict, component: d.component, change: row?.card?.change, why: row?.reasons.slice(0, 2), ttfc: row?.latency.ttfc, listUsd: row?.cost.listUsd };
-  });
-  const checkpoints = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).filter((c) => Date.parse(c.at) >= leg.start).map((c) => ({ id: c.id, trust: c.trust, share: c.share.all?.share, ttfc: c.latency.ratioTtfc }));
-  const lines = readMeter(p.calls).filter((l) => Date.parse(l.at) >= leg.start);
-  const usd = lines.reduce((a, l) => a + paidUsd(l), 0);
-  const agentUsd = lines.reduce((a, l) => a + ("agent" in l ? l.totalCostUsd : 0), 0);
-  const calls = lines.filter((l) => !("agent" in l) && l.mode === "live" && l.shared !== "follower").length;
-  const byRole = Object.entries(rollup(lines, (l) => l.role)).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([role, r]) => `${role} $${r.usd.toFixed(2)}`);
-  const minutes = (Date.now() - leg.start) / 60_000;
-  const resume = "bash evals/loop/launch.sh loop --resume [--review-decisions n] [--review-minutes m] [--review-usd x] [--review-checkpoint 0|1]";
-  put(join(p.home, "review.json"), { at: new Date().toISOString(), why, epoch: st.epoch, champion: championSha(), minutes, calls, listUsd: usd, agentUsd, byRole, decided, checkpoints, cardsLeft: st.cards.filter((c) => c.status !== "done" && c.status !== "dropped").map((c) => c.id), queue: st.queue.map((c) => c.id), resume });
-  say(`loop: REVIEW STOP: ${why}`);
-  say(`  this leg: ${minutes.toFixed(0)} min, ${calls} calls, $${usd.toFixed(2)} list (agents $${agentUsd.toFixed(2)}); ${byRole.join(", ") || "nothing spent"}`);
-  for (const d of decided) say(`  ${d.id} ${d.verdict}: ${d.change ?? d.component}${d.why?.length ? ` (${d.why.join("; ")})` : ""}`);
-  for (const c of checkpoints) say(`  ${c.id}: trust ${c.trust}, share ${c.share?.toFixed(2) ?? "?"}`);
-  say(`  look: /evals/progress/, ${p.home}/review.json, ${p.home}/logs/; go on: ${resume}`);
-  commitHistory(`review stop: ${why.slice(0, 80)}`);
 }
 
 /** ≤ 3 cards: queued seed cards first, else digests → analyst → critic (§8.2). */
@@ -1301,26 +1349,45 @@ async function loop() {
     } else if (Date.now() - Date.parse(st.nightStart) >= DAY) st.nightStart = new Date().toISOString();
     saveState(st);
     nightWindows = num("night-windows") ?? LOOP.nightWindows;
-    leg = { start: Date.now() };
-    review = Object.fromEntries(Object.entries(REVIEW).map(([k, v]) => [k, num(`review-${k}`) ?? v])) as typeof review;
-    for (const [k, v] of Object.entries(review)) if (!(Number.isFinite(v) && v >= 0)) throw new Error(`--review-${k} takes a number ≥ 0 (0 is off)`);
+    const every = Object.fromEntries(Object.entries(NOTIFY).map(([k, v]) => [k, num(`notify-${k}`) ?? v])) as typeof leg.every;
+    for (const [k, v] of Object.entries(every)) if (!(Number.isFinite(v) && v >= 0)) throw new Error(`--notify-${k} takes a number ≥ 0 (0 is off)`);
+    const start = Date.now();
+    leg = { start, every, sent: new Set(), spent: new MeterTail(paths().calls, start), night: new MeterTail(paths().calls, Date.parse(st.nightStart)) };
+    // A stop asked for while no loop ran is stale: this start is the owner's newer word.
+    if (existsSync(stopFile())) rmSync(stopFile()), say("loop: an old stop-after request was dropped (this start is newer)");
     readyAtStart = readyOk();
-    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, night cap ${nightWindows} windows, review stops ${Object.entries(review).map(([k, v]) => `${k} ${v || "off"}`).join(", ")}`);
+    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, night cap ${nightWindows} windows, notices every ${["decisions", "minutes", "usd"].map((k) => `${k} ${leg.every[k as keyof typeof NOTIFY] || "off"}`).join(", ")}, checkpoint ${leg.every.checkpoint ? "on" : "off"}`);
     await withGateway(async (gw) => {
-      let finished = true;
-      while (st.until === undefined || st.epoch <= st.until) {
-        if (await halt(gw, st)) return void (finished = false);
-        // An owner step's checkpoint, a refresh or the canary may have spent this leg's review: look before the next epoch.
-        if (!st.cards.length && ((await between(gw, st)), await halt(gw, st))) return void (finished = false);
-        if (!(await epoch(gw, st))) return void (finished = false);
+      const ticker = setInterval(() => void notify(gw, st), NOTICE_MS);
+      try {
+        while (st.until === undefined || st.epoch <= st.until) {
+          if (await halt(gw, st)) return;
+          // After an owner step, a refresh or the canary: the rules (and the owner's notices) again before the next epoch.
+          if (!st.cards.length && ((await between(gw, st)), await halt(gw, st))) return;
+          if (!(await epoch(gw, st))) return;
+        }
+        if (st.keepsSinceCheckpoint > 0) await loopCheckpoint(gw, st);
+        say(`loop: done at epoch ${st.epoch - 1}, champion ${championSha().slice(0, 12)}`);
+        await notify(gw, st, { kind: "stopped", why: `the loop is done at epoch ${st.epoch - 1}` });
+      } finally {
+        clearInterval(ticker);
+        await noticeChain;
       }
-      if (finished && st.keepsSinceCheckpoint > 0) await loopCheckpoint(gw, st);
-      say(`loop: done at epoch ${st.epoch - 1}, champion ${championSha().slice(0, 12)}`);
     });
   } finally {
     stopBeat();
     held.release();
   }
+}
+
+/** The owner's graceful stop: the running loop stops before its next step (a decision, an epoch, a checkpoint). */
+async function stopAfterCmd() {
+  if (o.f.cancel) {
+    if (existsSync(stopFile())) rmSync(stopFile());
+    return void say("stop-after: cancelled");
+  }
+  put(stopFile(), { at: new Date().toISOString() });
+  say(existsSync(paths().lock) ? "stop-after: the loop stops before its next step (what's in flight finishes first); loop --resume goes on from there" : "stop-after: no loop is running (its next start drops this request)");
 }
 
 async function decideCmd() {
@@ -1351,7 +1418,7 @@ async function gc() {
 
 const COMMANDS: Record<string, () => Promise<number | void>> = {
   init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
-  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, status,
+  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, status,
   remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc, packets: packetsCmd,
 };
 

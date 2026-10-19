@@ -3,7 +3,7 @@
 // and a canned critic, engineer and judge (--fakes). A dry loop of two epochs decides a knob card (kept), a code
 // patch (reverted, its patch saved) and a no-op (reverted at 0 calls), then a frozen-path card (owner list); a
 // second loop is refused by the lock; a SIGKILL mid-case and `loop --resume` re-pay nothing, after pausing until
-// the slots' resetsAt. A review stop ends a leg cleanly for the owner. Then sync (an owner step, a conflict, a scene-format change), export to a fake host, the
+// the slots' resetsAt. The owner's stop-after stops a running loop between steps, with a notice. Then sync (an owner step, a conflict, a scene-format change), export to a fake host, the
 // --cap refusals, `launch.sh status` in a real systemd unit, and every §6.7 rule on crafted facts. Ports 5330–5339.
 //   TMPDIR=<work dir> node --import ./evals/loop/node-hooks.mjs evals/checks/t21-loop-dry.mjs
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -78,7 +78,7 @@ const ownerCommit = (file, edit, msg) => {
 };
 const C = await import("../loop/checkpoint.ts");
 const { harnessTag } = await import("../loop/ab.ts");
-const { rules, RULES } = await import("../loop/state.ts");
+const { notices, rules, RULES } = await import("../loop/state.ts");
 // B1 from toy-shop cases only (blank ones held back), so the scene-format sync below leaves the yardstick loadable.
 const blank = (id) => json(join(p.bankCase(id), "case.json")).start === "blank";
 const held = readdirSync(p.bankCases).filter((id) => !id.includes(".void") && blank(id));
@@ -119,8 +119,7 @@ export const judge = (run, card) => ({
 });
 `);
 const tokens = join(L.work, "tokens.env");
-// Review stops off: these loops run to their ends; the review stop has its own leg below.
-const FLAGS = ["--tokens", tokens, "--mock-api", api.url, "--port", "5334", "--fakes", FAKES, "--review-decisions", "0", "--review-minutes", "0", "--review-usd", "0", "--review-checkpoint", "0"];
+const FLAGS = ["--tokens", tokens, "--mock-api", api.url, "--port", "5334", "--fakes", FAKES];
 
 // ---- Real-call steps refuse to start without --cap.
 for (const cmd of [["smoke"], ["bake"], ["bank", "build", "--tuning", "1"], ["checkpoint", "--zero"], ["calib", "--contrast", "draw.sendMarks=0"]]) {
@@ -182,17 +181,23 @@ check(cks.join() === "ck-00,ck-01", `checkpoints after the loop: ${cks.join(", "
 check(lines(join(H, "epochs.jsonl")).map((e) => e.epoch).join() === "1,2" && lines(join(H, "budget.jsonl")).length === 6, "epochs.jsonl or budget.jsonl isn't one row per epoch (per slot)");
 check(!git("-C", H, "status", "--porcelain"), "the history worktree has uncommitted files");
 
-// ---- A review stop: a leg past its review (here 0.001 min, so at once) stops cleanly, says why and how to go on, writes
-// review.json and spends nothing; the epoch and the lock are as they were.
-const r0 = api.requests.length;
-const looked = await rte(["loop", "--epochs", "1", ...FLAGS, "--review-minutes", "0.001"]).done;
-const rv = existsSync(join(p.home, "review.json")) ? json(join(p.home, "review.json")) : undefined;
-check(looked.code === 0 && /loop: REVIEW STOP: review stop: .*review every 0\.001/.test(looked.out) && /go on: bash evals\/loop\/launch\.sh loop --resume/.test(looked.out) && !/loop: done/.test(looked.out),
-  `a 0.001-minute leg didn't make a review stop (exit ${looked.code}): ${short(looked.out)}`);
-check(rv && /review every 0\.001/.test(rv.why) && rv.calls === 0 && rv.decided.length === 0 && /--resume/.test(rv.resume) && api.requests.length === r0 && json(p.state).epoch === 3 && !existsSync(p.lock),
-  `the review stop's record: ${JSON.stringify(rv)?.slice(0, 300)}, ${api.requests.length - r0} requests, epoch ${json(p.state).epoch}`);
-const bad = await rte(["loop", "--resume", ...FLAGS, "--review-usd", "-1"]).done;
-check(bad.code !== 0 && /--review-usd takes a number/.test(bad.out), `--review-usd -1 wasn't refused: ${short(bad.out)}`);
+// ---- The owner's stop-after: asked while no loop runs, the next start drops it; asked while one runs, it stops before its
+// next step, says so, leaves a "stopped" notice and spends nothing more; the epoch and the lock are as they were.
+const noticesOf = () => lines(join(p.home, "notices.jsonl"));
+const asked = await rte(["stop-after", ...FLAGS]).done;
+check(asked.code === 0 && /no loop is running/.test(asked.out) && existsSync(join(p.home, "stop.request")), `stop-after with no loop: ${short(asked.out)}`);
+const r0 = api.requests.length, n0 = noticesOf().length;
+const running = rte(["loop", "--epochs", "1", ...FLAGS]);
+await until(() => running.out().includes("loop: starting") || running.child.exitCode !== null, 120_000, "the loop to start");
+check(/an old stop-after request was dropped/.test(running.out()), "the start didn't drop the old stop-after request");
+writeFileSync(join(p.home, "stop.request"), "{}"); // what stop-after writes, the moment the loop is up
+const stopped = await running.done;
+const last = noticesOf().slice(n0).at(-1);
+check(stopped.code === 0 && /STOP: as the owner asked \(rte stop-after\)/.test(stopped.out) && !/loop: done/.test(stopped.out) && !existsSync(join(p.home, "stop.request")) && !existsSync(p.lock),
+  `stop-after didn't stop the running loop between steps (exit ${stopped.code}): ${short(stopped.out)}`);
+check(last?.kind === "stopped" && /as asked/.test(last.why) && last.epoch === 3 && json(p.state).epoch === 3 && api.requests.length === r0, `the stop's notice: ${JSON.stringify(last)?.slice(0, 300)}, ${api.requests.length - r0} requests`);
+const bad = await rte(["loop", "--resume", ...FLAGS, "--notify-usd", "-1"]).done;
+check(bad.code !== 0 && /--notify-usd takes a number/.test(bad.out), `--notify-usd -1 wasn't refused: ${short(bad.out)}`);
 
 // ---- sync: an owner commit merges as an owner step; a conflict pauses; a scene-format change queues a refresh.
 const state = () => json(p.state);
@@ -281,13 +286,23 @@ const fires = {
   "disk < 20 GB → owner": [{ diskGb: 15, daysLeft: 3 }, "owner", /days left/],
   "disk < 10 GB → pause": [{ diskGb: 5 }, "pause", /free disk/],
   "battery → pause": [{ onAC: false }, "pause", /battery/],
-  "2 decisions this leg → review": [{ leg: { start: T - 1000, usd: 1, decisions: 2, checkpoints: 0 }, review: { decisions: 2, minutes: 120, usd: 20, checkpoint: 1 } }, "review", /2 decisions \(review every 2\)/],
-  "121 min → review": [{ leg: { start: T - 121 * 60_000, usd: 1, decisions: 0, checkpoints: 0 }, review: { decisions: 2, minutes: 120, usd: 20, checkpoint: 0 } }, "review", /121 min/],
-  "$25 → review": [{ leg: { start: T - 1000, usd: 25, decisions: 0, checkpoints: 0 }, review: { decisions: 0, minutes: 0, usd: 20, checkpoint: 0 } }, "review", /\$25\.00 list spent/],
-  "a checkpoint → review": [{ leg: { start: T - 1000, usd: 0, decisions: 0, checkpoints: 1 }, review: { decisions: 2, minutes: 120, usd: 20, checkpoint: 1 } }, "review", /1 checkpoint ran/],
 };
-check(!rules({ ...base, leg: { start: T - 999 * 60_000, usd: 999, decisions: 99, checkpoints: 9 }, review: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0 } }).length, "a review stop fired with every review off");
-check(!rules({ ...base, leg: { start: T - 60_000, usd: 19.9, decisions: 1, checkpoints: 0 }, review: { decisions: 2, minutes: 120, usd: 20, checkpoint: 1 } }).length, "a review stop fired below every review");
+
+// ---- The owner's notices on crafted facts: a heads-up as a step comes near, one when it's reached, each once, never a stop.
+const every = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
+const nf = (o = {}) => ({ now: T, every, nightUsd: 0, nightCapUsd: 200, ...o, leg: { start: T - 60_000, usd: 0, decisions: 0, checkpoints: [], ...o.leg } });
+const due = (f, sent = new Set()) => notices(f, sent).map((n) => `${n.kind} ${n.key}`).join();
+const want = {
+  quiet: [nf(), ""], "$16.50 → soon": [nf({ leg: { usd: 16.5 } }), "soon usd:1:soon"], "$20.20 → reached": [nf({ leg: { usd: 20.2 } }), "reached usd:1"],
+  "$37 → reached, the next soon": [nf({ leg: { usd: 37 } }), "reached usd:1,soon usd:2:soon"], "97 min → soon": [nf({ leg: { start: T - 97 * 60_000 } }), "soon minutes:1:soon"],
+  "1 decision → none": [nf({ leg: { decisions: 1 } }), ""], "2 decisions → reached": [nf({ leg: { decisions: 2 } }), "reached decisions:1"],
+  "a checkpoint → one": [nf({ leg: { checkpoints: ["ck-01"] } }), "checkpoint checkpoint:ck-01"], "a checkpoint, notices off → none": [nf({ every: { ...every, checkpoint: 0 }, leg: { checkpoints: ["ck-01"] } }), ""],
+  "night cap 82% → soon": [nf({ nightUsd: 165 }), "soon night:0.8"], "night cap 96% → both": [nf({ nightUsd: 192 }), "soon night:0.8,soon night:0.95"], "night cap reached → none (the stop rule says it)": [nf({ nightUsd: 200 }), ""],
+  "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, nightUsd: 100, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
+};
+for (const [name, [f, keys]] of Object.entries(want)) check(due(f) === keys, `notices, ${name}: ${due(f)} (want ${keys || "none"})`);
+check(due(nf({ leg: { usd: 37 } }), new Set(["usd:1", "usd:2:soon"])) === "", "a notice already sent was sent again");
+check(notices(nf({ leg: { usd: 37 } }), new Set()).every((n) => !/stop/.test(n.kind)), "a notice is a stop");
 check(!rules(base).length, `rules fire on quiet facts: ${JSON.stringify(rules(base))}`);
 for (const [name, [facts, act, why]] of Object.entries(fires)) {
   const out = rules({ ...base, ...facts });

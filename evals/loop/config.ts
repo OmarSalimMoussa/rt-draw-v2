@@ -85,12 +85,14 @@ export function sha256(text: string): string {
 }
 
 /**
- * Review stops, while the harness is young: the loop stops cleanly at the first of these since it (re)started, says what
- * that leg did and spent, and `loop --resume` goes on (`--review-<name> n` sets one for a leg, 0 turns it off). Checked
- * before each decision, epoch and checkpoint, so a leg can overshoot by the decision or checkpoint in flight. Not in
- * configId: they decide when the owner looks, not what is measured.
+ * The owner's notices, while the harness is young. The loop never stops for these: it tells the owner (the log and
+ * $RT_EVAL_HOME/notices.jsonl, which a watcher relays) as each comes near (`soon` of the way) and when it's reached:
+ * every `decisions` decisions, `minutes` minutes and `usd` list $ of a leg (the loop since it last started or resumed),
+ * after each checkpoint, and before the night cap, which does stop it. The owner stops it between steps with
+ * `rte stop-after` (nothing lost; `loop --resume` goes on). `--notify-<name> n` sets one for a leg, 0 turns it off.
+ * Not in configId: they decide when the owner hears, not what is measured.
  */
-export const REVIEW = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1 };
+export const NOTIFY = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
 
 /** Logged on every decision and checkpoint: a change to LOOP or DRIVE_VIEW changes it. */
 export const configId = sha256(JSON.stringify({ LOOP, DRIVE_VIEW }));
