@@ -1059,7 +1059,12 @@ class MeterTail {
   usd = 0;
   calls = 0;
   byRole: Record<string, number> = {};
-  constructor(private file: string, private from: number) {}
+  private file: string;
+  private from: number;
+  constructor(file: string, from: number) {
+    this.file = file;
+    this.from = from;
+  }
   read(): this {
     if (!existsSync(this.file)) return this;
     const size = statSync(this.file).size;
