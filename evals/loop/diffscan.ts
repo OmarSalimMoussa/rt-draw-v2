@@ -80,7 +80,8 @@ export async function scan(rig: Rig, o: Pick<RunSpec, "run" | "arms" | "seed" | 
   let cls: DecisionClass;
   let timed: ScanResult["timed"];
   if (tuning.some((c) => c.scene && !c.svg)) cls = "D";
-  else if (tuning.some((c) => c.requests.length)) cls = o.card?.dialogue ? "D" : "Q";
+  // A resolver change moves what a later send's words point at ("that one", on what this send drew): G4 runs, as for dialogue.
+  else if (tuning.some((c) => c.requests.length)) cls = o.card?.dialogue || o.card?.component === "resolve" ? "D" : "Q";
   else if (tuning.some((c) => c.affected)) cls = "R";
   else {
     // Requests, scenes and renders all identical: does the timing move? (a schedule change, or nothing)
