@@ -153,7 +153,7 @@ export type EpochRow = { epoch: number; at: string; era: number; machine: "pgx" 
   cost: { listUsd: number; windowShare: number; calls: number; agentUsd: number; byRole: Record<string, { calls: number; usd: number }>;
           tokens: { in: number; cacheRead: number; write5m: number; write1h: number; out: number; thinking: number } };
   minutes: { total: number; agents: number; measure: number; idle: number };
-  slots: { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; usdThisWindow: number; status: string }[] };
+  slots: { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; usdThisWindow: number; status: string }[] };
 export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: number; card?: HypothesisCard; candSha: string; baseSha: string;
   class: DecisionClass | "owner"; goal: Goal | "owner";
   verdict: "keep" | "revert" | "void" | "owner"; reasons: string[]; trust: "green" | "amber" | "void";
@@ -178,6 +178,7 @@ export type Era = { era: number; from: string; why: "judge" | "bench" | "measure
 export type Marker = { at: string; era: number; kind: "harness" | "served-model" | "owner-step" | "anchor"; label: string; ref?: string };
 /** budget.jsonl: one meter snapshot per epoch per slot. */
 export type BudgetRow = { at: string; epoch: number; slot: 1 | 2 | 3; usdThisWindow: number; fiveHour?: number; sevenDay?: number;
+  /** when the server sent sevenDay (ms) */ sevenDayAt?: number;
   /** W_k, the window's $ estimate */ windowUsd: number; status: string; resetsAt?: number; usd7d: number };
 /** health.jsonl: A/A, canary, readiness and calibration outcomes. */
 export type HealthRow = { at: string; kind: "aa" | "canary" | "ready" | "calib"; pass: boolean; detail: Record<string, unknown> };

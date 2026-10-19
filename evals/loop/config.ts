@@ -94,5 +94,12 @@ export function sha256(text: string): string {
  */
 export const NOTIFY = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
 
+/**
+ * A token parked for its week (the server's 7-day use past LOOP.weekSevenDayMax) gets no calls, so nothing would read
+ * its week again: once its reading is `afterH` hours old, the loop spends one one-word Haiku call on it to read it.
+ * Not in configId: it decides which token pays, not what is measured.
+ */
+export const WEEK_CHECK = { afterH: 6 };
+
 /** Logged on every decision and checkpoint: a change to LOOP or DRIVE_VIEW changes it. */
 export const configId = sha256(JSON.stringify({ LOOP, DRIVE_VIEW }));

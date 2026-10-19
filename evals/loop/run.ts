@@ -37,7 +37,7 @@ import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, t
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
-import { DRIVE_VIEW, LOOP, NOTIFY, configId } from "./config.ts";
+import { DRIVE_VIEW, LOOP, NOTIFY, WEEK_CHECK, configId } from "./config.ts";
 import { type ScanResult, compareCase, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
 import { closedPort } from "./gateway.ts";
@@ -55,7 +55,7 @@ import { remetric } from "./remetric.ts";
 import { CASE_USD, type CardState, type Decided, type Facts, type Notice, type State, lock, newState, notices, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { stubPictures } from "./stubs.ts";
-import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
+import { type SlotN, type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Judged, Row, SceneJSON, SendOutcome } from "./types.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
@@ -70,6 +70,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
        [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
+  week --cap n            (reads again the weekly use of each token parked on an old reading, one one-word call each)
   status                               remetric <run>                       gc --trees
   packets <run>… (frames the changes a run's after captures missed, 0 calls)`;
 const CO_AUTHOR = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
@@ -1127,7 +1128,7 @@ async function notifyNow(gw: string, st: State, extra?: Omit<Notice, "key">) {
     say(`loop: NOTICE (${n.kind}): ${n.why}; this leg ${summary.minutes} min, ${summary.calls} calls, $${spent.usd.toFixed(2)} list${byRole.length ? ` (${byRole.slice(0, 3).join(", ")})` : ""}, ${decided.length} decisions${n.kind === "stopped" ? "" : `; to stop: ${summary.stop}`}`);
   }
 }
-type SlotStatus = { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; resetsAt?: number; status?: string; usdThisWindow: number; windowUsd: number; usd7d: number; why?: string };
+type SlotStatus = { slot: SlotN; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; resetsAt?: number; status?: string; usdThisWindow: number; windowUsd: number; usd7d: number; why?: string };
 
 async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   const s = (await gatewayStatus(gw)) as { pace: Facts["pace"]; slots: SlotStatus[]; cap?: number; capReached: boolean };
@@ -1146,6 +1147,24 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   };
 }
 
+/** When each slot's week was last checked (ms): a check the server answers without a reading waits WEEK_CHECK.afterH too. */
+const weekChecked = new Map<SlotN, number>();
+const weekOf = (x?: SlotStatus) => (x?.sevenDay === undefined ? "unknown" : `${Math.round(x.sevenDay * 100)}%`);
+
+/** WEEK_CHECK: one one-word call on each token parked for its week on an old reading (or none), so its week is read again. */
+async function recheckWeeks(gw: string) {
+  const s = (await gatewayStatus(gw)) as { stale?: SlotN[]; slots: SlotStatus[] };
+  for (const slot of s.stale ?? []) {
+    if (Date.now() - (weekChecked.get(slot) ?? 0) < WEEK_CHECK.afterH * HOUR) continue;
+    weekChecked.set(slot, Date.now());
+    // Its own request each time: the run's cache would serve a repeat.
+    const req = { role: "probe", model: "haiku", system: "Answer with one word.", user: `Week check, slot ${slot}, ${new Date().toISOString()}?`, run: `week-${stampNow()}`, token: slot } as const;
+    const error = await ask(req, gw).then(() => "", (e: Error) => e.message);
+    const now = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots.find((x) => x.slot === slot);
+    say(`loop: token ${slot}'s week read again: ${weekOf(s.slots.find((x) => x.slot === slot))} to ${weekOf(now)} of its weekly limit (the loop stops at ${Math.round(LOOP.weekSevenDayMax * 100)}%)${error ? `; the call failed: ${error}` : ""}; ${now?.why ? `still parked: ${now.why}` : "back in use"}`);
+  }
+}
+
 /** §6.7 before new work: true when a rule stops the loop (it says why); pauses wait here. */
 async function halt(gw: string, st: State, error?: string): Promise<boolean> {
   await notify(gw, st);
@@ -1157,6 +1176,7 @@ async function halt(gw: string, st: State, error?: string): Promise<boolean> {
     return true;
   }
   for (;;) {
+    await recheckWeeks(gw);
     const acts = rules(await facts(gw, st, error));
     const noted = acts.filter((a) => a.do === "owner" || a.do === "stop" || a.do === "skip");
     for (const a of noted) ownerItem(a.why);
@@ -1311,10 +1331,10 @@ async function epochRecord(gw: string, st: State, started: number, ck?: string):
       tokens: { in: all.in, cacheRead: all.cacheRead, write5m: all.write5m, write1h: all.write1h, out: all.out, thinking: all.thinking },
     },
     minutes: { total, agents: agentMin, measure, idle: Math.max(0, total - agentMin - measure) },
-    slots: slots.map((s) => ({ slot: s.slot, fiveHour: s.fiveHour, sevenDay: s.sevenDay, usdThisWindow: s.usdThisWindow, status: s.why ?? s.status ?? "ok" })),
+    slots: slots.map((s) => ({ slot: s.slot, fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, usdThisWindow: s.usdThisWindow, status: s.why ?? s.status ?? "ok" })),
   };
   historyAdd("epochs.jsonl", row);
-  for (const s of slots) historyAdd("budget.jsonl", { at, epoch: st.epoch, slot: s.slot, usdThisWindow: s.usdThisWindow, fiveHour: s.fiveHour, sevenDay: s.sevenDay, windowUsd: s.windowUsd, status: s.why ?? s.status ?? "ok", resetsAt: s.resetsAt, usd7d: s.usd7d });
+  logBudget(slots, st.epoch, at);
   recordMachine();
   commitHistory(`epoch ${st.epoch}: ${row.decisions.length} decisions, $${all.usd.toFixed(2)}`);
   return row;
@@ -1389,6 +1409,30 @@ async function loop() {
 }
 
 /** The owner's graceful stop: the running loop stops before its next step (a decision, an epoch, a checkpoint). */
+/** budget.jsonl: each slot's spend and the server's limits, now. */
+function logBudget(slots: SlotStatus[], epoch: number, at: string) {
+  for (const s of slots)
+    historyAdd("budget.jsonl", { at, epoch, slot: s.slot, usdThisWindow: s.usdThisWindow, fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, windowUsd: s.windowUsd, status: s.why ?? s.status ?? "ok", resetsAt: s.resetsAt, usd7d: s.usd7d });
+}
+
+/** WEEK_CHECK by hand, the loop stopped: reads each parked token's week again (one one-word call each) and logs every slot. */
+async function weekCmd() {
+  needCap();
+  const held = lock(); // a running loop's gateway owns slots.json
+  try {
+    openHistory();
+    await withGateway(async (gw) => {
+      await recheckWeeks(gw);
+      const slots = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots;
+      for (const s of slots) say(`week: token ${s.slot}: ${weekOf(s)} of its weekly limit${s.sevenDayAt ? `, read ${new Date(s.sevenDayAt).toISOString()}` : ""}; ${s.why ? `parked: ${s.why}` : "in use"}`);
+      logBudget(slots, readState()?.epoch ?? 0, new Date().toISOString());
+      commitHistory("week: the tokens' weekly use, read again");
+    });
+  } finally {
+    held.release();
+  }
+}
+
 async function stopAfterCmd() {
   if (o.f.cancel) {
     if (existsSync(stopFile())) rmSync(stopFile());
@@ -1426,7 +1470,7 @@ async function gc() {
 
 const COMMANDS: Record<string, () => Promise<number | void>> = {
   init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
-  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, status,
+  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, week: weekCmd, status,
   remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc, packets: packetsCmd,
 };
 

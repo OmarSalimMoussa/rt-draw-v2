@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import type { RateLimit } from "../../dev/claude.ts";
-import { LOOP } from "./config.ts";
+import { LOOP, WEEK_CHECK } from "./config.ts";
 
 export type SlotN = 1 | 2 | 3;
 export type Token = { slot: SlotN; token: string };
@@ -77,6 +77,8 @@ export function loadJevKey(o: { file?: string } | { dev: true; dir?: string }): 
 type SlotState = {
   slot: SlotN;
   status?: string; fiveHour?: number; sevenDay?: number; /** unix seconds */ resetsAt?: number;
+  /** when the server last sent sevenDay (ms) */
+  sevenDayAt?: number;
   /** list $ since windowStart (ms), the window's $ size, and whether W came from an allowed_warning */
   windowStart?: number; usdWindow: number; W: number; calibrated: boolean;
   /** a 429 or rejected event, until the window resets */
@@ -124,6 +126,7 @@ export class Slots {
       // The CLI sends allowed_warning at ≥ 90%: the first one tells this account's window size.
       if (r.status === "allowed_warning" && !s.calibrated && s.usdWindow > 0) Object.assign(s, { W: s.usdWindow / LOOP.rotateAt, calibrated: true });
       Object.assign(s, { status: r.status, fiveHour: r.fiveHour ?? s.fiveHour, sevenDay: r.sevenDay ?? s.sevenDay });
+      if (r.sevenDay !== undefined) s.sevenDayAt = now;
       if (r.resetsAt) Object.assign(s, { resetsAt: r.resetsAt, windowStart: Math.min(s.windowStart, r.resetsAt * 1000 - FIVE_H) });
       if (r.status === "rejected") s.limited = true;
     }
@@ -149,6 +152,11 @@ export class Slots {
   private week(s: SlotState) {
     const usd7d = Object.values(s.hours).reduce((a, b) => a + b, 0);
     return s.sevenDay !== undefined ? s.sevenDay > LOOP.weekSevenDayMax : usd7d > LOOP.weekWindowsPerToken * s.W;
+  }
+
+  /** Slots parked for their week on no server reading, or one WEEK_CHECK.afterH hours old: a call on each reads it again. */
+  stale(): SlotN[] {
+    return this.s.filter((s) => this.week(s) && this.now() - (s.sevenDayAt ?? 0) >= WEEK_CHECK.afterH * 3600_000).map((s) => s.slot);
   }
 
   /** Why new work can't go to this slot now, or undefined when it can. */
@@ -189,7 +197,7 @@ export class Slots {
 
   /** Numbers only, for /status and budget.jsonl. */
   status() {
-    return this.s.map((s) => ({ slot: s.slot, current: s.slot === this.current, use: this.use(s.slot), fiveHour: s.fiveHour, sevenDay: s.sevenDay, resetsAt: s.resetsAt, status: s.status, usdThisWindow: s.usdWindow, windowUsd: s.W, calibrated: s.calibrated, usd7d: Object.values(s.hours).reduce((a, b) => a + b, 0), why: this.why(s.slot) }));
+    return this.s.map((s) => ({ slot: s.slot, current: s.slot === this.current, use: this.use(s.slot), fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, resetsAt: s.resetsAt, status: s.status, usdThisWindow: s.usdWindow, windowUsd: s.W, calibrated: s.calibrated, usd7d: Object.values(s.hours).reduce((a, b) => a + b, 0), why: this.why(s.slot) }));
   }
 
   private save() {

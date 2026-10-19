@@ -327,7 +327,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     return { loopP99Ms: ms, calls: c.calls };
   }
 
-  const status = () => ({ calls, cap, capReached: cap !== undefined && calls >= cap, evalInFlight: evalBusy, evalWaiting: evalWaiting.length, pools: pool.sizes(), slots: slots.status(), pace: slots.pace(), sameAccount: slots.sameAccount(), runs: Object.fromEntries([...runs].map(([k, r]) => [k, { ...r, cached: r.cached?.size }])) });
+  const status = () => ({ calls, cap, capReached: cap !== undefined && calls >= cap, evalInFlight: evalBusy, evalWaiting: evalWaiting.length, pools: pool.sizes(), slots: slots.status(), stale: slots.stale(), pace: slots.pace(), sameAccount: slots.sameAccount(), runs: Object.fromEntries([...runs].map(([k, r]) => [k, { ...r, cached: r.cached?.size }])) });
 
   const server = createServer(async (req, res) => {
     const arrived = performance.now();
