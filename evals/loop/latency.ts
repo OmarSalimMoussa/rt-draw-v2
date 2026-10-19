@@ -3,7 +3,7 @@
 // compares B with A inside its own run, and cumulative latency and quality chain same-run
 // ratios through the anchor: never a number from one run against another run's.
 import { LOOP } from "./config.ts";
-import { type Factor, asRatio, chain, cr1, logRatio, seedOf, tQuantile } from "./stats.ts";
+import { type Factor, asRatio, chain, cr1, logRatio, quantileRatio, seedOf, tQuantile } from "./stats.ts";
 import type { Ratio, Row } from "./types.ts";
 
 export type Metric = "ttfc" | "ttd";
@@ -18,6 +18,29 @@ export function pairedRatio(rows: Row[], m: Metric): Ratio | undefined {
   if (!ok.length) return undefined;
   return logRatio(logs(ok, m), ok.map((r) => r.cluster), seedOf(`${m} ${ok.map((r) => r.case).join(" ")}`));
 }
+
+/** B/A at a tail: both arms' p quantile (0.90: the p90 send) over the paired rows, session-bootstrap bounds. */
+export function tailRatio(rows: Row[], m: Metric, p: number): Ratio | undefined {
+  const ok = paired(rows, m);
+  if (!ok.length) return undefined;
+  return quantileRatio(ok.map((r) => r[m][0]!), ok.map((r) => r[m][1]!), ok.map((r) => r.cluster), p, seedOf(`${m} p${p} ${ok.map((r) => r.case).join(" ")}`));
+}
+
+/** One metric's latency stats by name: "p50" (the median paired ratio) and each tail of LOOP.latTails ("p90", "p95"). */
+export function latencyStats(rows: Row[], m: Metric): Record<string, Ratio> {
+  const out: Record<string, Ratio> = {};
+  const mid = pairedRatio(rows, m);
+  if (mid) out.p50 = mid;
+  for (const p of LOOP.latTails) {
+    const r = tailRatio(rows, m, p);
+    if (r) out[`p${Math.round(p * 100)}`] = r;
+  }
+  return out;
+}
+
+/** Both metrics' tails by name ("ttfc p90" … "ttd p95"), for the decision record and the vetoes. */
+export const tailsOf = (rows: Row[]): Record<string, Ratio> =>
+  Object.fromEntries((["ttfc", "ttd"] as const).flatMap((m) => Object.entries(latencyStats(rows, m)).filter(([k]) => k !== "p50").map(([k, r]) => [`${m} ${k}`, r])));
 
 /** The same ratio split by which arms thought (latency-4): none, A, B, both. */
 export function byThinking(rows: Row[], m: Metric): Record<string, Ratio> {

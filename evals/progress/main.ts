@@ -251,14 +251,25 @@ function cost(d: Data, x: ReturnType<typeof xAxis>) {
     f.line(d.epochs.map((e) => [e.epoch, get(e)]), { color: INK, data: { series: title } });
     f.dots(d.epochs.map((e) => ({ x: e.epoch, y: get(e), id: `e${e.epoch}`, hollow: e.machine === "laptop" })), INK);
   }
-  // Trailing-week use per token against its allowance (§6.7), and decisions this week.
+  // Each token's weekly use as the server last read it (the whole account's, the owner's own use too), with the
+  // loop's stop (LOOP.weekSevenDayMax) marked; a token the server never read shows the list-$ estimate. Decisions this week.
   const lastEpoch = d.epochs.at(-1);
-  const slots = [1, 2, 3].map((s) => {
+  const stop = LOOP.weekSevenDayMax;
+  const slots = [1, 2, 3].flatMap((s) => {
     const b = d.budget.filter((r) => r.slot === s).at(-1);
     const e = lastEpoch?.slots.find((x) => x.slot === s);
+    if (!b && !e) return [];
     const seven = b?.sevenDay ?? e?.sevenDay;
-    const share = seven !== undefined ? seven / LOOP.weekSevenDayMax : b ? b.usd7d / (LOOP.weekWindowsPerToken * b.windowUsd) : undefined;
-    return `<span>token ${s}: <span class="meter"><span style="width:${Math.min(100, (share ?? 0) * 100)}%"></span></span> ${share === undefined ? "no data" : `${pct(share)} of its week${seven !== undefined ? ` (7-day ${pct(seven)} of ${pct(LOOP.weekSevenDayMax)})` : ""}`}</span>`;
+    const readAt = b?.sevenDay !== undefined ? b.sevenDayAt : e?.sevenDayAt;
+    const est = seven === undefined && b ? (b.usd7d / (LOOP.weekWindowsPerToken * b.windowUsd)) * stop : undefined;
+    const used = seven ?? est;
+    const status = b?.status ?? e?.status ?? "ok";
+    const what = used === undefined ? "no reading yet"
+      : seven !== undefined ? `${pct(seven)} of its weekly limit used, read ${readAt ? ago(d.status.now - readAt) : "at an unknown time"}`
+      : `~${pct(used)} of its weekly limit used (estimated from list $: the server sent no reading)`;
+    const state = status === "weekly allowance" ? `parked, past the loop's ${pct(stop)}` : /^(ok|allowed)$/.test(status) ? `the loop stops at ${pct(stop)}` : status;
+    const title = "The server's 7-day use counts the whole account, not only the loop's calls. The line marks where the loop stops.";
+    return [`<span title="${esc(title)}">token ${s}: <span class="meter${(used ?? 0) > stop ? " over" : ""}"><span style="width:${Math.min(100, (used ?? 0) * 100)}%"></span><i style="left:${stop * 100}%"></i></span> ${esc(what)}; ${esc(state)}</span>`];
   });
   const weekAgo = d.status.now - 7 * 86_400_000;
   const thisWeek = d.decisions.filter((x) => x.kind === "card" && Date.parse(d.epochs.find((e) => e.epoch === x.epoch)?.at ?? "") > weekAgo).length;

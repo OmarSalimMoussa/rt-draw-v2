@@ -3,7 +3,7 @@
 // Pure and seeded (bootstraps by the rows' case ids): the same rows, card and state always give
 // the same verdict.
 import { LOOP, configId } from "./config.ts";
-import { type Metric, byThinking, pairedRatio } from "./latency.ts";
+import { type Metric, byThinking, latencyStats, pairedRatio, tailsOf } from "./latency.ts";
 import { clusteredZ, tInterval } from "./stats.ts";
 import type { Goal, HypothesisCard, Pair, Ratio, Row, Verdict } from "./types.ts";
 
@@ -38,7 +38,7 @@ export type Decision = Omit<Verdict, "verdict"> & {
   /** Raw counts at the look it stopped at, never a share (an early-stopped share is biased). */
   counts: { wins: number; losses: number; ties: number; n: number; look: number };
   caveat?: string;
-  latency: { ttfc?: Ratio; ttd?: Ratio; byThinking: Record<string, Ratio> };
+  latency: { ttfc?: Ratio; ttd?: Ratio; byThinking: Record<string, Ratio>; /** "ttfc p90" … "ttd p95" (LOOP.latTails) */ tails: Record<string, Ratio> };
   work: number; emptyRise: number; failedPicRise: number; usdRatio: number;
 };
 
@@ -73,6 +73,9 @@ const rateRise = (rows: Row[], f: (r: Row, arm: 0 | 1) => number, of: (r: Row, a
   return rate(1) - rate(0);
 };
 const x2 = (r: Ratio) => `×${r.est.toFixed(3)} (lo95 ${r.lo95.toFixed(3)}, hi90 ${r.hi90.toFixed(3)})`;
+/** One latency stat: the median with its 90% upper bound, a tail ("p90", "p95") with its 95% one, the bound each keeps on. */
+const stat = (m: string, k: string, r: Ratio) =>
+  k === "p50" ? `${m} ${x2(r)}` : `${m} ${k} ×${r.est.toFixed(3)} (lo95 ${r.lo95.toFixed(3)}, hi95 ${(r.hi95 ?? r.hi90).toFixed(3)})`;
 
 /** The fidelity floor a craft or latency keep must clear: `floor`, or tighter when visible work fell (N6) or in quality debt. */
 function qualityFloor(rows: Row[], debt: boolean, floor: number): { ok: boolean; why: string } {
@@ -82,12 +85,16 @@ function qualityFloor(rows: Row[], debt: boolean, floor: number): { ok: boolean;
   return { ok: z >= f, why: `fidelity Z ${z.toFixed(2)} < ${f}` };
 }
 
-/** The latency veto (§1.4 item 2): either metric surely slower, and by more than LOOP.latVeto.est. */
-export function latencyVeto(ratios: Partial<Record<Metric, Ratio>>): string[] {
+/** The latency veto (§1.4 item 2): either metric, at the median or a tail ("ttfc p90"), surely slower, and by more than LOOP.latVeto.est. */
+export function latencyVeto(ratios: Record<string, Ratio | undefined>): string[] {
   return Object.entries(ratios).flatMap(([m, r]) => (r && r.lo95 > LOOP.latVeto.lo95 && r.est > LOOP.latVeto.est ? [`latency veto: ${m} ${x2(r)}`] : []));
 }
 
-/** The goal-latency rule (§1.3) at each look; quality must hold for a keep, and a futile quality ends it. */
+/**
+ * The goal-latency rule (§1.3) at each look, on the median send and the slow ones (LOOP.latTails): a keep when any of
+ * them is surely faster and none surely slower; an early stop only when every one of them says so. Quality must hold
+ * for a keep, and a futile quality ends it.
+ */
 function latencyRule(rows: Row[], m: Metric, holds: (rows: Row[], look: number) => { ok: boolean; why: string; futile?: boolean }, exhausted: boolean) {
   const looks: Look[] = [];
   let why = "";
@@ -95,18 +102,23 @@ function latencyRule(rows: Row[], m: Metric, holds: (rows: Row[], look: number) 
     const n = LOOP.looks[i];
     if (rows.length < n) return { looks, next: exhausted ? undefined : n, why };
     const at = rows.slice(0, n);
-    const r = pairedRatio(at, m);
+    const stats = Object.entries(latencyStats(at, m));
     const q = holds(at, i);
     looks.push({ n, decisive: at.filter((x) => x.s).length, z: zOf(at) });
     if (q.futile) return { looks, keep: false, n, why: q.why };
-    if (!r) continue;
+    if (!stats.length) continue;
     const last = i === LOOP.looks.length - 1;
-    if (i === 0 && r.est > LOOP.latFutility16) return { looks, keep: false, n, why: `${m} ${x2(r)} at look ${n}` };
-    if (i > 0 && r.hi90 < LOOP.latKeepHi90) {
-      if (q.ok) return { looks, keep: true, n, why: `${m} ${x2(r)}` };
+    const said = stats.map(([k, r]) => stat(m, k, r)).join("; ");
+    if (i === 0 && stats.every(([, r]) => r.est > LOOP.latFutility16)) return { looks, keep: false, n, why: `${said} at look ${n}` };
+    // A tail keeps only once it holds LOOP.latTailMinSends sends: p95 on 32 is the second-slowest send alone.
+    const holds3 = (k: string) => n * (1 - Number(k.slice(1)) / 100) >= LOOP.latTailMinSends - 1e-9;
+    const faster = stats.find(([k, r]) => (k === "p50" ? r.hi90 < LOOP.latKeepHi90 : holds3(k) && (r.hi95 ?? Infinity) < LOOP.latTailKeepHi95 && r.est <= LOOP.latTailKeepEst));
+    const slower = latencyVeto(Object.fromEntries(stats.map(([k, r]) => [k === "p50" ? m : `${m} ${k}`, r])));
+    if (i > 0 && faster && !slower.length) {
+      if (q.ok) return { looks, keep: true, n, why: stat(m, ...faster) };
       why = q.why;
     }
-    if ((i === 2 && r.est >= LOOP.latRevert48) || last) return { looks, keep: false, n, why: why || `${m} ${x2(r)} at look ${n}` };
+    if ((i === 2 && stats.every(([, r]) => r.est >= LOOP.latRevert48)) || last) return { looks, keep: false, n, why: why || slower.join("; ") || `${said} at look ${n}` };
   }
   return { looks, keep: false, n: LOOP.looks.at(-1)!, why };
 }
@@ -159,12 +171,12 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
   }
   const at = live.slice(0, core.n ?? live.length);
   const score = (r: Row) => (goal === "craft" ? r.sCraft : r.s) ?? 0;
-  const ttfc = pairedRatio(at, "ttfc"), ttd = pairedRatio(at, "ttd");
+  const ttfc = pairedRatio(at, "ttfc"), ttd = pairedRatio(at, "ttd"), tails = tailsOf(at);
   // What every outcome reports, on the cases the deciding look saw.
   const seen = {
     counts: { wins: at.filter((r) => score(r) > 0).length, losses: at.filter((r) => score(r) < 0).length, ties: at.filter((r) => !score(r)).length, n: at.length, look: core.n ?? at.length },
     caveat: core.n && core.n < LOOP.looks.at(-1)! ? `stopped at look ${core.n}: an early-stopped decision's share is biased (a no-op reads ~0.47); the quality chart uses checkpoints` : undefined,
-    latency: { ttfc, ttd, byThinking: byThinking(at, card.metric ?? "ttfc") },
+    latency: { ttfc, ttd, tails, byThinking: byThinking(at, card.metric ?? "ttfc") },
     work: ratio(at, (r, a) => r.work[a]),
     emptyRise: rateRise(at, (r, a) => +(r.work[a] === 0), () => 1),
     failedPicRise: rateRise(at, (r, a) => r.pics[a][1], (r, a) => r.pics[a][0] + r.pics[a][1]),
@@ -187,7 +199,7 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
   const revert: string[] = [];
   const owner: string[] = [];
   if (goal !== "latency") {
-    revert.push(...latencyVeto({ ttfc, ttd }));
+    revert.push(...latencyVeto({ ttfc, ttd, ...tails }));
     if (state.latencyDebt)
       for (const [m, r] of Object.entries({ ttfc, ttd })) if (r && r.est > 1) revert.push(`latency debt: this keep's ${m} is ×${r.est.toFixed(3)}, above 1.00`);
   }

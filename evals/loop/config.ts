@@ -11,6 +11,13 @@ export const LOOP = {
   latFutility16: 1.0, latKeepHi90: 1.0, latRevert48: 0.98, qualityFloorZ: -1.0, workFloorZ: -0.5,
   // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on
   latFloorZ: [Infinity, 0, -0.5, -1.0], latFutilityZ: -1.25,
+  // the slow sends too (the owner, 2026-10-19): a latency keep may come from the p90 or p95 send (both arms' quantile,
+  // B/A) as well as the median paired ratio: a tail keeps on its 95% bound under latTailKeepHi95, at least
+  // latTailKeepEst faster, once it holds latTailMinSends sends (p90 from look 32, p95 at 80). Simulated on thinking's
+  // two humps (a third of the sends ×2.5): a no-effect card is kept 18% of the time (median alone 14%; every tail at
+  // every look 24%), a fix of the thinking sends to ×0.4 / ×0.6 / ×0.75 100% / 95% / 85% (median alone 84 / 75 / 54%).
+  // Every one of them must be past latFutility16 or latRevert48 to stop a card early, and none surely slower (latVeto).
+  latTails: [0.90, 0.95], latTailKeepHi95: 0.95, latTailKeepEst: 0.90, latTailMinSends: 3,
   // vetoes and trust (§1.4)
   latVeto: { lo95: 1.0, est: 1.08 }, latDebtLo90: 1.05, qualDebtHi90: 0.5, qualDebtFloorZ: 0,
   heldoutVetoZ: -1.0, heldoutMax: 32,
@@ -93,6 +100,13 @@ export function sha256(text: string): string {
  * Not in configId: they decide when the owner hears, not what is measured.
  */
 export const NOTIFY = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
+
+/**
+ * A token parked for its week (the server's 7-day use past LOOP.weekSevenDayMax) gets no calls, so nothing would read
+ * its week again: once its reading is `afterH` hours old, the loop spends one one-word Haiku call on it to read it.
+ * Not in configId: it decides which token pays, not what is measured.
+ */
+export const WEEK_CHECK = { afterH: 6 };
 
 /** Logged on every decision and checkpoint: a change to LOOP or DRIVE_VIEW changes it. */
 export const configId = sha256(JSON.stringify({ LOOP, DRIVE_VIEW }));

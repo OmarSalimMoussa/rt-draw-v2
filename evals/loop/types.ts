@@ -145,7 +145,7 @@ export type AgentLog = {
 
 // ---- History: branch eval/history (§5.3)
 
-export type Ratio = { est: number; lo90: number; hi90: number; lo95: number };
+export type Ratio = { est: number; lo90: number; hi90: number; lo95: number; /** the tails' (LOOP.latTails) keep bound */ hi95?: number };
 export type Lat = { ttfcP50: number; ttfcP75: number; ttdP50: number; ttdP75: number };
 type Share = { n: number; share: number; lo90: number; hi90: number };
 export type EpochRow = { epoch: number; at: string; era: number; machine: "pgx" | "laptop"; championSha: string; configId: string;
@@ -153,14 +153,14 @@ export type EpochRow = { epoch: number; at: string; era: number; machine: "pgx" 
   cost: { listUsd: number; windowShare: number; calls: number; agentUsd: number; byRole: Record<string, { calls: number; usd: number }>;
           tokens: { in: number; cacheRead: number; write5m: number; write1h: number; out: number; thinking: number } };
   minutes: { total: number; agents: number; measure: number; idle: number };
-  slots: { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; usdThisWindow: number; status: string }[] };
+  slots: { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; usdThisWindow: number; status: string }[] };
 export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: number; card?: HypothesisCard; candSha: string; baseSha: string;
   class: DecisionClass | "owner"; goal: Goal | "owner";
   verdict: "keep" | "revert" | "void" | "owner"; reasons: string[]; trust: "green" | "amber" | "void";
   looks: { n: number; decisive: number; z: number }[]; counts: { wins: number; losses: number; ties: number; exactTies: number };
   affected: { tuning: number; of: number; topUp: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
   overuse?: { detector: string; a: number; b: number }; checkpoint?: string /* owner steps */;
-  latency: { ttfc: Ratio; ttd: Ratio; byThinking?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;
+  latency: { ttfc: Ratio; ttd: Ratio; byThinking?: Record<string, Ratio>; /** "ttfc p90" … "ttd p95" */ tails?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;
   cost: { usdPerCaseRatio: number; listUsd: number; calls: number }; minutes: number; run: string; judgeId: string; configId: string };
 export type CheckpointRow = { id: string; epoch: number; era: number; at: string; machine: string; trust: "green" | "amber" | "void";
   champion: string; anchor: string; anchorMoved: boolean;
@@ -178,6 +178,7 @@ export type Era = { era: number; from: string; why: "judge" | "bench" | "measure
 export type Marker = { at: string; era: number; kind: "harness" | "served-model" | "owner-step" | "anchor"; label: string; ref?: string };
 /** budget.jsonl: one meter snapshot per epoch per slot. */
 export type BudgetRow = { at: string; epoch: number; slot: 1 | 2 | 3; usdThisWindow: number; fiveHour?: number; sevenDay?: number;
+  /** when the server sent sevenDay (ms) */ sevenDayAt?: number;
   /** W_k, the window's $ estimate */ windowUsd: number; status: string; resetsAt?: number; usd7d: number };
 /** health.jsonl: A/A, canary, readiness and calibration outcomes. */
 export type HealthRow = { at: string; kind: "aa" | "canary" | "ready" | "calib"; pass: boolean; detail: Record<string, unknown> };

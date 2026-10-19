@@ -199,6 +199,21 @@ check(last?.kind === "stopped" && /as asked/.test(last.why) && last.epoch === 3 
 const bad = await rte(["loop", "--resume", ...FLAGS, "--notify-usd", "-1"]).done;
 check(bad.code !== 0 && /--notify-usd takes a number/.test(bad.out), `--notify-usd -1 wasn't refused: ${short(bad.out)}`);
 
+// ---- week: a token parked for its week on a 27-hour-old reading gets one one-word call; one parked on a fresh reading
+// gets none. The server's answer brings the first back, and every slot goes to budget.jsonl with when it was read.
+const slotsFile = join(p.home, "meter", "slots.json"), slotsBefore = readFileSync(slotsFile, "utf8");
+const wNow = Date.now(), oldRead = wNow - 27 * 3600_000;
+const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {}, ...o });
+writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.5, sevenDayAt: wNow - 3600_000 })]));
+const w0 = api.requests.length;
+const wk = await rte(["week", "--cap", "5", ...FLAGS]).done;
+check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(the loop stops at 40%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
+  `week (exit ${wk.code}, ${api.requests.length - w0} requests): ${short(wk.out)}`);
+const wb = lines(join(H, "budget.jsonl")).slice(-3);
+check(wb.map((b) => b.slot).join() === "1,2,3" && wb[1].sevenDay === 0.11 && wb[1].sevenDayAt >= wNow && /^(ok|allowed)$/.test(wb[1].status) && wb[2].status === "weekly allowance" && wb[2].sevenDayAt === wNow - 3600_000,
+  `week's budget rows: ${JSON.stringify(wb).slice(0, 500)}`);
+writeFileSync(slotsFile, slotsBefore);
+
 // ---- sync: an owner commit merges as an owner step; a conflict pauses; a scene-format change queues a refresh.
 const state = () => json(p.state);
 const o1 = ownerCommit("src/core/draw.ts", (s) => `${s}\n// owner: a note\n`, "owner: a note in draw.ts");

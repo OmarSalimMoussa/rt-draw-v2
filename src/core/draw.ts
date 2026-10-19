@@ -11,7 +11,7 @@ import type { Stroke } from "./ink.ts";
 import { type Word, linkInk } from "./link.ts";
 import { HitIndex } from "./hittest.ts";
 import { type Mark, type Reading, groupStrokes, readMark } from "./marks.ts";
-import { type Resolution, resolve } from "./resolve.ts";
+import { type Ref, type Resolution, guessRefs, resolve } from "./resolve.ts";
 import { type ModelStats, callModel, jevOf, modelOf } from "./model.ts";
 import { decide } from "./decide.ts";
 import { OpStream, type Parsed, applyOp } from "./ops.ts";
@@ -36,7 +36,7 @@ export type Prompt = {
   refs?: Resolution;
   /** "off" when Jev decided this send needs no thinking (draw.thinkRouter); unset: draw.noThink decides. */
   thinking?: "off";
-  features: { thinkP?: number; marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number; board: number; pictures: number; views: string; earlyShots: number; unusedShots: number; shotsMs: number; mapChars: number };
+  features: { /** resolve.speculate: "hit" (the guess's drawing landed), "miss" (dropped, drawn again), "no guess" */ spec?: string; thinkP?: number; marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number; board: number; pictures: number; views: string; earlyShots: number; unusedShots: number; shotsMs: number; mapChars: number };
 };
 
 /** The scene as op lines: its exact boxes and styles, for when the model should see numbers. */
@@ -111,7 +111,7 @@ function capShapes(lines: string[], max: number, isShape: (line: string) => bool
  * What the model gets for this send. Words are spoken (with times) or typed (a
  * string). With a camera, the scene is a board seen through it.
  */
-export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS, parent?: TraceContext, camera?: View): Promise<Prompt> {
+export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[] | string, t: Tuning = DEFAULTS, parent?: TraceContext, camera?: View, onGuess?: (guess: Promise<Prompt | undefined>) => void): Promise<Prompt> {
   return span("build the prompt", parent, async (ctx) => {
     const marks = spanSync("group strokes into marks", ctx, () => groupStrokes(strokes, t), { strokes: strokes.length });
     const transcript = spanSync("link words to ink", ctx, () => (typeof words === "string" ? typedTranscript(words, marks.length) : linkInk(words, marks, t).text));
@@ -133,67 +133,77 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     const resolved = refsCall?.then((r) => ((resolveMs = Math.round(performance.now() - r0t)), r));
     // Whether the drawing model may think on this send: Jev's one question, alongside the resolver (a failed call leaves it to draw.noThink).
     const thinkCall = t["draw.thinkRouter"] ? span("decide thinking", ctx, (dctx) => needsThought(scene, transcript, readings, t, dctx)).catch(() => undefined) : undefined;
-    // The pictures and the resolver: side by side; on a board, the pictures the resolver's answers add wait for it.
-    const [shot, board, refs, thinkP] = await Promise.all([
-      t["draw.sendScreenshot"] && !camera
-        ? span("screenshot", ctx, async (sctx) => {
-            const sh = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
-            // Its own phases, measured inside takeShot, laid end to end from the span's start.
-            let at = performance.now() - sh.ms.total;
-            for (const phase of ["serialize", "rasterize", "encode"] as const) timed(sctx, `screenshot: ${phase}`, at, (at += sh.ms[phase]));
-            return sh;
-          })
-        : undefined,
-      t["draw.sendScreenshot"] && camera ? sendShots(scene, camera, strokes, said.map((w) => w.word).join(" "), t, resolved?.then((r) => r.refs), ctx) : undefined,
-      resolved,
-      thinkCall,
-    ]);
-    const shots = board?.shots;
+    const shotCall = t["draw.sendScreenshot"] && !camera
+      ? span("screenshot", ctx, async (sctx) => {
+          const sh = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
+          // Its own phases, measured inside takeShot, laid end to end from the span's start.
+          let at = performance.now() - sh.ms.total;
+          for (const phase of ["serialize", "rasterize", "encode"] as const) timed(sctx, `screenshot: ${phase}`, at, (at += sh.ms[phase]));
+          return sh;
+        })
+      : undefined;
+    // On a board, the pictures the references add wait for them: the resolver's answer, or a guess's.
+    const boardFor = (refs?: Promise<Ref[] | undefined>) => (t["draw.sendScreenshot"] && camera ? sendShots(scene, camera, strokes, said.map((w) => w.word).join(" "), t, refs, ctx) : undefined);
+    // resolve.speculate: the same prompt on Jev's guess at the references, for a drawing call that starts before the resolver answers.
+    const guessCall = t["resolve.speculate"] && refsCall ? span("guess references", ctx, (gctx) => guessRefs(said, marks, scene, hits, t, "draw-refs-guess", gctx)).catch(() => undefined) : undefined;
+    onGuess?.(guessCall ? guessCall.then(async (g) => g && finish(...(await Promise.all([shotCall, boardFor(Promise.resolve(g.refs)), g, thinkCall])))) : Promise.resolve(undefined));
+    // The pictures and the resolver: side by side.
+    return finish(...(await Promise.all([shotCall, boardFor(resolved?.then((r) => r.refs)), resolved, thinkCall])));
 
-    const parts: string[] = [];
-    let mapChars = 0;
-    let idMap: string[] = [];
-    if (camera) {
-      parts.push(`Board: ${pagesOf(scene).length} pages, ${scene.shapes.size} shapes. The screen shows ${fmtBox(camera)} of it (x y w h, board pixels).`);
-      if (shots?.length) parts.push(`Pictures (boxes are always in board pixels):\n${shots.map((s, i) => `${i + 1}. ${s.name}: board ${fmtBox(s.view)} at ${s.shot.width}×${s.shot.height} (${s.why})`).join("\n")}`);
-      if (t["draw.sendIdMap"]) {
-        const tree = siteMap(scene, t, { depth: t["draw.mapDepth"], words: t["draw.mapWords"], boxes: !!t["draw.mapBoxes"] });
-        const map = capShapes(tree.split("\n"), t["draw.mapMaxShapes"], (l) => /^\s*- /.test(l)).join("\n");
-        mapChars = map.length;
-        parts.push(`Site map (each page's content as a tree, id${t["draw.mapBoxes"] ? " (box)" : ""}: description):\n${map}`);
+    function finish(shot: Shot | undefined, board: Awaited<ReturnType<typeof sendShots>> | undefined, refs: Resolution | undefined, thinkP: number | undefined): Prompt {
+      const shots = board?.shots;
+
+      const parts: string[] = [];
+      let mapChars = 0;
+      let idMap: string[] = [];
+      if (camera) {
+        parts.push(`Board: ${pagesOf(scene).length} pages, ${scene.shapes.size} shapes. The screen shows ${fmtBox(camera)} of it (x y w h, board pixels).`);
+        if (shots?.length) parts.push(`Pictures (boxes are always in board pixels):\n${shots.map((s, i) => `${i + 1}. ${s.name}: board ${fmtBox(s.view)} at ${s.shot.width}×${s.shot.height} (${s.why})`).join("\n")}`);
+        if (t["draw.sendIdMap"]) {
+          const tree = siteMap(scene, t, { depth: t["draw.mapDepth"], words: t["draw.mapWords"], boxes: !!t["draw.mapBoxes"] });
+          const map = capShapes(tree.split("\n"), t["draw.mapMaxShapes"], (l) => /^\s*- /.test(l)).join("\n");
+          mapChars = map.length;
+          parts.push(`Site map (each page's content as a tree, id${t["draw.mapBoxes"] ? " (box)" : ""}: description):\n${map}`);
+        }
+      } else {
+        parts.push(`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`);
+        idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
+        if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${capShapes(idMap, t["draw.mapMaxShapes"]).join("\n")}`);
       }
-    } else {
-      parts.push(`Canvas: ${scene.width}×${scene.height} px, ${scene.shapes.size} shapes.`);
-      idMap = t["draw.sendIdMap"] ? scene.stacked().map((s) => `${s.id}: ${s.description}`) : [];
-      if (idMap.length) parts.push(`Shapes, back to front (id: description):\n${capShapes(idMap, t["draw.mapMaxShapes"]).join("\n")}`);
+      const ops = t["draw.sendOps"] ? sceneToOps(scene) : "";
+      if (ops) parts.push(`The scene as ops:\n${ops}`);
+      if (shot) parts.push(`The screenshot is the canvas at ${Math.round(shot.width)}×${Math.round(shot.height)} (scaled ${t["shot.scale"]}); boxes are always in canvas pixels.`);
+      if (t["draw.sendMarks"] && marks.length) parts.push(`Marks (what each [ink n] is, read from its geometry):\n${readings.map((r, i) => describeMark(i + 1, r)).join("\n")}`);
+      if (t["resolve.speculate"]) {
+        // Ids alone, sorted: a guess (no phrases) and the resolver's answer then give the same line when they name the same shapes.
+        const ids = [...new Set(refs?.refs.flatMap((x) => x.ids) ?? [])].sort();
+        if (ids.length) parts.push(`References (resolved before this call): ${ids.join(", ")}`);
+      } else {
+        const refLines = refs?.refs.map((x) => `"${x.phrase}" → ${x.ids.join(", ") || "nothing on the canvas"}`) ?? [];
+        if (refs && refLines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${refLines.join("\n")}`);
+      }
+      if (refs?.hints?.length) parts.push(`Maybe also meant (the resolver was unsure; how likely each is):\n${refs.hints.map((h) => `${h.id} (${Math.round(h.p * 100)}%)`).join("\n")}`);
+      parts.push(`Request: ${transcript || "(no words)"}`);
+      const user = parts.join("\n\n");
+      const pictures = shots ? shots.map((s) => s.shot) : shot ? [shot] : [];
+      const imageTokens = pictures.reduce((a, p) => a + Math.round((p.width * p.height) / 750), 0);
+      return {
+        system,
+        user,
+        images: pictures.map((p) => p.dataUrl),
+        shot: pictures[0],
+        shots,
+        camera,
+        transcript,
+        refs,
+        thinking: thinkP !== undefined && thinkP < t["draw.thinkYes"] ? "off" : undefined,
+        features: {
+          thinkP,
+          marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: pictures.length ? 1 : 0, grid: cell,
+          board: camera ? 1 : 0, pictures: pictures.length, views: shots?.map((s) => s.name).join(" | ") ?? "", earlyShots: board?.early ?? 0, unusedShots: board?.unused ?? 0, shotsMs: board?.ms ?? 0, mapChars,
+        },
+      };
     }
-    const ops = t["draw.sendOps"] ? sceneToOps(scene) : "";
-    if (ops) parts.push(`The scene as ops:\n${ops}`);
-    if (shot) parts.push(`The screenshot is the canvas at ${Math.round(shot.width)}×${Math.round(shot.height)} (scaled ${t["shot.scale"]}); boxes are always in canvas pixels.`);
-    if (t["draw.sendMarks"] && marks.length) parts.push(`Marks (what each [ink n] is, read from its geometry):\n${readings.map((r, i) => describeMark(i + 1, r)).join("\n")}`);
-    const refLines = refs?.refs.map((x) => `"${x.phrase}" → ${x.ids.join(", ") || "nothing on the canvas"}`) ?? [];
-    if (refs && refLines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${refLines.join("\n")}`);
-    if (refs?.hints?.length) parts.push(`Maybe also meant (the resolver was unsure; how likely each is):\n${refs.hints.map((h) => `${h.id} (${Math.round(h.p * 100)}%)`).join("\n")}`);
-    parts.push(`Request: ${transcript || "(no words)"}`);
-    const user = parts.join("\n\n");
-    const pictures = shots ? shots.map((s) => s.shot) : shot ? [shot] : [];
-    const imageTokens = pictures.reduce((a, p) => a + Math.round((p.width * p.height) / 750), 0);
-    return {
-      system,
-      user,
-      images: pictures.map((p) => p.dataUrl),
-      shot: pictures[0],
-      shots,
-      camera,
-      transcript,
-      refs,
-      thinking: thinkP !== undefined && thinkP < t["draw.thinkYes"] ? "off" : undefined,
-      features: {
-        thinkP,
-        marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: pictures.length ? 1 : 0, grid: cell,
-        board: camera ? 1 : 0, pictures: pictures.length, views: shots?.map((s) => s.name).join(" | ") ?? "", earlyShots: board?.early ?? 0, unusedShots: board?.unused ?? 0, shotsMs: board?.ms ?? 0, mapChars,
-      },
-    };
   });
 }
 
@@ -212,19 +222,33 @@ export type SendResult = { ops: OpResult[]; firstOpMs?: number; ms: number; stat
 /**
  * Sends the prompt and applies each op line to `scene` as it completes. onOp
  * fires after each line (so the caller re-renders); times are ms since the send.
+ * With a `gate` (resolve.speculate), op lines are held until it opens: true applies
+ * them and the rest as they come; false drops them all, and the caller aborts the call.
  */
-export async function run(scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal, parent?: TraceContext): Promise<SendResult> {
-  return span("drawing model and ops", parent, (ctx) => runIn(ctx, scene, prompt, t, onOp, onText, signal));
+export async function run(scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal, parent?: TraceContext, gate?: Promise<boolean>): Promise<SendResult> {
+  return span("drawing model and ops", parent, (ctx) => runIn(ctx, scene, prompt, t, onOp, onText, signal, gate));
 }
 
-async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal): Promise<SendResult> {
+async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning, onOp: (r: OpResult) => void, onText?: (soFar: string) => void, signal?: AbortSignal, gate?: Promise<boolean>): Promise<SendResult> {
   const t0 = performance.now();
   const stream = new OpStream();
   const ops: OpResult[] = [];
   let firstOpMs: number | undefined;
   // Cells in the reply mean the grid the model saw.
   const opT = t["draw.gridCellPx"] > 0 ? tune({ "ops.cellPx": t["draw.gridCellPx"] }, t) : t;
+  // Held op lines while the gate is shut; dropped for good once it shuts them out.
+  let held: Parsed[] | undefined = gate ? [] : undefined;
+  let dropped = false;
+  gate?.then((open) => {
+    const h = held ?? [];
+    held = undefined;
+    if (open) handle(h);
+    else dropped = true;
+  });
+  const shut = async () => !!gate && !(await gate);
   const handle = (parsed: Parsed[]) => {
+    if (dropped) return;
+    if (held) return void held.push(...parsed);
     for (const p of parsed) {
       if (p.ok === "skip") continue;
       const ms = Math.round(performance.now() - t0);
@@ -254,9 +278,11 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
       handle(stream.push(chunk));
       onText?.(soFar);
     }, signal, ctx);
+    if (await shut()) return { ops, firstOpMs, ms: Math.round(performance.now() - t0), stats, reply: text, error: "dropped: the resolver's answer gave another prompt" };
     handle(stream.end());
     return { ops, firstOpMs, ms: Math.round(performance.now() - t0), stats, reply: text };
   } catch (e) {
+    if (await shut()) return { ops, firstOpMs, ms: Math.round(performance.now() - t0), reply: "", error: "dropped: the resolver's answer gave another prompt" };
     handle(stream.end());
     return { ops, firstOpMs, ms: Math.round(performance.now() - t0), reply: "", error: e instanceof Error ? e.message : String(e) };
   }

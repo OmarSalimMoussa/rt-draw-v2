@@ -13,8 +13,10 @@
     .legend i { display: inline-block; width: 18px; margin-right: 5px; vertical-align: middle; }
     .strip { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
     .strip b { font: 17px Excalifont, cursive; }
-    .meter { display: inline-block; width: 80px; height: 8px; border: 1px solid var(--ink); border-radius: 4px; vertical-align: middle; overflow: hidden; }
+    .meter { position: relative; display: inline-block; width: 80px; height: 8px; border: 1px solid var(--ink); border-radius: 4px; vertical-align: middle; overflow: hidden; }
     .meter > span { display: block; height: 100%; background: var(--accent); }
+    .meter > i { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); }
+    .meter.over > span { background: #c92a2a; }
     .scroll { overflow-x: auto; }
     table.marks tr[data-decision] { cursor: pointer; }
     table.marks tr[data-decision]:hover { background: #fff4e6; }
