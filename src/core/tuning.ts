@@ -138,7 +138,7 @@ export const KNOBS: Knob[] = [
   B("resolve.jevHints", 0, "unsure shapes as hints", "on: when Jev decided, the drawing model also gets the shapes it was unsure of, with how likely each is (at least resolve.jevHintMin)"),
   K("resolve.jevHintMin", 0.2, 0.05, 0.9, 0.05, "the least probability a hint shape has"),
   P("resolveJev"),
-  B("resolve.speculate", 0, "draw on a guess", "on: Jev guesses the references in about 0.1 s and the drawing call starts on that guess, its ops held back; the resolver still answers, and the guess's drawing lands only when the resolver's answer gives exactly the same prompt (else it's dropped and drawing starts again on the answer, as with this off). A right guess saves the resolver's wait; the references are sent as ids alone, so a guess can match"),
+  B("resolve.speculate", 1, "draw on a guess", "on: Jev guesses the references in about 0.1 s and the drawing call starts on that guess, its ops held back; the resolver still answers, and the guess's drawing lands only when the resolver's answer gives exactly the same prompt (else it's dropped and drawing starts again on the answer, as with this off). A right guess saves the resolver's wait; the references are sent as ids alone, so a guess can match"),
 
   // Draw: one send → ops.
   K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
