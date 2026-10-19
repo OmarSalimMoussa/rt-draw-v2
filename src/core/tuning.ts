@@ -157,6 +157,8 @@ export const KNOBS: Knob[] = [
   B("draw.thinkRouter", 0, "Jev decides thinking", "on: Jev decides per send whether the drawing model may think (one call of about 0.1 s, alongside the resolver): a small clear edit goes without thinking; off: draw.noThink decides"),
   K("draw.thinkYes", 0.5, 0.05, 0.95, 0.05, "with draw.thinkRouter: the drawing model may think when Jev's probability that the send needs it is at or above this"),
   K("draw.thinkJevModel", 0, 0, 1, 1, "with draw.thinkRouter: the Jev version (0 jev-1.13.0, 1 jev-latest)"),
+  K("draw.copies", 1, 1, 3, 1, "copies of the drawing call sent at once: the API's wait before the first text varies from call to call, so the first copy to stream is kept and the others are dropped (each copy pays its input)"),
+  K("draw.copyAfterMs", 0, 0, 3000, 100, "with draw.copies above 1: a copy after the first goes out only when no text has come this long (0: all at once)", "ms"),
   P("drawThink"),
   B("draw.fillPictures", 1, "fill pictures", "on: the picture model draws every new or changed picture (one call each), each starting as its drawing() op lands, before the send is done; off: pictures stay placeholders"),
 
@@ -168,6 +170,8 @@ export const KNOBS: Knob[] = [
   K("picture.parallel", 3, 1, 8, 1, "pictures drawn at the same time after a send"),
   K("picture.fill", 0.9, 0.5, 1, 0.05, "a picture fills this share of its shape"),
   K("picture.timeoutMs", 120000, 5000, 300000, 5000, "a picture call still going after this long is stopped and counts as failed (its shape stays a placeholder)", "ms"),
+  K("picture.copies", 1, 1, 3, 1, "copies of each picture call sent at once: the first to stream is kept, the others are dropped (each copy pays its input)"),
+  K("picture.copyAfterMs", 0, 0, 3000, 100, "with picture.copies above 1: a copy after the first goes out only when no text has come this long (0: all at once)", "ms"),
   P("picture"),
   B("picture.noThink", 0, "no thinking", "on: ask the API not to think; off: the model decides"),
 

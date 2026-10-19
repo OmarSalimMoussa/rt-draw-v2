@@ -274,8 +274,9 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
   };
   try {
     const thinking = prompt.thinking ? { thinking: prompt.thinking } : thinkingOf("draw", t);
-    // A guess that misses drops its process; a second one waiting keeps the redraw warm.
-    const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw", ...thinking, warm: t["resolve.speculate"] ? 2 : undefined }, (chunk, soFar) => {
+    // A guess that misses drops its process; a second one waiting keeps the redraw warm. Each copy takes its own.
+    const copies = t["draw.copies"];
+    const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw", ...thinking, warm: t["resolve.speculate"] || copies > 1 ? (t["resolve.speculate"] ? 2 : 1) * copies : undefined, copies, copyAfterMs: t["draw.copyAfterMs"] }, (chunk, soFar) => {
       handle(stream.push(chunk));
       onText?.(soFar);
     }, signal, ctx);

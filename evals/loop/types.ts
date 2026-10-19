@@ -59,7 +59,10 @@ export type Miss = { judgeId: string; met: "yes" | "partly" | "no"; why: string 
 /** champion.json: the champion's outcome at record time. */
 export type ChampionOutcome = { opsFailed: number; picsFailed: number; empty: boolean };
 /** replies.json: the champion's calls at record time, also the stand-in index (N2). */
-export type RecordedReply = { role: string; ordinal: number; subject?: string; reqHash: string; cacheFile: string; /** ms from the request to each chunk */ offsets: number[] };
+export type RecordedReply = {
+  role: string; ordinal: number; subject?: string; reqHash: string; cacheFile: string; /** ms from the request to each chunk */ offsets: number[];
+  /** copy n (2 or more) of one answer (draw.copies, picture.copies): never a stand-in */ copy?: number;
+};
 /** readings.json: the product's ink readings and the resolver's answer at record time. */
 export type Readings = { marks: { n: number; kind: string; how: string; targets: string[] }[]; refs?: { phrase: string; ids: string[] }[] };
 

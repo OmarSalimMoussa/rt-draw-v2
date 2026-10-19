@@ -30,7 +30,7 @@ writeFileSync(join(home, "tuning-before.ts"), before.tuning); // it imports noth
 const old = await import(pathToFileURL(join(home, "tuning-before.ts")).href);
 const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "picture.prompt": 0, "draw.noThink": 0, "resolve.noThink": 0, "picture.noThink": 0, "draw.mapMaxShapes": 0, "picture.timeoutMs": 120000,
   "resolve.engine": 0, "resolve.jevModel": 0, "resolve.jevMaxCandidates": 8, "resolve.jevYes": 0.5, "resolve.jevSure": 0.3, "resolve.jevRace": 0, "resolve.jevHints": 0, "resolve.jevHintMin": 0.2, "resolve.jevPrompt": 0, "resolve.speculate": 0,
-  "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0 };
+  "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0, "draw.copies": 1, "draw.copyAfterMs": 0, "picture.copies": 1, "picture.copyAfterMs": 0 };
 // Defaults the owner changed since T3 (decisions on eval/history), at their T3-time values: the comparisons with the code
 // before T3 run under these, since they're about T3's refactor, not later decisions.
 const T3_TIME = { "resolve.noThink": 0 };

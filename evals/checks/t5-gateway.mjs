@@ -188,6 +188,22 @@ const recorded = JSON.parse(readFileSync(p.reply(recA.cacheFile.replace(/\.json$
 const repDrift = recorded.map((c, i) => Math.abs((rep.chunks[i]?.ms ?? Infinity) - c.ms));
 check(upstream() === n4 && rep.done?.mode === "replay" && rep.text === LONG && Math.max(...repDrift) <= 20, `replay: ${upstream() - n4} upstream, mode ${rep.done?.mode}, offsets off by ${repDrift.map(Math.round)}`);
 
+// ---- Copies (draw.copies): in a live run a copy is a fresh call, even of a request the run banks; a scan holds it,
+// unanswered, until the page drops it. A copy keeps its first copy's ordinal.
+await setMode("cp1", "live", { cached: [leader.done.reqHash] });
+const n7 = upstream();
+const [cBank, cCopy] = await Promise.all([1, 2].map((copy) => product({ run: "cp1", case: "k2", arm: "B", slot: 0 }, { model: "sonnet", system: DRAW, user: U1, from: "draw", warm: 0, ...(copy > 1 ? { copy } : {}) })));
+check(cBank.done?.mode === "replay" && cCopy.done?.mode === "live" && cCopy.done?.shared === "-" && upstream() - n7 === 1, `a copy of a banked request: ${cBank.done?.mode} / ${cCopy.done?.mode}, ${upstream() - n7} upstream (want replay / live, 1)`);
+const cpCalls = (await endCase("cp1", "k2")).calls.B ?? [];
+check(cpCalls.length === 2 && cpCalls.filter((c) => c.copy === 2).length === 1 && cpCalls.every((c) => c.ordinal === 0), `a copy's record: ${JSON.stringify(cpCalls.map((c) => [c.ordinal, c.copy]))} (want both ordinal 0, one copy 2)`);
+await setMode("cp2", "scan");
+const n8 = upstream();
+const drop = new AbortController();
+setTimeout(() => drop.abort(), 300);
+const t8 = performance.now();
+const heldCopy = await fetch(`${gw.url}/api/model`, { method: "POST", headers: { "content-type": "application/json", "x-rt-run": "cp2", "x-rt-case": "bank-c1", "x-rt-arm": "B", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: U1, from: "draw", copy: 2 }), signal: drop.signal }).then((r) => r.text(), (e) => e.name);
+check(heldCopy === "AbortError" && performance.now() - t8 >= 290 && upstream() === n8, `a scan's copy: ${heldCopy} after ${Math.round(performance.now() - t8)} ms, ${upstream() - n8} upstream (want held until dropped, 0)`);
+
 // ---- Rotation end to end: off a slot at five-hour 0.90 and on a 429, at the next case boundary.
 api.set({ util5h: 0.95 });
 await product({ run: "rot", case: "rot1", arm: "A", slot: 0 }, { model: "haiku", system: "rot", user: tag("rot-1"), warm: 0 });

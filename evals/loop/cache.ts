@@ -122,7 +122,7 @@ export class Flights {
 export function standIn(p: Paths, caseId: string, role: string, ordinal: number, user: string | string[]): Reply | undefined {
   const file = join(p.bankCase(caseId), "replies.json");
   if (!existsSync(file)) return;
-  const recorded = JSON.parse(readFileSync(file, "utf8")) as RecordedReply[];
+  const recorded = (JSON.parse(readFileSync(file, "utf8")) as RecordedReply[]).filter((r) => !r.copy);
   const text = Array.isArray(user) ? user.join("\n") : user;
   const hit = recorded.find((r) => r.role === role && r.subject && text.includes(r.subject)) ?? recorded.find((r) => r.role === role && r.ordinal === ordinal);
   const reply = hit && p.reply(basename(hit.cacheFile, ".json"));
