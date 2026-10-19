@@ -28,7 +28,9 @@ const { KNOBS, knobsOf, tune } = await import("../../src/core/tuning.ts");
 const { PROMPTS } = await import("../../src/core/prompts.ts");
 writeFileSync(join(home, "tuning-before.ts"), before.tuning); // it imports nothing, so it loads from anywhere
 const old = await import(pathToFileURL(join(home, "tuning-before.ts")).href);
-const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "picture.prompt": 0, "draw.noThink": 0, "resolve.noThink": 0, "picture.noThink": 0, "draw.mapMaxShapes": 0, "picture.timeoutMs": 120000 };
+const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "picture.prompt": 0, "draw.noThink": 0, "resolve.noThink": 0, "picture.noThink": 0, "draw.mapMaxShapes": 0, "picture.timeoutMs": 120000,
+  "resolve.engine": 0, "resolve.jevModel": 0, "resolve.jevMaxCandidates": 8, "resolve.jevYes": 0.5, "resolve.jevSure": 0.3, "resolve.jevRace": 0, "resolve.jevHints": 0, "resolve.jevHintMin": 0.2, "resolve.jevPrompt": 0,
+  "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0 };
 for (const [key, value] of Object.entries(NEW)) {
   const k = KNOBS.find((x) => x.key === key);
   if (!check(k, `no knob ${key}`)) continue;

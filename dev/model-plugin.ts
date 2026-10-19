@@ -11,10 +11,15 @@
 // time unless it says otherwise: a page that will make several calls with one
 // prompt at once (pictures) asks for that many ({warm: n}), and can start them
 // before it needs them with a request that has no message: {model, system, warm: n}.
+//
+// A model that is a Jev version ("jev-1.13.0") goes to TypeSafe AI's Jev instead
+// (dev/jev.ts; TYPESAFE_API_KEY in .env): the same lines, one text chunk.
 import { appendFileSync, mkdirSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { type Plugin, loadEnv } from "vite";
 import { CallError, type CallStats, type Content, EFFORTS, type Effort, MAX_TOKENS, MODEL_IDS, type MockApi, Pool, SDK_VERSION, type Thinking, keepOf, keyOf, startProcess, streamCall, toContent } from "./claude.ts";
+import { JEV_SETTINGS, callJev, isJev } from "./jev.ts";
 
 export { MODEL_IDS };
 const TIMEOUT_MS = 120_000;
@@ -61,13 +66,17 @@ g.__rtV2Pools = undefined;
 /** `mockApi`: checks only, points every process at evals/mock/fake-api.ts. */
 export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
   let token = "";
+  let jevKey = "";
   let dataDir = "";
   const pool = (g.__rtV2Pool ??= new Pool({ maxKeys: MAX_KEYS, maxWarm: MAX_WARM, idleMs: MAX_WAIT_MS }));
   return {
     name: "model-api",
     apply: "serve",
     configResolved(config) {
-      token = loadEnv(config.mode, config.root, "").CLAUDE_CODE_OAUTH_TOKEN ?? "";
+      const env = loadEnv(config.mode, config.root, "");
+      token = env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+      // Checks never send the owner's key: their Jev is the fake API's.
+      jevKey = o.mockApi ? "mock" : (env.TYPESAFE_API_KEY ?? "");
       dataDir = process.env.RT_DATA_DIR || join(config.root, ".data");
     },
     configureServer(server) {
@@ -81,7 +90,6 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
           res.end(JSON.stringify({ error }));
         };
         if ((req as { method?: string }).method !== "POST") return fail(405, "POST only");
-        if (!token) return fail(500, "CLAUDE_CODE_OAUTH_TOKEN is not set in .env");
         let body: ModelRequest;
         try {
           const chunks: Buffer[] = [];
@@ -90,6 +98,8 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
         } catch {
           return fail(400, "bad JSON");
         }
+        if (isJev(body.model)) return jev(body, res);
+        if (!token) return fail(500, "CLAUDE_CODE_OAUTH_TOKEN is not set in .env");
         const model = MODEL_IDS[body.model];
         if (!model) return fail(400, `unknown model "${body.model}" (haiku, sonnet, opus)`);
         const effort = body.effort ?? "low";
@@ -150,6 +160,34 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
           res.end();
         }
       });
+
+      /** A Jev call: nothing to warm, one text line (the answers' JSON), then the stats. */
+      async function jev(body: ModelRequest, res: ServerResponse) {
+        res.setHeader("content-type", "application/json");
+        if (body.user === undefined) return res.end(JSON.stringify({ warming: 0 }));
+        if (!jevKey) return refuse(res, 500, "TYPESAFE_API_KEY is not set in .env");
+        res.setHeader("content-type", "application/x-ndjson");
+        const head = { done: true, model: body.model, modelId: body.model, settings: JEV_SETTINGS };
+        const t0 = performance.now();
+        const abort = new AbortController();
+        res.on("close", () => !res.writableEnded && abort.abort());
+        try {
+          const { text, stats } = await callJev(jevKey, body.model, body.user, { baseUrl: o.mockApi?.baseUrl, signal: abort.signal });
+          res.write(`${JSON.stringify({ text })}\n`);
+          const out = { ...head, ...stats, ms: Math.round(performance.now() - t0) };
+          res.end(`${JSON.stringify(out)}\n`);
+          log({ ...out, settings: undefined, from: body.from, tag: body.tag, system: body.system?.length ?? 0, user: body.user, reply: text });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          res.end(`${JSON.stringify({ ...head, error, ms: Math.round(performance.now() - t0) })}\n`);
+          log({ ...head, settings: undefined, from: body.from, tag: body.tag, error });
+        }
+      }
+
+      function refuse(res: ServerResponse, status: number, error: string) {
+        res.statusCode = status;
+        res.end(JSON.stringify({ error }));
+      }
 
       function log(rec: Record<string, unknown>) {
         try {

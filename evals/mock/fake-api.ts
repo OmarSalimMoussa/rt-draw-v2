@@ -16,6 +16,9 @@
 //   A reply "!limit", "!overload" or "!auth" fails that one request (429, 529, 401).
 // --script <file>: a JSON array of assistant turns [{content: [blocks], stop_reason?, usage?}],
 //   text and tool_use blocks; a request's turn is the number of assistant messages it carries.
+// POST /v1/systemone is a fake Jev (dev/jev.ts): each question's probability of yes is opts.jev[id],
+//   else opts.jev["*"] (default 0.1), after opts.jevMs (default 90); logged with role "jev" and the
+//   question ids, so checks can prove a Jev call never left the machine.
 // --latency <jsonl>: replays the logged model time (firstMs − waitMs to first text, the rest
 //   spread over the chunks) of the log's lines in turn: a --replies role takes its own lines
 //   (those whose `from` is the role; with thinking "off", those for requests sent with thinking
@@ -34,6 +37,8 @@ export type FakeOpts = {
   resetsAt?: number;
   /** slow: ms before the first text, then between chunks. */
   slowMs?: number; chunkMs?: number;
+  /** The fake Jev's answers: probability of yes by question id ("*" for the rest), and how long it takes. */
+  jev?: Record<string, number>; jevMs?: number;
 };
 export type FakeRequest = {
   at: number; endAt?: number; path: string; model: string; mode: FakeMode; status: number; role?: string;
@@ -42,6 +47,8 @@ export type FakeRequest = {
   images: number; assistantTurns: number;
   /** sha12 of each image's base64 data, in order. */
   imageSha: string[];
+  /** A Jev request's question ids and bearer key. */
+  questions?: string[]; auth?: string;
 };
 
 const sha12 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);
@@ -182,6 +189,21 @@ export async function startFakeApi(opts: FakeOpts = {}) {
     res.end();
   }
 
+  async function jev(req: IncomingMessage, res: ServerResponse, raw: string) {
+    const b = JSON.parse(raw || "{}") as { model?: string; state?: unknown; questions?: Record<string, unknown> };
+    const ids = Object.keys(b.questions ?? {});
+    const rec: FakeRequest = {
+      at: Date.now(), path: "/v1/systemone", model: String(b.model), mode: o.mode!, status: 200, role: "jev", systemSha: [], ttls: [], beta: "", firstUser: JSON.stringify(b.state ?? null),
+      images: 0, assistantTurns: 0, imageSha: [], questions: ids, auth: String(req.headers.authorization ?? "").replace(/^Bearer /, ""),
+    };
+    requests.push(rec);
+    await sleep(o.jevMs ?? 90);
+    const p = (id: string) => o.jev?.[id] ?? o.jev?.["*"] ?? 0.1;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ model: b.model === "jev-latest" ? "jev-1.13.0" : b.model, answers: Object.fromEntries(ids.map((id) => [id, { type: "noul", noul: p(id) }])), usage: { input_tokens: Math.ceil(raw.length / 4), output_tokens: 3 * ids.length } }));
+    rec.endAt = Date.now();
+  }
+
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
@@ -192,6 +214,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
       Object.assign(o, JSON.parse(raw || "{}"));
       return res.end("{}");
     }
+    if (req.method === "POST" && path.endsWith("/v1/systemone")) return jev(req, res, raw);
     if (req.method !== "POST" || !path.endsWith("/v1/messages")) {
       res.writeHead(404, { "content-type": "application/json" });
       return res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: `fake: no ${path}` } }));

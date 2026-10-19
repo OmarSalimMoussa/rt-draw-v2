@@ -16,6 +16,8 @@
 // except the request hashes the run names as identical in both arms (the diffscan
 // found them): those come from the bank cache on their recorded clock, for both.
 // --cap n refuses call n+1: a loop or retry bug stops there instead of burning a window.
+// A Jev call (model "jev-…", dev/jev.ts) takes the same road without a process, a pool
+// or a token slot: TYPESAFE_API_KEY from the tokens file, or the fake API with --mock-api.
 //
 //   node --import ./evals/loop/node-hooks.mjs evals/loop/gateway.ts [--port n] [--cap n]
 //        [--tokens <file> | --dev-token [<checkout>]] [--mock-api <url>] [--home <dir>]
@@ -24,10 +26,11 @@ import { type IncomingMessage, type ServerResponse, createServer } from "node:ht
 import { createServer as netServer } from "node:net";
 import { join } from "node:path";
 import { CallError, type CallStats, EFFORTS, type Effort, MODEL_IDS, type MockApi, Pool, type Proc, SDK_VERSION, type Thinking, keepOf, keyOf, startProcess, streamCall, toContent } from "../../dev/claude.ts";
+import { JEV_SETTINGS, callJev, isJev } from "../../dev/jev.ts";
 import { type Chunk, Flights, type Req, readReply, replay, replyName, reqHash, standIn, storeImages, writeReply } from "./cache.ts";
 import { listUsd, meterCall } from "./meter.ts";
 import { type Paths, paths } from "./paths.ts";
-import { type SlotN, Slots, type Token, loadDevToken, loadTokens } from "./tokens.ts";
+import { type SlotN, Slots, type Token, loadDevToken, loadJevKey, loadTokens } from "./tokens.ts";
 import type { Arm, CallMode, RecordedReply, Shared } from "./types.ts";
 
 /** Eval-role calls in flight at once, at most. */
@@ -57,7 +60,7 @@ type Ask = {
 };
 type Out = {
   text: string; stats: Record<string, unknown>; mode: CallMode; shared: Shared; scan?: "hit" | "standin" | "miss"; error?: string; cacheFile?: string; chunks: Chunk[];
-  /** a real call was made: its list $ and token slot */ upstream?: { usd: number; token: SlotN };
+  /** a real call was made: its list $ and token slot (none for Jev) */ upstream?: { usd: number; token?: SlotN };
   /** refused before any call (the cap): no meter line */ refused?: boolean;
 };
 /** A case's loop delays by whole ms (the last bucket: LATE_MAX_MS and more), a fixed size however long the case runs. */
@@ -69,7 +72,7 @@ const flat = (s: CallStats) => ({
 });
 const n = (x: unknown) => (typeof x === "number" ? x : 0);
 
-async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockApi?: MockApi; port?: number }) {
+async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockApi?: MockApi; port?: number; jevKey?: string }) {
   const { p, cap } = o;
   const slots = new Slots(o.tokens.map((t) => t.slot), join(p.home, "meter", "slots.json"));
   const same = slots.sameAccount();
@@ -151,6 +154,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const same = slots.sameAccount();
     if (same) return refuse(`slots ${same[0]} and ${same[1]} report the same resetsAt: one account`);
     calls++;
+    if (isJev(a.req.model)) return jevLive(a, since, onText, flight);
     if (!a.page) await evalTurn();
     const token = a.token ?? (a.page ? slots.current : (slots.boundary() ?? slots.current));
     const key = poolKey(a, token);
@@ -186,6 +190,26 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       clearTimeout(timer);
       taken.proc.q.close();
       if (!a.page) evalDone();
+    }
+  }
+
+  /** A Jev call: one chunk (the answers' JSON); in checks the fake API's, never the real Jev. */
+  async function jevLive(a: Ask, since: () => number, onText: (t: string) => void, flight?: ReturnType<Flights["lead"]>): Promise<Out> {
+    const key = o.mockApi ? "mock" : (o.jevKey ?? "");
+    try {
+      const { text, stats } = await callJev(key, a.req.model, String(a.req.user), { baseUrl: o.mockApi?.baseUrl });
+      const c = { ms: since(), text };
+      if (flight) Flights.push(flight, c);
+      onText(text);
+      const st = { ...stats, ms: since(), firstMs: c.ms, settings: JEV_SETTINGS };
+      const usd = listUsd(a.req.model, { inTokens: stats.inTokens, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, outTokens: stats.outTokens });
+      const cacheFile = writeReply(p, { reqHash: a.hash, run: a.run, role: a.role, at: new Date().toISOString(), request: a.req, text, chunks: [c], doneMs: st.ms, stats: st }, !a.page);
+      if (flight) Flights.end(flight, { ms: st.ms, stats: st, cacheFile });
+      return { text, stats: st, mode: "live", shared: flight?.followers.size ? "leader" : "-", chunks: [c], cacheFile, upstream: { usd } };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (flight) Flights.end(flight, { ms: since(), error });
+      return { text: "", stats: { ms: since() }, mode: "live", shared: "-", error, chunks: [], upstream: { usd: 0 } };
     }
   }
 
@@ -244,6 +268,8 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
 
   const model = (m: unknown) => (typeof m === "string" ? (MODEL_IDS[m] ?? (Object.values(MODEL_IDS).includes(m) ? m : undefined)) : undefined);
   function reqOf(b: Record<string, unknown>, user: string | string[]): { req?: Req; error?: string } {
+    // Jev: the version is the model; no images, effort or thinking (fixed, so the hash is stable).
+    if (isJev(b.model)) return typeof user === "string" ? { req: { model: b.model as string, system: typeof b.system === "string" ? b.system : "", user, images: [], effort: "low", thinking: "auto" } } : { error: "a Jev call's user is one JSON text" };
     const id = model(b.model);
     const effort = (b.effort ?? "low") as Effort;
     if (!id) return { error: `unknown model "${b.model}" (haiku, sonnet, opus)` };
@@ -259,6 +285,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const { req: r, error } = reqOf(b, (b.user as string) ?? "");
     if (!r) return json(res, 400, { error });
     const c = base.case ? caseOf(base.run, base.case) : undefined;
+    if (b.user === undefined && isJev(b.model)) return json(res, 200, { warming: 0 });
     if (b.user === undefined) {
       // A scan or replay serves every reply from the cache: a process warmed for it would never be used (but a warm scan's are).
       const run = runs.get(base.run);
@@ -380,7 +407,8 @@ if (import.meta.main) {
     const cap = arg("cap") === undefined ? undefined : Number(arg("cap"));
     const tokens = arg("dev-token") !== undefined ? loadDevToken(cap, arg("dev-token") || undefined) : loadTokens(arg("tokens") || undefined, (s) => console.error(s));
     const mock = arg("mock-api");
-    const gw = await startGateway({ p: paths(arg("home") || undefined), tokens, cap, port: Number(arg("port") ?? 0), mockApi: mock ? { baseUrl: mock, deadProxyPort: await closedPort() } : undefined });
+    const jevKey = mock ? undefined : arg("dev-token") !== undefined ? loadJevKey({ dev: true, dir: arg("dev-token") || undefined }) : loadJevKey({ file: arg("tokens") || undefined });
+    const gw = await startGateway({ p: paths(arg("home") || undefined), tokens, cap, port: Number(arg("port") ?? 0), mockApi: mock ? { baseUrl: mock, deadProxyPort: await closedPort() } : undefined, jevKey });
     const stop = () => (gw.close(), process.exit(0));
     process.on("SIGTERM", stop);
     process.on("SIGINT", stop);

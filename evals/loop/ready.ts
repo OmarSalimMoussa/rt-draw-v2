@@ -64,7 +64,7 @@ const STORM_MAX_MS = 5000;
 const FOLLOWER_MS = 20;
 /** The flags that keep a Claude process on the 5-minute cache and quiet (dev/claude.ts' childEnv). */
 const QUIET: Record<string, string> = { FORCE_PROMPT_CACHING_5M: "1", CLAUDE_CODE_PROMPT_CACHE_TTL: "5m", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
-const SESSION_VARS = /^(CLAUDECODE|CLAUDE_CODE_SESSION|CLAUDE_CODE_MESSAGING|CLAUDE_CODE_CHILD_SESSION|CLAUDE_EFFORT|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|RT_EVAL_TOKEN_|ELEVENLABS_|OPENROUTER_)/;
+const SESSION_VARS = /^(CLAUDECODE|CLAUDE_CODE_SESSION|CLAUDE_CODE_MESSAGING|CLAUDE_CODE_CHILD_SESSION|CLAUDE_EFFORT|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|RT_EVAL_TOKEN_|ELEVENLABS_|OPENROUTER_|TYPESAFE_)/;
 const IMPURE = /system-reminder|additionalContext|userEmail|@[a-z0-9-]+\.[a-z]/i;
 /** The probe calls' system prompts (the driver's is its real one). */
 const SYS = { draw: "rt readiness probe: the drawing model", judge: "rt readiness probe: a judge", expectation: "rt readiness probe: the expectation" };

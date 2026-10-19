@@ -12,7 +12,8 @@ import { type Word, linkInk } from "./link.ts";
 import { HitIndex } from "./hittest.ts";
 import { type Mark, type Reading, groupStrokes, readMark } from "./marks.ts";
 import { type Resolution, resolve } from "./resolve.ts";
-import { type ModelStats, callModel, modelOf } from "./model.ts";
+import { type ModelStats, callModel, jevOf, modelOf } from "./model.ts";
+import { decide } from "./decide.ts";
 import { OpStream, type Parsed, applyOp } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
@@ -33,7 +34,9 @@ export type Prompt = {
   transcript: string;
   /** The resolver's answers, when they were sent. */
   refs?: Resolution;
-  features: { marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number; board: number; pictures: number; views: string; earlyShots: number; unusedShots: number; shotsMs: number; mapChars: number };
+  /** "off" when Jev decided this send needs no thinking (draw.thinkRouter); unset: draw.noThink decides. */
+  thinking?: "off";
+  features: { thinkP?: number; marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number; board: number; pictures: number; views: string; earlyShots: number; unusedShots: number; shotsMs: number; mapChars: number };
 };
 
 /** The scene as op lines: its exact boxes and styles, for when the model should see numbers. */
@@ -128,8 +131,10 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     const refsCall = t["draw.sendRefs"] && (marks.length || said.length) ? span("resolve references", ctx, (rctx) => resolve(said, strokes, marks, scene, hits, t, "draw-refs", rctx)) : undefined;
     let resolveMs = 0;
     const resolved = refsCall?.then((r) => ((resolveMs = Math.round(performance.now() - r0t)), r));
+    // Whether the drawing model may think on this send: Jev's one question, alongside the resolver (a failed call leaves it to draw.noThink).
+    const thinkCall = t["draw.thinkRouter"] ? span("decide thinking", ctx, (dctx) => needsThought(scene, transcript, readings, t, dctx)).catch(() => undefined) : undefined;
     // The pictures and the resolver: side by side; on a board, the pictures the resolver's answers add wait for it.
-    const [shot, board, refs] = await Promise.all([
+    const [shot, board, refs, thinkP] = await Promise.all([
       t["draw.sendScreenshot"] && !camera
         ? span("screenshot", ctx, async (sctx) => {
             const sh = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
@@ -141,6 +146,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
         : undefined,
       t["draw.sendScreenshot"] && camera ? sendShots(scene, camera, strokes, said.map((w) => w.word).join(" "), t, resolved?.then((r) => r.refs), ctx) : undefined,
       resolved,
+      thinkCall,
     ]);
     const shots = board?.shots;
 
@@ -167,6 +173,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     if (t["draw.sendMarks"] && marks.length) parts.push(`Marks (what each [ink n] is, read from its geometry):\n${readings.map((r, i) => describeMark(i + 1, r)).join("\n")}`);
     const refLines = refs?.refs.map((x) => `"${x.phrase}" → ${x.ids.join(", ") || "nothing on the canvas"}`) ?? [];
     if (refs && refLines.length) parts.push(`References (resolved before this call, ${refs.via === "ink" ? "from the ink" : "by a model"}):\n${refLines.join("\n")}`);
+    if (refs?.hints?.length) parts.push(`Maybe also meant (the resolver was unsure; how likely each is):\n${refs.hints.map((h) => `${h.id} (${Math.round(h.p * 100)}%)`).join("\n")}`);
     parts.push(`Request: ${transcript || "(no words)"}`);
     const user = parts.join("\n\n");
     const pictures = shots ? shots.map((s) => s.shot) : shot ? [shot] : [];
@@ -180,12 +187,22 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
       camera,
       transcript,
       refs,
+      thinking: thinkP !== undefined && thinkP < t["draw.thinkYes"] ? "off" : undefined,
       features: {
+        thinkP,
         marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: pictures.length ? 1 : 0, grid: cell,
         board: camera ? 1 : 0, pictures: pictures.length, views: shots?.map((s) => s.name).join(" | ") ?? "", earlyShots: board?.early ?? 0, unusedShots: board?.unused ?? 0, shotsMs: board?.ms ?? 0, mapChars,
       },
     };
   });
+}
+
+/** Jev's probability that this send needs the drawing model to think first (draw.thinkRouter); undefined when it gave none. */
+async function needsThought(scene: Scene, transcript: string, readings: Reading[], t: Tuning, parent?: TraceContext): Promise<number | undefined> {
+  const v = promptOf("drawThink", t);
+  const state = { canvas: scene.shapes.size ? `${scene.shapes.size} shapes` : "empty", said: transcript || "(no words)", ink: readings.map((r) => (r.kind === "sketch" ? "a sketch" : `a ${r.how}`)) };
+  const d = await decide(jevOf(t["draw.thinkJevModel"]), state, { think: { type: "noul", instructions: v.question, criteria: { yes: v.yes, no: v.no } } }, "draw-think", parent);
+  return d.yes.think;
 }
 
 /** One op line as it landed; a camera(...) line carries the view to move the screen to (the caller moves it). */
@@ -232,7 +249,8 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
     }
   };
   try {
-    const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw", ...thinkingOf("draw", t) }, (chunk, soFar) => {
+    const thinking = prompt.thinking ? { thinking: prompt.thinking } : thinkingOf("draw", t);
+    const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw", ...thinking }, (chunk, soFar) => {
       handle(stream.push(chunk));
       onText?.(soFar);
     }, signal, ctx);

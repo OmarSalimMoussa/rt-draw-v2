@@ -1,15 +1,21 @@
 // Calls a model through the dev server's /api/model (dev/model-plugin.ts):
 // the reply streams in, so ops can be applied while it's still arriving.
-// Model choice is a knob like any other: an index into MODELS.
+// Model choice is a knob like any other: an index into MODELS. A Jev version
+// (JEV_VERSIONS: TypeSafe AI's decision model, src/core/decide.ts) goes through
+// the same door: its user text is the JSON of Jev's {state, questions}.
 import { type TraceContext, mark, span, timed } from "./trace.ts";
 
 export const MODELS = ["haiku", "sonnet", "opus"] as const;
 export type ModelName = (typeof MODELS)[number];
 /** A model knob's value → its name (0 haiku, 1 sonnet, 2 opus). */
 export const modelOf = (knob: number): ModelName => MODELS[Math.max(0, Math.min(MODELS.length - 1, Math.round(knob)))];
+/** Jev's versions: a pinned one first (replies stay comparable), then whatever TypeSafe serves as latest. */
+export const JEV_VERSIONS = ["jev-1.13.0", "jev-latest"] as const;
+export type JevVersion = (typeof JEV_VERSIONS)[number];
+export const jevOf = (knob: number): JevVersion => JEV_VERSIONS[Math.max(0, Math.min(JEV_VERSIONS.length - 1, Math.round(knob)))];
 
 export type ModelStats = {
-  model: ModelName;
+  model: ModelName | JevVersion;
   /** Anthropic's id, e.g. claude-haiku-5-5. */
   modelId?: string;
   ms: number;
@@ -42,7 +48,7 @@ export type ModelStats = {
 };
 
 export type ModelRequest = {
-  model: ModelName;
+  model: ModelName | JevVersion;
   system: string;
   user: string;
   images?: string[];
@@ -88,7 +94,8 @@ export async function callModel(req: ModelRequest, onText?: (chunk: string, soFa
     // Clamped to this call, since the server's clock starts a little after ours.
     const end = performance.now();
     const at = (ms?: number) => Math.min(end, t0 + (ms ?? 0));
-    timed(ctx, st.warm ? "Claude process (already waiting)" : "Claude process (started for this call)", t0, at(st.waitMs));
+    // A Jev call has no process: no wait.
+    if (st.waitMs !== undefined) timed(ctx, st.warm ? "Claude process (already waiting)" : "Claude process (started for this call)", t0, at(st.waitMs));
     if (st.firstMs !== undefined) timed(ctx, "model: time to first text", at(st.waitMs), at(st.firstMs));
     if (st.firstMs !== undefined) timed(ctx, "model: streaming the reply", at(st.firstMs), at(st.ms), { outTokens: st.outTokens ?? 0 });
     timed(ctx, "network and server overhead", at(st.ms), end);

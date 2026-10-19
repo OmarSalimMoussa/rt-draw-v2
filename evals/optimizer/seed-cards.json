@@ -65,5 +65,39 @@
     "touchesFrozen": false,
     "risk": "an ink reader tuned on synthetic ink: it needs U1 (real sends) to be kept, else the owner list",
     "files": ["src/core/tuning.ts"]
+  },
+  {
+    "id": "seed-5",
+    "component": "resolve",
+    "kind": "knob",
+    "change": "resolve.engine = 2: Jev (TypeSafe AI's decision model, one yes/no per candidate shape in ~0.1 s) resolves, and the Claude resolver only runs when Jev is unsure of a shape",
+    "knobs": { "resolve.engine": 2 },
+    "goal": "latency",
+    "metric": "ttfc",
+    "classGuess": "Q",
+    "dialogue": false,
+    "predicts": "on the sends Jev is sure of, the resolver's ~3 s becomes ~0.1-0.3 s, so TTFC drops by ~2.5 s there; offline, Jev gave Haiku's set on 57% of 207 recorded calls (Haiku repeats itself on 77%) with 89% of per-shape answers the same, so fidelity holds if the unsure band catches the misses",
+    "isPatch": false,
+    "raisesCost": false,
+    "touchesFrozen": false,
+    "risk": "Jev sure and wrong (plural phrases, a part named inside a page): the drawing model edits the wrong shape",
+    "files": ["src/core/tuning.ts"]
+  },
+  {
+    "id": "seed-6",
+    "component": "draw",
+    "kind": "knob",
+    "change": "draw.thinkRouter = 1: Jev decides per send whether the drawing model may think (a ~0.1 s call alongside the resolver); small clear edits go without thinking",
+    "knobs": { "draw.thinkRouter": 1 },
+    "goal": "latency",
+    "metric": "ttfc",
+    "classGuess": "Q",
+    "dialogue": false,
+    "predicts": "draw first text ~4.2 s to ~1.4 s on the small edits that thought before, while new layouts and sketches keep thinking: fidelity held where draw.noThink alone risks it",
+    "isPatch": false,
+    "raisesCost": false,
+    "touchesFrozen": false,
+    "risk": "Jev routes a complex ask to no thinking: a worse layout or unparsed lines on that send",
+    "files": ["src/core/tuning.ts"]
   }
 ]

@@ -18,7 +18,7 @@ if grep -q 'emberhub-factory\.slice' /proc/self/cgroup; then
   exit 1
 fi
 # Whatever env the unit or the tmux server has, tokens and paid keys never ride along.
-clean=("$(command -v env)" -u RT_EVAL_TOKEN_1 -u RT_EVAL_TOKEN_2 -u RT_EVAL_TOKEN_3 -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ELEVENLABS_API_KEY)
+clean=("$(command -v env)" -u RT_EVAL_TOKEN_1 -u RT_EVAL_TOKEN_2 -u RT_EVAL_TOKEN_3 -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ELEVENLABS_API_KEY -u TYPESAFE_API_KEY)
 # The caller's Node (nvm's v22), not the v24 a unit would find, with the hooks every node entry needs.
 run=("$(command -v node)" --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@")
 

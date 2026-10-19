@@ -9,10 +9,12 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { type View, pageName, pagesOf } from "../../src/core/board.ts";
+import { yesOf } from "../../src/core/decide.ts";
 import { HitIndex } from "../../src/core/hittest.ts";
 import { groupStrokes, readMark } from "../../src/core/marks.ts";
 import { parseReply } from "../../src/core/resolve.ts";
 import { Scene } from "../../src/core/scene.ts";
+import { DEFAULTS } from "../../src/core/tuning.ts";
 import { sceneDiff } from "../core/diff.ts";
 import { type Dropped, HABITS, NOTHING_TO_UNDO, type Past, RETRY, type Turn, describeMarks, describeMove, isLook, moveView, parseTurn, systemPrompt, userMessage } from "../core/driver.ts";
 import { personaOf, styleOf, targetOf } from "../core/personas.ts";
@@ -114,7 +116,11 @@ export function readingsOf(before: SceneJSON, input: CaseInput, replies: Recorde
     return { n: i + 1, kind: r.kind, how: r.how, targets: r.targets };
   });
   const resolver = replyText(replies.find((r) => r.role === "draw-refs"));
-  return { marks, ...(resolver ? { refs: parseReply(resolver, scene).refs } : {}) };
+  if (resolver) return { marks, refs: parseReply(resolver, scene).refs };
+  // Jev decided alone (resolve.engine): the shapes at the default threshold, as one reference.
+  const jev = replyText(replies.find((r) => r.role === "draw-refs-jev"));
+  const ids = jev ? Object.entries(yesOf(jev)).filter(([id, p]) => (p ?? 0) >= DEFAULTS["resolve.jevYes"] && scene.get(id)).map(([id]) => id) : [];
+  return { marks, ...(jev ? { refs: ids.length ? [{ phrase: "(their words and ink)", ids }] : [] } : {}) };
 }
 
 type Asked = { raw: string; turn: Turn; dropped: Dropped[]; clamped: number; retries: number; reqHash: string };

@@ -5,9 +5,10 @@
 // (1-hour writes, thinking, cold starts).
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { JEV_PRICE, isJev } from "../../dev/jev.ts";
 import type { AgentLog, CallLog } from "./types.ts";
 
-/** $ per million tokens; a 5-minute cache write is 1.25× input, a 1-hour one 2×. */
+/** $ per million tokens; a 5-minute cache write is 1.25× input, a 1-hour one 2×. Jev: dev/jev.ts' JEV_PRICE. */
 export const PRICES: Record<string, { in: number; out: number; read: number }> = {
   "claude-sonnet-5-5": { in: 2, out: 10, read: 0.2 },
   "claude-haiku-5-5": { in: 0.1, out: 0.5, read: 0.01 },
@@ -16,7 +17,7 @@ export const PRICES: Record<string, { in: number; out: number; read: number }> =
 
 type Tokens = { inTokens: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; outTokens: number };
 export function listUsd(model: string, t: Tokens): number {
-  const p = PRICES[model] ?? PRICES["claude-sonnet-5-5"];
+  const p = isJev(model) ? { ...JEV_PRICE, read: 0 } : (PRICES[model] ?? PRICES["claude-sonnet-5-5"]);
   return (t.inTokens * p.in + t.cacheRead * p.read + t.cacheWrite5m * p.in * 1.25 + t.cacheWrite1h * p.in * 2 + t.outTokens * p.out) / 1e6;
 }
 

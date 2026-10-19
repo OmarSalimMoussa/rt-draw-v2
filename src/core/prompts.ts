@@ -9,6 +9,10 @@ type ResolveText = { name: string; system: string };
 /** Describe has two system prompts: all shapes in one call (describe.batch), or one per call. {min} and {max} are its word limits. */
 type DescribeText = { name: string; batch: string; one: string };
 type PictureText = { name: string; system: (t: Tuning) => string; user: (subject: string, w: number, h: number, t: Tuning) => string };
+/** Jev as the resolver (resolve.engine): the task goes in its state with the resolver's own text; one yes/no per candidate shape. */
+type ResolveJevText = { name: string; task: string; question: (shapeLine: string) => string; yes: string; no: string };
+/** Jev deciding whether the drawing model thinks on this send (draw.thinkRouter). */
+type DrawThinkText = { name: string; question: string; yes: string; no: string };
 
 /** The op manual, short on purpose: v1's long manual is not carried over. On a board it speaks of board pixels, pages and the camera. */
 function drawShipped(board: boolean, w: number, h: number, cell: number, pageW: number): string {
@@ -43,6 +47,15 @@ Return only JSON, no prose: {"refs": [{"phrase": "this headline", "ids": ["hero-
 One entry per phrase that refers to shapes on the canvas ("this", "that one", "the photo", "these three", "over there"), with every id it means. Use only ids from the list. Ink settles which one; words settle how many and what kind. Leave out phrases that refer to nothing on the canvas.
 On a board of pages (frames), a phrase about a whole page ("the shop page", "where you pay", "the other page") means its frame id, and a part of a page means that part's id.`;
 
+// Jev's resolver questions. "scratch-v2" is the wording tested on 207 recorded resolver calls (2026-10-18): it gave
+// the same set as Haiku on 57% (Haiku repeats its own set on 77%), with 89% of the per-shape answers the same.
+const RESOLVE_JEV_YES = 'A phrase they said or an ink mark they drew means this very shape: something to change, remove, copy, or place new things next to. A plural phrase ("the tabs", "these three") means every shape it covers, so each of those is yes.';
+const RESOLVE_JEV_NO = "Nothing they said or drew means this shape itself: they ask for something new, or the shape only contains, surrounds or sits near what they mean (the page around a part they name, the card around a button they name).";
+const RESOLVE_JEV_TASK = `You decide which shapes on a canvas a person means.
+The request lists the shapes that could be meant (id, kind, box as x y w h in pixels, and a description), what the person said with [ink n] at the moment they drew mark n, and what each mark is (a loop around shapes, an arrow from one place to another, a tap on a shape, a line).
+Ink settles which one; words settle how many and what kind. A phrase that refers to nothing on the canvas means no shape.
+On a board of pages (frames), a phrase about a whole page ("the shop page", "where you pay", "the other page") means its frame, and a part of a page means that part.`;
+
 const DESCRIBE_BATCH = `You write the id map for a hand-drawn wireframe. Each shape on the page has an id; people later point at shapes by saying things like "the photo of me" or "that button", and your descriptions are how their words find the right id.
 
 You get the whole page first (shapes carry small orange id tags), then one crop per shape, each announced by its number and id.
@@ -73,9 +86,22 @@ Example (a smiling sun in a 100 x 100 box):
 <circle cx="50" cy="50" r="28" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>
 <path d="M38 56 Q50 66 62 56" fill="none" stroke="#1e1e1e" stroke-width="3"/>`;
 
-export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: DescribeText[]; picture: PictureText[] } = {
+export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: DescribeText[]; picture: PictureText[]; resolveJev: ResolveJevText[]; drawThink: DrawThinkText[] } = {
   draw: [{ name: "shipped", system: drawShipped }],
   resolve: [{ name: "shipped", system: RESOLVE_SHIPPED }],
+  resolveJev: [
+    { name: "scratch-v2", task: RESOLVE_SHIPPED, question: (line) => `Do their words or ink refer to this existing shape: ${line}?`, yes: RESOLVE_JEV_YES, no: RESOLVE_JEV_NO },
+    // The task without Claude's JSON reply format, which Jev has no use for (untested).
+    { name: "task-only", task: RESOLVE_JEV_TASK, question: (line) => `Do their words or ink refer to this existing shape: ${line}?`, yes: RESOLVE_JEV_YES, no: RESOLVE_JEV_NO },
+  ],
+  drawThink: [
+    {
+      name: "shipped",
+      question: "Does drawing what they ask need the drawing model to think it through before it writes ops?",
+      yes: "A new screen, page or layout, several changes at once, a sketch to interpret, or a vague request (\"make it pop\") that needs a plan first.",
+      no: "One small, clear change to shapes that already exist: move, remove, recolor, resize, rename, or change text.",
+    },
+  ],
   describe: [{ name: "shipped", batch: DESCRIBE_BATCH, one: DESCRIBE_ONE }],
   picture: [
     {
@@ -103,10 +129,13 @@ The box is ${w} wide and ${h} tall.`,
 
 export type Role = keyof typeof PROMPTS;
 
-/** The variant a tuning picks for a role (its <role>.prompt knob, clamped to the variants there are). */
+/** Each role's prompt knob: <role>.prompt, except Jev's questions, which belong to the part that asks them. */
+export const PROMPT_KNOB: Record<Role, string> = { draw: "draw.prompt", resolve: "resolve.prompt", describe: "describe.prompt", picture: "picture.prompt", resolveJev: "resolve.jevPrompt", drawThink: "draw.thinkPrompt" };
+
+/** The variant a tuning picks for a role (its prompt knob, clamped to the variants there are). */
 export function promptOf<R extends Role>(role: R, t: Tuning): (typeof PROMPTS)[R][number] {
   const list = PROMPTS[role];
-  return list[Math.max(0, Math.min(list.length - 1, Math.round(t[`${role}.prompt`] ?? 0)))];
+  return list[Math.max(0, Math.min(list.length - 1, Math.round(t[PROMPT_KNOB[role]] ?? 0)))];
 }
 
 /** A role's thinking from its <role>.noThink knob: off, or unset (the model's own choice, so the request is today's). */

@@ -3,6 +3,9 @@
 // judge and expectation replies for the eval roles on the fake API, from
 // evals/checks/data/stub-replies/. So readiness makes 0 model calls.
 //
+// A Jev call (a tuning with resolve.engine or draw.thinkRouter on) gets every question
+// at 0.1, as the fake API's Jev would.
+//
 // The pages' stubs sit where the gateway would: each arm server proxies /api/model
 // here (chrome.ts adds the x-rt-* labels, as in a run), so readiness also exercises
 // the arm proxy and the labels, and every request is counted per arm.
@@ -11,6 +14,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, createServer } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isJev } from "../../dev/jev.ts";
 import { readPicture } from "../../src/core/picture.ts";
 import type { Scene } from "../../src/core/scene.ts";
 import { type Pictures, pictureKey } from "../fixtures/fixtures.ts";
@@ -60,7 +64,8 @@ export async function serveStubs() {
     const arm = req.headers["x-rt-arm"] as string | undefined;
     const b = JSON.parse((await body(req)) || "{}") as { model?: string; user?: string; from?: string };
     const role = b.user === undefined ? "warm" : (b.from ?? "?");
-    if (path !== "/api/model" || !arm || (role !== "warm" && !(role in FILES))) {
+    const jev = isJev(b.model) && role !== "warm";
+    if (path !== "/api/model" || !arm || (role !== "warm" && !jev && !(role in FILES))) {
       unexpected.push(`${req.method} ${path} from ${role} (arm ${arm ?? "unlabelled"})`);
       res.statusCode = 404;
       return res.end(JSON.stringify({ error: "not stubbed" }));
@@ -68,6 +73,11 @@ export async function serveStubs() {
     (counts[arm] ??= {})[role] = (counts[arm][role] ?? 0) + 1;
     if (role === "warm") return res.end(JSON.stringify({ warming: 0 }));
     res.setHeader("content-type", "application/x-ndjson");
+    if (jev) {
+      const ids = Object.keys((JSON.parse(b.user!) as { questions?: object }).questions ?? {});
+      res.write(`${JSON.stringify({ text: JSON.stringify(Object.fromEntries(ids.map((id) => [id, { type: "noul", noul: 0.1 }]))) })}\n`);
+      return res.end(`${JSON.stringify({ done: true, model: b.model, ms: 1 })}\n`);
+    }
     if (role === "draw-refs") await new Promise((r) => setTimeout(r, RESOLVER_DELAY_MS));
     for (const line of stubReply(role as StubRole).split(/(?<=\n)/)) res.write(`${JSON.stringify({ text: line })}\n`);
     res.end(`${JSON.stringify({ done: true, model: b.model, ms: 1 })}\n`);

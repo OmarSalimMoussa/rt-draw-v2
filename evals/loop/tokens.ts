@@ -56,6 +56,24 @@ export function loadDevToken(cap: number | undefined, dir = join(homedir(), "pro
   return [{ slot: 1, token }];
 }
 
+/**
+ * Jev's key (TYPESAFE_API_KEY), held like the tokens: from the tokens file (mode 600, outside every repo), or with
+ * --dev-token from the owner's checkout's .env files. Undefined when there is none: Jev calls then fail, nothing else does.
+ */
+export function loadJevKey(o: { file?: string } | { dev: true; dir?: string }): string | undefined {
+  if (!("dev" in o)) {
+    const file = o.file ?? join(homedir(), ".config/rt-eval/tokens.env");
+    if (!existsSync(file)) return undefined;
+    if ((statSync(file).mode & 0o777) !== 0o600 || inRepo(dirname(file))) return undefined;
+    return parseEnv(readFileSync(file, "utf8")).TYPESAFE_API_KEY || undefined;
+  }
+  const dir = o.dir ?? join(homedir(), "projects/rt-draw-v2");
+  let key: string | undefined;
+  for (const f of [".env", ".env.local", ".env.development", ".env.development.local"])
+    if (existsSync(join(dir, f))) key = parseEnv(readFileSync(join(dir, f), "utf8")).TYPESAFE_API_KEY || key;
+  return key;
+}
+
 type SlotState = {
   slot: SlotN;
   status?: string; fiveHour?: number; sevenDay?: number; /** unix seconds */ resetsAt?: number;

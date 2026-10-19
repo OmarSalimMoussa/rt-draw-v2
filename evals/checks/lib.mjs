@@ -44,7 +44,7 @@ export function tempHome() {
 
 // Tokens, keys and the Claude session this check may run inside: a child that saw
 // them could make a real call, or think it's inside a Claude Code session.
-const SECRET = /^(RT_EVAL_TOKEN_|CLAUDE_CODE_|ANTHROPIC_|ELEVENLABS_|OPENROUTER_|CLAUDECODE|CLAUDE_EFFORT|CLAUDE_PID)/;
+const SECRET = /^(RT_EVAL_TOKEN_|CLAUDE_CODE_|ANTHROPIC_|ELEVENLABS_|OPENROUTER_|TYPESAFE_|CLAUDECODE|CLAUDE_EFFORT|CLAUDE_PID)/;
 /** process.env without tokens, keys or Claude session variables, plus `extra`: the env for every child a check starts. */
 export function cleanEnv(extra = {}) {
   return { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !SECRET.test(k))), ...extra };

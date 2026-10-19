@@ -10,7 +10,7 @@
 // patches.<model>, OFF by default: the model as it comes is the baseline, and a
 // patch is only turned on once it's shown to beat that. Read a patch knob with
 // patchValue(), which gives the neutral value (or undefined: don't send) when off.
-import { PROMPTS } from "./prompts.ts";
+import { PROMPTS, PROMPT_KNOB } from "./prompts.ts";
 
 export type Knob = {
   /** "part.name", e.g. "arrow.coneMaxDeg". */
@@ -36,7 +36,7 @@ const B = (key: string, value: 0 | 1, name: string, doc: string): Knob => ({ key
 /** A patch on a purpose-built model's output (see the top of this file). */
 const patch = (model: string, k: Knob, neutral?: number): Knob => ({ ...k, patches: model, neutral });
 /** Which of a role's prompt texts it is asked with (src/core/prompts.ts; 0 is the shipped text). */
-const P = (role: keyof typeof PROMPTS): Knob => K(`${role}.prompt`, 0, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
+const P = (role: keyof typeof PROMPTS): Knob => K(PROMPT_KNOB[role], 0, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
 
 export const KNOBS: Knob[] = [
   // Ink: how strokes are drawn and when a stroke is a dot.
@@ -128,6 +128,16 @@ export const KNOBS: Knob[] = [
   B("resolve.sendScreenshot", 0, "send screenshot", "on: also send the model screenshot"),
   P("resolve"),
   B("resolve.noThink", 0, "no thinking", "on: ask the API not to think (it thinks on nearly every resolver call, which delays its first text); off: the model decides"),
+  // Jev (TypeSafe AI's decision model): one yes/no per candidate shape in a single call of about 0.1 s, each a probability.
+  K("resolve.engine", 0, 0, 2, 1, "who resolves: 0 Claude (resolve.model), 1 Jev alone, 2 Jev, and Claude when Jev is unsure of a shape (resolve.jevSure)"),
+  K("resolve.jevModel", 0, 0, 1, 1, "Jev version (0 jev-1.13.0, pinned; 1 jev-latest)"),
+  K("resolve.jevMaxCandidates", 8, 1, 40, 1, "shapes Jev is asked about (each one more yes/no in the same call): the ink's hits first, then by word overlap, then every page"),
+  K("resolve.jevYes", 0.5, 0.05, 0.95, 0.05, "Jev: a shape is meant at or above this probability"),
+  K("resolve.jevSure", 0.3, 0, 0.5, 0.05, "engine 2: Jev is unsure when a shape's probability is within this of resolve.jevYes, and then Claude resolves (0: Jev always decides)"),
+  B("resolve.jevRace", 0, "race Claude", "engine 2: on: ask Claude at the same time as Jev and use its answer only when Jev is unsure (no wait for Claude after Jev, but a Claude call every send); off: ask Claude only once Jev is unsure"),
+  B("resolve.jevHints", 0, "unsure shapes as hints", "on: when Jev decided, the drawing model also gets the shapes it was unsure of, with how likely each is (at least resolve.jevHintMin)"),
+  K("resolve.jevHintMin", 0.2, 0.05, 0.9, 0.05, "the least probability a hint shape has"),
+  P("resolveJev"),
 
   // Draw: one send → ops.
   K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
@@ -143,6 +153,10 @@ export const KNOBS: Knob[] = [
   K("draw.mapMaxShapes", 0, 0, 500, 10, "the id map (on a board, the site map) lists at most this many shapes, in map order, and counts the rest (0: every shape)"),
   P("draw"),
   B("draw.noThink", 0, "no thinking", "on: ask the API not to think (thinking delays the first op); off: the model decides"),
+  B("draw.thinkRouter", 0, "Jev decides thinking", "on: Jev decides per send whether the drawing model may think (one call of about 0.1 s, alongside the resolver): a small clear edit goes without thinking; off: draw.noThink decides"),
+  K("draw.thinkYes", 0.5, 0.05, 0.95, 0.05, "with draw.thinkRouter: the drawing model may think when Jev's probability that the send needs it is at or above this"),
+  K("draw.thinkJevModel", 0, 0, 1, 1, "with draw.thinkRouter: the Jev version (0 jev-1.13.0, 1 jev-latest)"),
+  P("drawThink"),
   B("draw.fillPictures", 1, "fill pictures", "on: the picture model draws every new or changed picture (one call each), each starting as its drawing() op lands, before the send is done; off: pictures stay placeholders"),
 
   // Picture: a doodle inside a shape.

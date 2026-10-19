@@ -1,13 +1,16 @@
 // Words plus ink → the shape ids they mean ("this headline" + a loop → hero-title).
 // Two steps: plan() is free and instant (hit-test, word overlap, and the ink-first
 // rule that settles clear pointing without a model); resolve() asks a small model
-// only when the plan can't settle it.
+// only when the plan can't settle it: Claude, or Jev (one yes/no per candidate
+// shape, src/core/decide.ts), or Jev with Claude for the shapes it's unsure of
+// (resolve.engine).
 import type { TraceContext } from "./trace.ts";
 import type { HitIndex } from "./hittest.ts";
 import type { Stroke } from "./ink.ts";
 import { DEICTIC, type Word, linkInk } from "./link.ts";
 import { type Mark, type Reading, readMark } from "./marks.ts";
-import { type ModelStats, callModel, modelOf } from "./model.ts";
+import { type Decision, type YesNo, decide } from "./decide.ts";
+import { type ModelStats, callModel, jevOf, modelOf } from "./model.ts";
 import type { Scene } from "./scene.ts";
 import { pageName, pageOf, pagesOf } from "./board.ts";
 import { promptOf, thinkingOf } from "./prompts.ts";
@@ -27,12 +30,22 @@ export type Plan = {
   readings: Reading[];
   /** Shapes offered to the model: ink hits first, then by word overlap. */
   candidates: string[];
+  /** The same, as many as Jev is asked about (resolve.jevMaxCandidates). */
+  jevCandidates: string[];
   /** Set when the ink settles it with no model call. */
   inkIds?: string[];
   why: string;
   features: Record<string, number | string>;
 };
-export type Resolution = Plan & { ids: string[]; refs: Ref[]; via: "ink" | "model"; prompt?: { system: string; user: string; images: number }; reply?: string; stats?: ModelStats };
+/** Jev's part: each candidate's probability, the ones it was unsure of, and the call. */
+export type JevPart = { yes: Record<string, number | undefined>; unsure: string[]; error?: string } & Partial<Pick<Decision, "stats" | "reply" | "prompt">>;
+export type Resolution = Plan & {
+  ids: string[]; refs: Ref[]; via: "ink" | "model" | "jev"; prompt?: { system: string; user: string; images: number }; reply?: string; stats?: ModelStats;
+  /** Set when Jev was asked (resolve.engine 1 or 2), whoever decided. */
+  jev?: JevPart;
+  /** Shapes Jev was unsure of, most likely first, when it decided and resolve.jevHints is on. */
+  hints?: { id: string; p: number }[];
+};
 
 /** What a mark clearly points at, or nothing when it's not clear. */
 function clearTargets(r: Reading, plural: boolean): string[] | undefined {
@@ -61,7 +74,9 @@ export function plan(words: Word[], marks: Mark[], scene: Scene, hits: HitIndex,
   const rest = scene.stacked().map((s) => s.id).filter((id) => !fromInk.includes(id)).map((id) => ({ id, score: overlap(id) })).sort((a, b) => b.score - a.score);
   // On a board, every page is offered too: there are few, and "where you pay" may share no word with the cart page.
   const pages = pagesOf(scene).map((p) => p.id).filter((id) => !fromInk.includes(id));
-  const candidates = [...fromInk, ...rest.map((r) => r.id).filter((id) => !pages.includes(id))].slice(0, t["resolve.maxCandidates"]).concat(pages);
+  const ranked = [...fromInk, ...rest.map((r) => r.id).filter((id) => !pages.includes(id))];
+  const candidates = ranked.slice(0, t["resolve.maxCandidates"]).concat(pages);
+  const jevCandidates = ranked.slice(0, t["resolve.jevMaxCandidates"]).concat(pages);
   const features: Record<string, number | string> = { marks: marks.length, deictic: deictic.length, plural: plural ? 1 : 0, inkHits: fromInk.length, topOverlap: rest[0]?.score ?? 0, candidates: candidates.length, readings: readings.map((r) => r.how).join(" ") };
 
   // Ink first: pointing words, and every mark clearly on its shape(s).
@@ -69,22 +84,25 @@ export function plan(words: Word[], marks: Mark[], scene: Scene, hits: HitIndex,
     const clear = readings.map((r) => clearTargets(r, plural));
     if (clear.every(Boolean)) {
       const ids = [...new Set(clear.flatMap((c) => c!))];
-      return { transcript, readings, candidates, inkIds: ids, why: `ink settles it: ${readings.map((r, i) => `${r.how} → ${clear[i]!.join(", ")}`).join("; ")}, with "${deictic.join('", "')}"`, features };
+      return { transcript, readings, candidates, jevCandidates, inkIds: ids, why: `ink settles it: ${readings.map((r, i) => `${r.how} → ${clear[i]!.join(", ")}`).join("; ")}, with "${deictic.join('", "')}"`, features };
     }
     features.unclear = readings.filter((_, i) => !clear[i]).map((r) => r.how).join(" ");
   }
   const why = !marks.length ? "no ink: the words decide" : !deictic.length ? "ink but no pointing word: ask the model" : `ink not clear (${features.unclear}): ask the model`;
-  return { transcript, readings, candidates, why, features };
+  return { transcript, readings, candidates, jevCandidates, why, features };
 }
 
-/** The model's question, built from the plan. */
-export function prompt(p: Plan, scene: Scene): string {
-  const shapes = p.candidates.map((id) => {
-    const s = scene.get(id)!;
-    const { x, y, w, h } = s.box;
-    const page = s.kind === "frame" ? ` page "${pageName(s)}"` : pageOf(scene, s) ? ` on page ${pageOf(scene, s)!.id}` : "";
-    return `- ${id} (${s.kind === "frame" ? "page" : s.kind}, ${Math.round(x)} ${Math.round(y)} ${Math.round(w)} ${Math.round(h)})${page}: ${s.description}`;
-  });
+/** One candidate as the model reads it: id (kind, box) page: description. */
+function shapeLine(id: string, scene: Scene): string {
+  const s = scene.get(id)!;
+  const { x, y, w, h } = s.box;
+  const page = s.kind === "frame" ? ` page "${pageName(s)}"` : pageOf(scene, s) ? ` on page ${pageOf(scene, s)!.id}` : "";
+  return `${id} (${s.kind === "frame" ? "page" : s.kind}, ${Math.round(x)} ${Math.round(y)} ${Math.round(w)} ${Math.round(h)})${page}: ${s.description}`;
+}
+
+/** The model's question, built from the plan (Jev's request lists its own candidates). */
+export function prompt(p: Plan, scene: Scene, candidates = p.candidates): string {
+  const shapes = candidates.map((id) => `- ${shapeLine(id, scene)}`);
   const ink = p.readings.map((r, i) => {
     const what = r.how === "arrow" ? `arrow from ${r.from ?? "empty space"} to ${typeof r.to === "string" ? r.to : r.to ? `empty space at ${Math.round(r.to.x)} ${Math.round(r.to.y)}` : "?"}` : r.how === "loop" ? `loop around ${r.targets.join(", ") || "nothing"}` : r.how === "tap" ? `tap on ${r.targets[0] ?? "empty space"}` : `${r.how}${r.targets.length ? ` over ${r.targets.join(", ")}` : ""}${r.inside ? ` inside ${r.inside}` : ""}`;
     return `[ink ${i + 1}] ${what}`;
@@ -113,6 +131,37 @@ export function parseReply(reply: string, scene: Scene): { refs: Ref[]; dropped:
 export async function resolve(words: Word[], strokes: Stroke[], marks: Mark[], scene: Scene, hits: HitIndex, t: Tuning, from = "resolve", parent?: TraceContext): Promise<Resolution> {
   const p = plan(words, marks, scene, hits, t);
   if (p.inkIds) return { ...p, ids: p.inkIds, refs: [{ phrase: "(ink)", ids: p.inkIds }], via: "ink" };
+  const engine = Math.round(t["resolve.engine"]);
+  if (engine !== 1 && engine !== 2) return askClaude(p, strokes, scene, t, from, parent);
+  // Racing: Claude starts now, and its answer is only used if Jev turns out unsure.
+  const raced = engine === 2 && t["resolve.jevRace"] ? askClaude(p, strokes, scene, t, from, parent) : undefined;
+  const jev = await askJev(p, scene, t, `${from}-jev`, parent);
+  const features = { ...p.features, engine, jevShapes: p.jevCandidates.length, jevUnsure: jev.unsure.length, jevMs: jev.stats?.ms ?? 0, jevError: jev.error ? 1 : 0 };
+  // Jev failed, or (engine 2) was unsure of a shape: Claude decides.
+  if (jev.error || (engine === 2 && jev.unsure.length)) {
+    const c = await (raced ?? askClaude(p, strokes, scene, t, from, parent));
+    return { ...c, jev, features: { ...c.features, ...features } };
+  }
+  raced?.catch(() => {});
+  const ids = p.jevCandidates.filter((id) => (jev.yes[id] ?? 0) >= t["resolve.jevYes"]);
+  const hints = t["resolve.jevHints"] ? jev.unsure.filter((id) => !ids.includes(id) && (jev.yes[id] ?? 0) >= t["resolve.jevHintMin"]).map((id) => ({ id, p: jev.yes[id]! })).sort((a, b) => b.p - a.p) : undefined;
+  return { ...p, ids, refs: ids.length ? [{ phrase: "(their words and ink)", ids }] : [], via: "jev", jev, hints, prompt: { system: "", user: jev.prompt!.user, images: 0 }, reply: jev.reply, stats: jev.stats, features: { ...features, refs: ids.length ? 1 : 0, droppedIds: 0 } };
+}
+
+/** Jev's yes/no per candidate; a failed call comes back as its error (Claude then decides). */
+async function askJev(p: Plan, scene: Scene, t: Tuning, from: string, parent?: TraceContext): Promise<JevPart> {
+  const v = promptOf("resolveJev", t);
+  const questions: Record<string, YesNo> = Object.fromEntries(p.jevCandidates.map((id) => [id, { type: "noul", instructions: v.question(shapeLine(id, scene)), criteria: { yes: v.yes, no: v.no } }]));
+  try {
+    const d = await decide(jevOf(t["resolve.jevModel"]), { task: v.task, request: prompt(p, scene, p.jevCandidates) }, questions, from, parent);
+    const unsure = p.jevCandidates.filter((id) => d.yes[id] === undefined || Math.abs(d.yes[id]! - t["resolve.jevYes"]) < t["resolve.jevSure"]);
+    return { yes: d.yes, unsure, stats: d.stats, reply: d.reply, prompt: d.prompt };
+  } catch (err) {
+    return { yes: {}, unsure: [...p.jevCandidates], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function askClaude(p: Plan, strokes: Stroke[], scene: Scene, t: Tuning, from: string, parent?: TraceContext): Promise<Resolution> {
   const user = prompt(p, scene);
   const images = t["resolve.sendScreenshot"] ? [(await takeShot(scene, strokes, t)).dataUrl] : [];
   const system = promptOf("resolve", t).system;

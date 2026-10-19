@@ -9,7 +9,7 @@ import type { RunMode } from "./gateway.ts";
 import type { SlotN } from "./tokens.ts";
 
 let gatewayUrl = process.env.RT_GATEWAY_URL;
-const SECRET = /^(RT_EVAL_TOKEN_|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_|ELEVENLABS_|OPENROUTER_)/;
+const SECRET = /^(RT_EVAL_TOKEN_|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_|ELEVENLABS_|OPENROUTER_|TYPESAFE_)/;
 
 export type GatewayOpts = {
   home?: string; port?: number;
