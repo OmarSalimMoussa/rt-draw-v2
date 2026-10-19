@@ -37,7 +37,7 @@ import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, t
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
-import { DRIVE_VIEW, LOOP, configId } from "./config.ts";
+import { DRIVE_VIEW, LOOP, REVIEW, configId } from "./config.ts";
 import { type ScanResult, compareCase, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
 import { closedPort } from "./gateway.ts";
@@ -68,6 +68,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
+       [--review-decisions n] [--review-minutes m] [--review-usd x] [--review-checkpoint 0|1]   (stops for the owner; 0 is off)
   status                               remetric <run>                       gc --trees
   packets <run>… (frames the changes a run's after captures missed, 0 calls)`;
 const CO_AUTHOR = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
@@ -1047,6 +1048,11 @@ const nextEpoch = () => Math.max(0, ...historyRows("epochs.jsonl").map((e) => e.
 let readyAtStart = false;
 let diskAtStart: { at: number; gb: number } | undefined;
 let nightWindows: number = LOOP.nightWindows;
+/** This leg of the loop (since it last started or resumed) and its review stops (config.ts' REVIEW). */
+let leg = { start: Date.now() };
+let review: Record<keyof typeof REVIEW, number> = { ...REVIEW };
+/** $ a meter line spent: an agent session's cost, an upstream call's list $ (a follower and a replay pay nothing). */
+const paidUsd = (l: ReturnType<typeof readMeter>[number]) => ("agent" in l ? l.totalCostUsd : l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0);
 type SlotStatus = { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; resetsAt?: number; status?: string; usdThisWindow: number; windowUsd: number; usd7d: number; why?: string };
 
 async function facts(gw: string, st: State, error?: string): Promise<Facts> {
@@ -1054,7 +1060,8 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   const W = s.slots.reduce((a, x) => a + x.windowUsd, 0) / s.slots.length;
   const nightStart = Date.parse(st.nightStart);
   const lines = readMeter(paths().calls);
-  const nightUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < nightStart ? 0 : "agent" in l ? l.totalCostUsd : l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0), 0);
+  const nightUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < nightStart ? 0 : paidUsd(l)), 0);
+  const legUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < leg.start ? 0 : paidUsd(l)), 0);
   const fs = statfsSync(paths().home);
   const gb = (fs.bavail * fs.bsize) / 1e9;
   diskAtStart ??= { at: Date.now(), gb };
@@ -1063,6 +1070,8 @@ async function facts(gw: string, st: State, error?: string): Promise<Facts> {
     now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
     blocked: st.blocked, emptyEpochs: st.emptyEpochs ?? 0, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
     daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
+    leg: { start: leg.start, usd: legUsd, decisions: st.recent.filter((d) => Date.parse(d.at) >= leg.start).length, checkpoints: historyRows("checkpoints.jsonl").filter((c) => Date.parse(c.at) >= leg.start).length },
+    review,
   };
 }
 
@@ -1076,12 +1085,39 @@ async function halt(gw: string, st: State, error?: string): Promise<boolean> {
     if (noted.length) commitHistory(`owner list: ${noted.map((a) => a.why).join("; ").slice(0, 100)}`);
     const stop = acts.find((a) => a.do === "stop");
     if (stop) return say(`loop: STOP: ${stop.why}`), true;
+    const look = acts.find((a) => a.do === "review");
+    if (look) return reviewStop(st, look.why), true;
     const pauses = acts.filter((a) => a.do === "pause");
     if (!pauses.length) return false;
     const until = Math.max(...pauses.map((a) => a.until!));
     say(`loop: pause until ${new Date(until).toISOString()}: ${pauses.map((a) => a.why).join("; ")}`);
     await sleep(Math.max(1000, until - Date.now()));
   }
+}
+
+/** A review stop: what this leg decided and spent, where to look, how to go on; $RT_EVAL_HOME/review.json for a watcher. */
+function reviewStop(st: State, why: string) {
+  const p = paths();
+  const rows = new Map(historyRows("decisions.jsonl").map((d) => [d.id, d]));
+  const decided = st.recent.filter((d) => Date.parse(d.at) >= leg.start).map((d) => {
+    const row = rows.get(d.id);
+    return { id: d.id, verdict: d.verdict, component: d.component, change: row?.card?.change, why: row?.reasons.slice(0, 2), ttfc: row?.latency.ttfc, listUsd: row?.cost.listUsd };
+  });
+  const checkpoints = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).filter((c) => Date.parse(c.at) >= leg.start).map((c) => ({ id: c.id, trust: c.trust, share: c.share.all?.share, ttfc: c.latency.ratioTtfc }));
+  const lines = readMeter(p.calls).filter((l) => Date.parse(l.at) >= leg.start);
+  const usd = lines.reduce((a, l) => a + paidUsd(l), 0);
+  const agentUsd = lines.reduce((a, l) => a + ("agent" in l ? l.totalCostUsd : 0), 0);
+  const calls = lines.filter((l) => !("agent" in l) && l.mode === "live" && l.shared !== "follower").length;
+  const byRole = Object.entries(rollup(lines, (l) => l.role)).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([role, r]) => `${role} $${r.usd.toFixed(2)}`);
+  const minutes = (Date.now() - leg.start) / 60_000;
+  const resume = "bash evals/loop/launch.sh loop --resume [--review-decisions n] [--review-minutes m] [--review-usd x] [--review-checkpoint 0|1]";
+  put(join(p.home, "review.json"), { at: new Date().toISOString(), why, epoch: st.epoch, champion: championSha(), minutes, calls, listUsd: usd, agentUsd, byRole, decided, checkpoints, cardsLeft: st.cards.filter((c) => c.status !== "done" && c.status !== "dropped").map((c) => c.id), queue: st.queue.map((c) => c.id), resume });
+  say(`loop: REVIEW STOP: ${why}`);
+  say(`  this leg: ${minutes.toFixed(0)} min, ${calls} calls, $${usd.toFixed(2)} list (agents $${agentUsd.toFixed(2)}); ${byRole.join(", ") || "nothing spent"}`);
+  for (const d of decided) say(`  ${d.id} ${d.verdict}: ${d.change ?? d.component}${d.why?.length ? ` (${d.why.join("; ")})` : ""}`);
+  for (const c of checkpoints) say(`  ${c.id}: trust ${c.trust}, share ${c.share?.toFixed(2) ?? "?"}`);
+  say(`  look: /evals/progress/, ${p.home}/review.json, ${p.home}/logs/; go on: ${resume}`);
+  commitHistory(`review stop: ${why.slice(0, 80)}`);
 }
 
 /** ≤ 3 cards: queued seed cards first, else digests → analyst → critic (§8.2). */
@@ -1185,7 +1221,7 @@ async function epoch(gw: string, st: State): Promise<boolean> {
       }
     }
     // Here, not only after a decision: a resumed epoch owes the checkpoint a stop just before it skipped.
-    if (!stopped && st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps) ck = await loopCheckpoint(gw, st);
+    if (!stopped && st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps && !(stopped = await halt(gw, st))) ck = await loopCheckpoint(gw, st);
   }
   await Promise.allSettled(built);
   if (stopped) return false;
@@ -1265,13 +1301,17 @@ async function loop() {
     } else if (Date.now() - Date.parse(st.nightStart) >= DAY) st.nightStart = new Date().toISOString();
     saveState(st);
     nightWindows = num("night-windows") ?? LOOP.nightWindows;
+    leg = { start: Date.now() };
+    review = Object.fromEntries(Object.entries(REVIEW).map(([k, v]) => [k, num(`review-${k}`) ?? v])) as typeof review;
+    for (const [k, v] of Object.entries(review)) if (!(Number.isFinite(v) && v >= 0)) throw new Error(`--review-${k} takes a number ≥ 0 (0 is off)`);
     readyAtStart = readyOk();
-    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, night cap ${nightWindows} windows`);
+    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, night cap ${nightWindows} windows, review stops ${Object.entries(review).map(([k, v]) => `${k} ${v || "off"}`).join(", ")}`);
     await withGateway(async (gw) => {
       let finished = true;
       while (st.until === undefined || st.epoch <= st.until) {
         if (await halt(gw, st)) return void (finished = false);
-        if (!st.cards.length) await between(gw, st);
+        // An owner step's checkpoint, a refresh or the canary may have spent this leg's review: look before the next epoch.
+        if (!st.cards.length && ((await between(gw, st)), await halt(gw, st))) return void (finished = false);
         if (!(await epoch(gw, st))) return void (finished = false);
       }
       if (finished && st.keepsSinceCheckpoint > 0) await loopCheckpoint(gw, st);

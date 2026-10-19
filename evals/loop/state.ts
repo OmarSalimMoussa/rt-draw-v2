@@ -120,8 +120,12 @@ export type Facts = {
   /** When product calls failed as overloaded (529). */
   overloads: number[];
   diskGb: number; daysLeft?: number; onAC?: boolean;
+  /** This leg (the loop since it last started or resumed): when, list $ spent, decisions and checkpoints made. */
+  leg?: { start: number; usd: number; decisions: number; checkpoints: number };
+  /** The review stops for this leg (config.ts' REVIEW, or --review-*); 0 is off. */
+  review?: { decisions: number; minutes: number; usd: number; checkpoint: number };
 };
-export type Action = { do: "stop" | "pause" | "owner" | "skip"; why: string; until?: number; component?: string };
+export type Action = { do: "stop" | "pause" | "owner" | "skip" | "review"; why: string; until?: number; component?: string };
 
 /** Every rule of §6.7 that fires on these facts (none: carry on). Pauses carry the time to look again. */
 export function rules(f: Facts): Action[] {
@@ -154,5 +158,17 @@ export function rules(f: Facts): Action[] {
   if (f.diskGb < LOOP.diskPauseGb) out.push({ do: "pause", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskPauseGb}`, until: f.now + RULES.recheckMs });
   if (f.diskGb < LOOP.diskOwnerGb) out.push({ do: "owner", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskOwnerGb}${f.daysLeft !== undefined ? `, ~${f.daysLeft.toFixed(1)} days left at this pace` : ""}` });
   if (f.onAC === false) out.push({ do: "pause", why: "on battery: new cases wait for AC", until: f.now + RULES.recheckMs });
+  // Review stops: the owner looks before the loop goes on (a stop above says why first).
+  if (f.leg && f.review) {
+    const { leg, review: r } = f;
+    const min = (f.now - leg.start) / 60_000;
+    const hit = [
+      r.decisions > 0 && leg.decisions >= r.decisions && `${leg.decisions} decisions (review every ${r.decisions})`,
+      r.minutes > 0 && min >= r.minutes && `${Math.round(min)} min (review every ${r.minutes})`,
+      r.usd > 0 && leg.usd >= r.usd && `$${leg.usd.toFixed(2)} list spent (review every $${r.usd})`,
+      r.checkpoint > 0 && leg.checkpoints > 0 && `${leg.checkpoints} checkpoint${leg.checkpoints > 1 ? "s" : ""} ran`,
+    ].filter(Boolean);
+    if (hit.length) out.push({ do: "review", why: `review stop: ${hit.join(", ")} since this leg started` });
+  }
   return out;
 }

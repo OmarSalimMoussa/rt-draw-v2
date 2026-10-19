@@ -84,5 +84,13 @@ export function sha256(text: string): string {
   return h.map((x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
 }
 
+/**
+ * Review stops, while the harness is young: the loop stops cleanly at the first of these since it (re)started, says what
+ * that leg did and spent, and `loop --resume` goes on (`--review-<name> n` sets one for a leg, 0 turns it off). Checked
+ * before each decision, epoch and checkpoint, so a leg can overshoot by the decision or checkpoint in flight. Not in
+ * configId: they decide when the owner looks, not what is measured.
+ */
+export const REVIEW = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1 };
+
 /** Logged on every decision and checkpoint: a change to LOOP or DRIVE_VIEW changes it. */
 export const configId = sha256(JSON.stringify({ LOOP, DRIVE_VIEW }));
