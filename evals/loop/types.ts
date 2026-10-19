@@ -219,4 +219,5 @@ export type HypothesisCard = { id: string; component: string /* "resolve" | "dra
   predicts: string; overuseDetector?: string /* a detector name from patterns.ts' OVERUSE, §1.4 item 8 */;
   targets?: { asks?: AskType[]; beats?: BeatId[] } /* the cases the card is for; the over-use rate is read off the rest */;
   generality?: string /* new ops */;
-  isPatch: boolean; raisesCost: boolean; touchesFrozen: boolean; risk: string; files: string[] };
+  isPatch: boolean; raisesCost: boolean; touchesFrozen: boolean; risk: string; files: string[];
+  /** rte decide --owner-ok: the owner's say-so on findings that are the owner's call (G0 waives them; a reject stands) */ ownerOk?: boolean };

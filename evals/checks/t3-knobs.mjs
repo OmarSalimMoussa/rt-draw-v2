@@ -33,8 +33,11 @@ const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "pict
   "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0, "draw.copies": 1, "draw.copyAfterMs": 0, "picture.copies": 1, "picture.copyAfterMs": 0 };
 // Defaults the owner changed since T3 (decisions on eval/history), at their T3-time values: the comparisons with the code
 // before T3 run under these, since they're about T3's refactor, not later decisions.
-const T3_TIME = { "resolve.noThink": 0 };
-const OWNER_DEFAULTS = { "resolve.noThink": 1 }; // 2026-10-19: e2-h1, the resolver answers without thinking (TTFC ×0.66)
+const T3_TIME = { "resolve.noThink": 0, "picture.maxPaths": 24 };
+const OWNER_DEFAULTS = {
+  "resolve.noThink": 1, // 2026-10-19: e2-h1, the resolver answers without thinking (TTFC ×0.66)
+  "picture.maxPaths": 16, // 2026-10-19: e45-h1, doodles at most 16 elements (TTD ×0.965, $ ×0.94)
+};
 for (const [key, value] of Object.entries({ ...NEW, ...OWNER_DEFAULTS })) {
   const k = KNOBS.find((x) => x.key === key);
   if (!check(k, `no knob ${key}`)) continue;
@@ -45,7 +48,7 @@ for (const [key, value] of Object.entries({ ...NEW, ...OWNER_DEFAULTS })) {
   if (key.endsWith(".noThink")) check(k.max === 1 && k.name, `${key} isn't an on/off knob`);
 }
 check(PROMPTS.picture.length >= 2, "no picture variant 1");
-check(isDeepStrictEqual(KNOBS.filter((k) => !(k.key in NEW)), old.KNOBS), "a knob from before T3 changed (patches.* included), or one was added beyond the new ones");
+check(isDeepStrictEqual(KNOBS.filter((k) => !(k.key in NEW)).map((k) => (k.key in T3_TIME ? { ...k, value: T3_TIME[k.key] } : k)), old.KNOBS), "a knob from before T3 changed (patches.* included, owner defaults at their T3-time values), or one was added beyond the new ones");
 
 // ---- A Vite serving today's src and, at /src/core/__base__/<f>.ts, the five modules as they were (their other imports are today's).
 const BASE = join(ROOT, "src/core/__base__");
