@@ -979,7 +979,9 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     }
     // The whole path's measuring against its class budget per case (§6.7): void, harness suspect.
     const measured = [...result.rows, ...(result.heldout ?? []), ...(result.continuation ?? [])].filter((r) => !r.void).length + (result.topUps ?? 0);
-    const over = result.overrun ?? (d.verdict === "void" ? undefined : overBy(d.class, measured, rig.slots));
+    // A no-effect card (class N) ends at the scan and its timed replay, both a fixed size: its $0 a case budget is for
+    // the decision past them, so the timed replay's live calls (a champion whose prompts the bank doesn't hold) don't overrun it.
+    const over = result.overrun ?? (d.verdict === "void" || d.class === "N" ? undefined : overBy(d.class, measured, rig.slots));
     if (over && !result.overrun) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
     record(d, at, { ...result, decision: d }, owner);
     const done = settle({ id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: !!over, v9 });
