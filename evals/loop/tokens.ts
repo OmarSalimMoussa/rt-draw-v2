@@ -123,8 +123,10 @@ export class Slots {
     for (const h of Object.keys(s.hours)) if (Number(h) < now - WEEK) delete s.hours[h];
     const r = o.rateLimit;
     if (r) {
-      // The CLI sends allowed_warning at ≥ 90%: the first one tells this account's window size.
-      if (r.status === "allowed_warning" && !s.calibrated && s.usdWindow > 0) Object.assign(s, { W: s.usdWindow / LOOP.rotateAt, calibrated: true });
+      // The CLI sends allowed_warning at ≥ 90% of any window: the first one the five-hour window sent tells this account's
+      // window size. A warning with the five-hour reading under 90% (or none, the week's past 90%) is another window's.
+      const fiveHourWarns = r.fiveHour !== undefined ? r.fiveHour >= LOOP.rotateAt : (r.sevenDay ?? 0) < LOOP.rotateAt;
+      if (r.status === "allowed_warning" && fiveHourWarns && !s.calibrated && s.usdWindow > 0) Object.assign(s, { W: s.usdWindow / LOOP.rotateAt, calibrated: true });
       Object.assign(s, { status: r.status, fiveHour: r.fiveHour ?? s.fiveHour, sevenDay: r.sevenDay ?? s.sevenDay });
       if (r.sevenDay !== undefined) s.sevenDayAt = now;
       if (r.resetsAt) Object.assign(s, { resetsAt: r.resetsAt, windowStart: Math.min(s.windowStart, r.resetsAt * 1000 - FIVE_H) });
