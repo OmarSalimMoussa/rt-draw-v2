@@ -65,7 +65,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
   aa --shared --cases n                bench freeze                         human freeze
-  checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--variant 2] | --fake-labels (a dry run)
+  checkpoint [--zero] --cap n          calib --contrast k=v --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
   status                               remetric <run>                       gc --trees
@@ -666,7 +666,8 @@ async function calib() {
   if (o.f.check) {
     const variant = num("variant") === 2 ? 2 : 1;
     if (variant === 2) needCap("calib --check --variant 2");
-    const r = await withGateway(() => checkCalibration(variant), variant === 1);
+    // Variant 1 reads the runs' own verdicts (0 calls), except those set aside for framed images (judge/blind/): with --cap it judges them again.
+    const r = await withGateway(() => checkCalibration(variant), variant === 1 && o.cap === undefined);
     historyAdd("health.jsonl", r.health);
     commitHistory(`calibration: ${r.outcome} (variant ${variant})`);
     say(`calib: ${r.outcome}; fidelity ${r.fidelity.clear.score} of ${r.fidelity.clear.n} clear, craft ${r.craft.score} of ${r.craft.n}${r.outcome === "variant-2" ? "; next: calib --check --variant 2 --cap 150" : ""}`);
