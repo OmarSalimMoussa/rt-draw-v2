@@ -31,7 +31,11 @@ const old = await import(pathToFileURL(join(home, "tuning-before.ts")).href);
 const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "picture.prompt": 0, "draw.noThink": 0, "resolve.noThink": 0, "picture.noThink": 0, "draw.mapMaxShapes": 0, "picture.timeoutMs": 120000,
   "resolve.engine": 0, "resolve.jevModel": 0, "resolve.jevMaxCandidates": 8, "resolve.jevYes": 0.5, "resolve.jevSure": 0.3, "resolve.jevRace": 0, "resolve.jevHints": 0, "resolve.jevHintMin": 0.2, "resolve.jevPrompt": 0,
   "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0 };
-for (const [key, value] of Object.entries(NEW)) {
+// Defaults the owner changed since T3 (decisions on eval/history), at their T3-time values: the comparisons with the code
+// before T3 run under these, since they're about T3's refactor, not later decisions.
+const T3_TIME = { "resolve.noThink": 0 };
+const OWNER_DEFAULTS = { "resolve.noThink": 1 }; // 2026-10-19: e2-h1, the resolver answers without thinking (TTFC ×0.66)
+for (const [key, value] of Object.entries({ ...NEW, ...OWNER_DEFAULTS })) {
   const k = KNOBS.find((x) => x.key === key);
   if (!check(k, `no knob ${key}`)) continue;
   const part = key.split(".")[0];
@@ -184,7 +188,7 @@ for (const [role, same] of Object.entries(texts)) check(same, `${role}: variant 
 const FIXTURES = ["toyshop-home", "clowns", "messy", "grid"];
 for (const id of FIXTURES) {
   const was = await run(`send("was", ${js(id)})`);
-  const now = await run(`send("now", ${js(id)})`);
+  const now = await run(`send("now", ${js(id)}, ${js(T3_TIME)})`);
   const shas = (r) => r.requests.map((q) => `${q.from} ${q.sha}`).sort();
   check(now.prompt === was.prompt && isDeepStrictEqual(now.features, was.features), `${id}: buildPrompt's text differs from before T3`);
   check(isDeepStrictEqual(shas(now), shas(was)), `${id}: requests differ from before T3 (before: ${shas(was).filter((s) => !shas(now).includes(s)).map((s) => s.split(" ")[0])}; now: ${shas(now).filter((s) => !shas(was).includes(s)).map((s) => s.split(" ")[0])})`);
@@ -195,12 +199,12 @@ for (const id of FIXTURES) {
 }
 // The canvas (no camera) and describe one shape per call: the other texts, the same way.
 const wasCanvas = await run(`send("was", "clowns", { "describe.batch": 0, "draw.gridCellPx": 40 }, { canvas: true })`);
-const nowCanvas = await run(`send("now", "clowns", { "describe.batch": 0, "draw.gridCellPx": 40 }, { canvas: true })`);
+const nowCanvas = await run(`send("now", "clowns", ${js({ ...T3_TIME, "describe.batch": 0, "draw.gridCellPx": 40 })}, { canvas: true })`);
 check(nowCanvas.prompt === wasCanvas.prompt && isDeepStrictEqual(nowCanvas.requests.map((q) => q.sha).sort(), wasCanvas.requests.map((q) => q.sha).sort()), "on a canvas with one shape per describe call, the prompt or requests differ from before T3");
 
 // ---- <role>.noThink = 1 sets thinking "off" on that role's requests (and its warm-up) and on no other.
 for (const [role, froms] of [["draw", ["draw"]], ["resolve", ["draw-refs"]], ["picture", ["picture", "warm"]]]) {
-  const r = await run(`send("now", "grid", { "${role}.noThink": 1 }, { noDescribe: true })`);
+  const r = await run(`send("now", "grid", ${js({ ...T3_TIME, [`${role}.noThink`]: 1 })}, { noDescribe: true })`);
   const bad = r.requests.filter((q) => (froms.includes(q.from) ? q.thinking !== "off" : q.thinking !== null));
   check(!bad.length && froms.every((f) => r.requests.some((q) => q.from === f)), `${role}.noThink=1: thinking wrong on ${bad.map((q) => `${q.from}=${q.thinking}`)}`);
 }

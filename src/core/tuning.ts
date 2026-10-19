@@ -127,7 +127,7 @@ export const KNOBS: Knob[] = [
   B("resolve.inkFirst", 0, "ink-only shortcut", "on: when every mark clearly points at its shapes (tap, loop, arrow) and you said this/that/these, use those shapes without asking the model; off: always ask the model"),
   B("resolve.sendScreenshot", 0, "send screenshot", "on: also send the model screenshot"),
   P("resolve"),
-  B("resolve.noThink", 0, "no thinking", "on: ask the API not to think (it thinks on nearly every resolver call, which delays its first text); off: the model decides"),
+  B("resolve.noThink", 1, "no thinking", "on: ask the API not to think (it thinks on nearly every resolver call, which delays its first text); off: the model decides"),
   // Jev (TypeSafe AI's decision model): one yes/no per candidate shape in a single call of about 0.1 s, each a probability.
   K("resolve.engine", 0, 0, 2, 1, "who resolves: 0 Claude (resolve.model), 1 Jev alone, 2 Jev, and Claude when Jev is unsure of a shape (resolve.jevSure)"),
   K("resolve.jevModel", 0, 0, 1, 1, "Jev version (0 jev-1.13.0, pinned; 1 jev-latest)"),
