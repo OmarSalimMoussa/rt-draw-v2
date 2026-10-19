@@ -44,6 +44,9 @@ export type ModelStats = {
   rateLimit?: { status: string; fiveHour?: number; sevenDay?: number; resetsAt?: number };
   /** How the call was made: transport, thinking, caching, limits (dev/model-plugin.ts). */
   settings?: Record<string, string | number>;
+  /** With copies: how many went out, and which one this answer is (1 is the first sent). */
+  copies?: number;
+  won?: number;
   error?: string;
 };
 
@@ -61,6 +64,15 @@ export type ModelRequest = {
   effort?: Effort;
   /** "off" asks the API not to think; default "auto" (the model's own choice). */
   thinking?: "auto" | "off";
+  /**
+   * Copies of this call sent for one answer (draw.copies, picture.copies). The API's wait before the first text varies
+   * from call to call, so the first copy to stream text (or to end) is the answer and the others are dropped. Default 1.
+   */
+  copies?: number;
+  /** With copies: a copy after the first goes out only when no text has come this long (ms). Default 0: all at once. */
+  copyAfterMs?: number;
+  /** Sent, not set: this call is copy n (2 or more) of one answer, so the eval's gateway serves it as a fresh call. */
+  copy?: number;
 };
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -81,17 +93,17 @@ const changed = () => window.dispatchEvent(new Event(CALLS_EVENT));
 
 export async function callModel(req: ModelRequest, onText?: (chunk: string, soFar: string) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ text: string; stats: ModelStats }> {
   return span(`model call · ${req.from ?? "?"} · ${req.model}`, parent, async (ctx, s) => {
-    const t0 = performance.now();
     let first = true;
-    const out = await record(req, (chunk, soFar) => {
+    const out = await race(req, (chunk, soFar) => {
       if (first) mark(ctx, "first text");
       first = false;
       onText?.(chunk, soFar);
     }, signal);
     const st = out.stats;
-    s.setAttributes({ model: st.modelId ?? req.model, inTokens: (st.inTokens ?? 0) + (st.cacheRead ?? 0) + (st.cacheWrite ?? 0), outTokens: st.outTokens ?? 0, cacheRead: st.cacheRead ?? 0, warm: !!st.warm });
+    s.setAttributes({ model: st.modelId ?? req.model, inTokens: (st.inTokens ?? 0) + (st.cacheRead ?? 0) + (st.cacheWrite ?? 0), outTokens: st.outTokens ?? 0, cacheRead: st.cacheRead ?? 0, warm: !!st.warm, copies: st.copies ?? 1 });
     // The server's phases, measured there (from when it got the request): process, the model's wait, streaming.
-    // Clamped to this call, since the server's clock starts a little after ours.
+    // Clamped to this call, since the server's clock starts a little after ours. A copy's start when it was the answer.
+    const t0 = out.sentAt;
     const end = performance.now();
     const at = (ms?: number) => Math.min(end, t0 + (ms ?? 0));
     // A Jev call has no process: no wait.
@@ -101,6 +113,60 @@ export async function callModel(req: ModelRequest, onText?: (chunk: string, soFa
     timed(ctx, "network and server overhead", at(st.ms), end);
     return out;
   }, { from: req.from ?? "?", model: req.model, images: req.images?.length ?? 0, chars: req.system.length + req.user.length });
+}
+
+/**
+ * req.copies calls for one answer: the first to stream text, or to end, is it, and the others are dropped (each copy is
+ * its own entry in the Model calls drawer). Copies after the first go out after copyAfterMs with no text yet; a copy
+ * that fails before any text sends the next one at once. One copy is a plain call.
+ */
+function race(req: ModelRequest, onText: (chunk: string, soFar: string) => void, signal?: AbortSignal): Promise<{ text: string; stats: ModelStats; sentAt: number }> {
+  const { copies = 1, copyAfterMs = 0, ...one } = req;
+  const n = Math.max(1, Math.round(copies));
+  if (n === 1) {
+    const sentAt = performance.now();
+    return record(one, onText, signal).then((out) => ({ ...out, sentAt }));
+  }
+  return new Promise((resolve, reject) => {
+    const drops: AbortController[] = [];
+    const errors: unknown[] = [];
+    let won = -1, sent = 0, live = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const win = (i: number) => {
+      if (won >= 0) return;
+      won = i;
+      clearTimeout(timer);
+      drops.forEach((d, k) => k !== i && d.abort(new Error("dropped: another copy answered first")));
+    };
+    const next = () => {
+      clearTimeout(timer);
+      if (won >= 0 || sent >= n || signal?.aborted) return;
+      const i = sent++;
+      const sentAt = performance.now();
+      const drop = (drops[i] = new AbortController());
+      live++;
+      record(i ? { ...one, copy: i + 1 } : one, (chunk, soFar) => {
+        win(i);
+        if (won === i) onText(chunk, soFar);
+      }, signal ? AbortSignal.any([signal, drop.signal]) : drop.signal).then(
+        (out) => {
+          live--;
+          win(i);
+          if (won === i) resolve({ ...out, stats: { ...out.stats, copies: sent, won: i + 1 }, sentAt });
+        },
+        (err) => {
+          live--;
+          if (won === i) return reject(err);
+          if (won >= 0) return;
+          errors.push(err);
+          next();
+          if (!live) reject(errors[0]);
+        },
+      );
+      if (sent < n) copyAfterMs > 0 ? (timer = setTimeout(next, copyAfterMs)) : next();
+    };
+    next();
+  });
 }
 
 async function record(req: ModelRequest, onText: (chunk: string, soFar: string) => void, signal?: AbortSignal): Promise<{ text: string; stats: ModelStats }> {

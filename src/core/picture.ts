@@ -159,7 +159,7 @@ export async function drawPicture(subject: string, w: number, h: number, t: Tuni
   // A stuck call gives up after picture.timeoutMs: its shape stays a placeholder and the send can end.
   const timeout = AbortSignal.timeout(t["picture.timeoutMs"]);
   const { text, stats } = await callModel(
-    { model: modelOf(t["picture.model"]), system: prompt.system(t), user: prompt.user(subject, w, h, t), from: "picture", warm: t["picture.parallel"], ...thinkingOf("picture", t) },
+    { model: modelOf(t["picture.model"]), system: prompt.system(t), user: prompt.user(subject, w, h, t), from: "picture", warm: t["picture.parallel"] * t["picture.copies"], copies: t["picture.copies"], copyAfterMs: t["picture.copyAfterMs"], ...thinkingOf("picture", t) },
     (_chunk, soFar) => {
       const { els } = readPicture(soFar, subject, w, h, t);
       if (els.length > shown) {
@@ -241,7 +241,7 @@ export type PictureFiller = {
 export function pictureFiller(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext): PictureFiller {
   const model = modelOf(t["picture.model"]);
   // With the system prompt and thinking the picture calls will use: a process started with others can't serve them.
-  warmModel(model, promptOf("picture", t).system(t), t["picture.parallel"], thinkingOf("picture", t));
+  warmModel(model, promptOf("picture", t).system(t), t["picture.parallel"] * t["picture.copies"], thinkingOf("picture", t));
   const t0 = performance.now();
   /** Shape id and subject of every picture started this send. */
   const started = new Set<string>();

@@ -31,7 +31,7 @@ import { inFactorySlice, managedSettingsHash, onAC, quiet, sampleLoad } from "./
 import { type MeterCall, readMeter } from "./meter.ts";
 import { type Paths, paths } from "./paths.ts";
 import { serveArm } from "./servers.ts";
-import { RESOLVER_DELAY_MS, type Stubs, fakeApiReplies, serveStubs, stubPictures, stubReply } from "./stubs.ts";
+import { DRAW_DELAY_MS, type Stubs, fakeApiReplies, serveStubs, stubPictures, stubReply } from "./stubs.ts";
 import { type SlotN, Slots } from "./tokens.ts";
 import { evalsHash, treeOf } from "./trees.ts";
 import type { RecordedReply, SceneJSON, SendOutcome } from "./types.ts";
@@ -68,7 +68,7 @@ const SESSION_VARS = /^(CLAUDECODE|CLAUDE_CODE_SESSION|CLAUDE_CODE_MESSAGING|CLA
 const IMPURE = /system-reminder|additionalContext|userEmail|@[a-z0-9-]+\.[a-z]/i;
 /** The probe calls' system prompts (the driver's is its real one). */
 const SYS = { draw: "rt readiness probe: the drawing model", judge: "rt readiness probe: a judge", expectation: "rt readiness probe: the expectation" };
-/** "make the nav pink", spoken: the resolver is asked (no ink), and the canned drawing reply recolours the nav. */
+/** "make the nav pink", spoken (no ink): the canned drawing reply recolours the nav. */
 const SPOKEN = [["make", 0, 180], ["the", 200, 300], ["nav", 320, 520], ["pink", 560, 800]].map(([word, t0, t1]) => ({ word, t0, t1 }));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -408,7 +408,7 @@ function pagesOk(pg: Pages) {
     if (!s.shapes || s.variance <= BLANK_VARIANCE) why.push(`${tag}: capture blank (variance ${s.variance.toFixed(1)}, ${s.shapes} shapes)`);
     if (s.recolourPictures) why.push(`${tag}: a recolour send made ${s.recolourPictures} picture calls`);
     const ttfc = s.recolour.timing.ttfcMs;
-    if (!(ttfc !== undefined && ttfc > RESOLVER_DELAY_MS)) why.push(`${tag}: recolour TTFC ${ttfc} ms (want > the resolver's ${RESOLVER_DELAY_MS} ms)`);
+    if (!(ttfc !== undefined && ttfc > DRAW_DELAY_MS)) why.push(`${tag}: recolour TTFC ${ttfc} ms (want > the drawing stub's ${DRAW_DELAY_MS} ms)`);
     const failed = [s.recolour, s.driven].flatMap((x) => [x.error, ...x.ops.filter((op) => !op.ok).map((op) => op.error ?? op.line)]).filter(Boolean);
     if (failed.length) why.push(`${tag}: a send failed (${failed[0]})`);
     if (s.errors.length) why.push(`${tag}: page error ${s.errors[0]}`);

@@ -58,6 +58,7 @@ type Ask = {
   /** an arm page's call (pooled, shared), not an eval role's */ page: boolean;
   req: Req; hash: string; images: string[]; warm?: number; token?: SlotN;
   /** the page went away (it dropped the call: resolve.speculate, a cancel): a call no other arm follows stops */ gone?: AbortSignal;
+  /** copy n (2 or more) of one answer (draw.copies, picture.copies): the page keeps whichever copy streams first */ copy?: number;
 };
 type Out = {
   text: string; stats: Record<string, unknown>; mode: CallMode; shared: Shared; scan?: "hit" | "standin" | "miss"; error?: string; cacheFile?: string; chunks: Chunk[];
@@ -223,6 +224,9 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const { mode, share, cached, warm } = runs.get(a.run) ?? { mode: "live", share: true };
     // A warm scan (ab.ts' warm-up send, a slot's first in a live run) starts the processes each call would take.
     if (warm && a.page) topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined);
+    // A copy is another draw of the upstream wait: live, a fresh call of its own (never the cache's, never another arm's);
+    // in a scan or a replay it answers nothing, so its first copy's reply decides and the page drops it.
+    if (a.copy) return mode === "live" ? live(a, onText) : held(a, mode);
     // An eval call this run already made (a resume); in replay and scan any product reply the cache holds; in live the run's named ones.
     const hit = !a.page || mode !== "live" || cached?.has(a.hash) ? readReply(p, a.hash, a.run, !a.page) : undefined;
     if (hit) {
@@ -242,6 +246,16 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       return { text: f.chunks.map((c) => c.text).join(""), stats: done.stats ?? {}, error: done.error, mode: "live", shared: "follower", chunks: f.chunks, cacheFile: done.cacheFile };
     }
     return live(a, onText, scope ? flights.lead(scope, a.hash, a.arm!) : undefined);
+  }
+
+  /** A copy in a scan or a replay: no reply, until the page drops it (or the call timeout). */
+  function held(a: Ask, mode: RunMode): Promise<Out> {
+    return new Promise((r) => {
+      const done = () => r({ text: "", stats: {}, mode, shared: "-", chunks: [] });
+      if (a.gone?.aborted) return done();
+      a.gone?.addEventListener("abort", done, { once: true });
+      setTimeout(done, TIMEOUT_MS).unref();
+    });
   }
 
   /** Serves a request and records it: one meter line, and the call in its case's record. */
@@ -267,7 +281,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const c = a.case && a.arm && !out.error ? cases.get(`${a.run}|${a.case}`) : undefined;
     if (c) {
       const subject = a.role === "picture" ? /^Doodle: (.+)$/m.exec(String(a.req.user))?.[1] : undefined;
-      (c.calls[a.arm!] ??= []).push({ role: a.role, ordinal: a.ordinal, subject, reqHash: a.hash, cacheFile: out.cacheFile ?? "", offsets: out.chunks.map((x) => Math.round(x.ms)) });
+      (c.calls[a.arm!] ??= []).push({ role: a.role, ordinal: a.ordinal, subject, reqHash: a.hash, cacheFile: out.cacheFile ?? "", offsets: out.chunks.map((x) => Math.round(x.ms)), ...(a.copy ? { copy: a.copy } : {}) });
     }
     return out;
   }
@@ -301,9 +315,11 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       return json(res, 200, { warming: keep });
     }
     const ordKey = `${base.arm}|${base.role}`;
-    const ordinal = c?.ordinals.get(ordKey) ?? 0;
-    c?.ordinals.set(ordKey, ordinal + 1);
-    const a: Ask = { ...base, ordinal, t0: sentAt(h("at"), arrived), page: true, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], warm: b.warm as number | undefined };
+    const copy = typeof b.copy === "number" && b.copy > 1 ? b.copy : undefined;
+    // A copy is its first copy's call again: it takes that call's ordinal, not the next one.
+    const ordinal = copy ? Math.max(0, (c?.ordinals.get(ordKey) ?? 0) - 1) : (c?.ordinals.get(ordKey) ?? 0);
+    if (!copy) c?.ordinals.set(ordKey, ordinal + 1);
+    const a: Ask = { ...base, ordinal, t0: sentAt(h("at"), arrived), page: true, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], warm: b.warm as number | undefined, copy };
     res.setHeader("content-type", "application/x-ndjson");
     const gone = new AbortController();
     res.on("close", () => !res.writableEnded && gone.abort());

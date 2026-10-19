@@ -111,6 +111,8 @@ export type Facts = {
   recent: Decided[];
   /** When the last checkpoint ran: a dry well counts only the decisions since (the checkpoint unpauses). */
   checkpointAt?: number;
+  /** When the owner last stepped in (a sync): voids before it were the owner's to fix, so they no longer count. */
+  ownerStepAt?: number;
   /** The last readiness passed (at the harness's tag, within a day); calibration's outcome ("dry" on the fake API, whose judge is canned). */
   ready?: boolean; calib?: string;
   /** What a step threw, if it threw. */
@@ -133,7 +135,7 @@ export function rules(f: Facts): Action[] {
   if (!f.pace.stop && f.pace.pauseUntil) out.push({ do: "pause", why: "every slot is past its five-hour 0.90", until: f.pace.pauseUntil });
   // Harness suspects.
   if (f.recent.filter((d) => d.overrun && Date.parse(d.at) >= f.nightStart).length >= RULES.overrunsPerNight) out.push({ do: "stop", why: `${RULES.overrunsPerNight} decisions overran their budget tonight (harness suspect)` });
-  if (last(RULES.voidsInRow)?.every((d) => d.verdict === "void")) out.push({ do: "stop", why: `${RULES.voidsInRow} void decisions in a row` });
+  if (last(RULES.voidsInRow, f.recent.filter((d) => Date.parse(d.at) >= (f.ownerStepAt ?? 0)))?.every((d) => d.verdict === "void")) out.push({ do: "stop", why: `${RULES.voidsInRow} void decisions in a row` });
   if (f.recent.at(-1)?.v9) out.push({ do: "stop", why: `a V9 invariant tripped in ${f.recent.at(-1)!.id}` });
   if (f.ready === false) out.push({ do: "stop", why: "readiness failed or is stale: rte ready --stub --mock-api" });
   if (f.calib === "stop") out.push({ do: "stop", why: "calibration failed with both frozen prompt variants: the judge prompt is the owner's to change" });

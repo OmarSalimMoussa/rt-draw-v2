@@ -25,8 +25,9 @@ const FILES = { "draw-refs": "resolver.txt", draw: "draw.txt", picture: "picture
 export type StubRole = keyof typeof FILES;
 export const stubReply = (role: StubRole) => readFileSync(join(DIR, FILES[role]), "utf8");
 
-/** The resolver answers this late, so readiness can tell TTFC is counted from Enter (TTFC > it). */
-export const RESOLVER_DELAY_MS = 150;
+/** The drawing model answers this late, so readiness can tell TTFC is counted from Enter (TTFC > it). It is the one
+ * call every send makes: with resolve.engine 1 no resolver call comes first. */
+export const DRAW_DELAY_MS = 150;
 /** The canned doodle's own w × h space. */
 const DOODLE = 100;
 
@@ -78,7 +79,7 @@ export async function serveStubs() {
       res.write(`${JSON.stringify({ text: JSON.stringify(Object.fromEntries(ids.map((id) => [id, { type: "noul", noul: 0.1 }]))) })}\n`);
       return res.end(`${JSON.stringify({ done: true, model: b.model, ms: 1 })}\n`);
     }
-    if (role === "draw-refs") await new Promise((r) => setTimeout(r, RESOLVER_DELAY_MS));
+    if (role === "draw") await new Promise((r) => setTimeout(r, DRAW_DELAY_MS));
     for (const line of stubReply(role as StubRole).split(/(?<=\n)/)) res.write(`${JSON.stringify({ text: line })}\n`);
     res.end(`${JSON.stringify({ done: true, model: b.model, ms: 1 })}\n`);
   });

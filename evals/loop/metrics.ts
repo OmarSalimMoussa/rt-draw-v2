@@ -68,7 +68,8 @@ export function armMetrics(runId: string, caseId: string, arm: Arm, before: Scen
   const waits = product.map((c) => c.waitMs).filter((w): w is number => w !== undefined);
   return {
     ttfc: timing.ttfcMs ?? null, ttd: timing.ttdMs, ttlo: timing.ttloMs,
-    firstTextMs: product.find((c) => c.role === "draw")?.firstMs,
+    // With copies, the one that streamed (a dropped copy has no first text).
+    firstTextMs: product.find((c) => c.role === "draw" && c.firstMs !== undefined)?.firstMs,
     resolverMs: product.find((c) => /resolve|refs/.test(c.role))?.ms,
     picturesMs: result.pics?.ms,
     waitMs: waits.length ? Math.max(...waits) : undefined,

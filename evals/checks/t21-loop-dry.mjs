@@ -324,6 +324,9 @@ for (const [name, [facts, act, why]] of Object.entries(fires)) {
   check(out.some((a) => a.do === act && why.test(a.why) && (act !== "pause" || a.until > T) && (act !== "skip" || a.component === "draw")), `${name}: ${JSON.stringify(out)}`);
 }
 check(rules({ ...base, overloads: [T - RULES.overloadWindowMs - 1, T - 1000, T - 2000] }).every((a) => a.do !== "pause"), "an overload older than 10 min counted");
+const voided = [d("void", { at: new Date(T - 60_000).toISOString() }), d("void", { at: new Date(T - 50_000).toISOString() })];
+check(rules({ ...base, recent: voided, ownerStepAt: T - 40_000 }).every((a) => !/void/.test(a.why)), "2 voids before the owner's sync still stop the loop");
+check(rules({ ...base, recent: [...voided, d("void")], ownerStepAt: T - 40_000 }).every((a) => !/void/.test(a.why)), "one void after the owner's sync stops the loop");
 
 // ---- No leak: every fake API request is a metered upstream call (but the ones the SIGKILL cut off), no Chrome left.
 const total = upstream(lines(p.calls)).length, cut = reqsAtKill - upstream(all.slice(0, meterAtKill)).length;
