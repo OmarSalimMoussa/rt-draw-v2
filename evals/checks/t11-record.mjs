@@ -199,6 +199,12 @@ afterB.shapes[2].picture = PIC("a smiling clown", 270, 270, "9"); // a redraw of
   const m = caseMetrics(RUN, cid, calls);
   check(Math.abs(m.A.usd - 0.014) < 1e-12 && Math.abs(m.B.usd - 0.02) < 1e-12, `product $ per arm: A ${m.A.usd} B ${m.B.usd}, want 0.014 and 0.02`);
   check(m.A.strayPictures === 0 && m.B.strayPictures === 1 && m.strayPictures === 1, `strayPictures A ${m.A.strayPictures} B ${m.B.strayPictures}`);
+  // A replayed call (the bank's reply, as a live A/B serves the champion's unchanged calls) costs what it cost when recorded.
+  mkdirSync(dirname(p.reply("rq9")), { recursive: true });
+  writeFileSync(p.reply("rq9"), JSON.stringify({ reqHash: "rq9", run: "bank-b1", role: "picture", request: { model: "claude-sonnet-5-5" }, text: "", chunks: [], doneMs: 1, stats: { inTokens: 1000, outTokens: 100, cacheRead: 0, write5m: 0, write1h: 0 } }));
+  const withReplay = [...calls, JSON.parse(line({ arm: "A", role: "picture", reqHash: "rq9", shared: "-", mode: "replay", listUsd: 0 }))];
+  const mr = caseMetrics(RUN, cid, withReplay);
+  check(Math.abs(mr.A.usd - 0.017) < 1e-12 && Math.abs(mr.B.usd - 0.02) < 1e-12, `a replayed call wasn't charged its recorded $: A ${mr.A.usd} (want 0.017), B ${mr.B.usd}`);
   check(m.heapMb === 52 && m.gatewayLoopP99Ms === 7, `per-case heapMb ${m.heapMb}, gatewayLoopP99Ms ${m.gatewayLoopP99Ms}`);
   check(m.A.ttfc === 4100 && m.B.ttd === 5600 && m.A.resolverMs === 3400 && m.A.firstTextMs === 2900 && m.B.picturesMs === 2500 && m.A.opsFailed === 1 && m.B.picsDrawn === 1, `timing and call metrics: ${JSON.stringify(m.A)}`);
   check(m.A.work === 3 + 9 / 40 && m.B.work === 1 + 9 / 40, `work A ${m.A.work} B ${m.B.work}`);

@@ -5,6 +5,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sceneDiff } from "../core/diff.ts";
+import { readReply } from "./cache.ts";
+import { listUsd } from "./meter.ts";
 import { paths } from "./paths.ts";
 import { appendLine, caseDir, runFile } from "./record.ts";
 import type { Arm, ArmResult, ArmTiming, CallLog, Judged, Row, SceneJSON } from "./types.ts";
@@ -37,6 +39,17 @@ export function meterOf(runId: string): CallLog[] {
 export const beforeOf = (runId: string, caseId: string): SceneJSON =>
   maybe<SceneJSON>(join(caseDir(runId, caseId), "before.scene.json")) ?? json<SceneJSON>(join(paths().bankCase(caseId), "before.scene.json"));
 
+/**
+ * What a replayed call cost when it was recorded. A live A/B replays the calls the bank already holds (the champion's,
+ * byte for byte) and makes the candidate's changed ones fresh: charged $0, the champion's arm read as free and any card
+ * that changes a prompt as several times dearer (×6.00 on e4-h2, whose own calls cost $0.0001).
+ */
+function recordedUsd(c: CallLog): number {
+  const r = readReply(paths(), c.reqHash, c.run, false);
+  const s = r?.stats as Record<string, number | undefined> | undefined;
+  return r && s ? listUsd(r.request.model, { inTokens: s.inTokens ?? 0, cacheRead: s.cacheRead ?? 0, cacheWrite5m: s.write5m ?? 0, cacheWrite1h: s.write1h ?? 0, outTokens: s.outTokens ?? 0 }) : 0;
+}
+
 /** One arm's metrics for one case. */
 export function armMetrics(runId: string, caseId: string, arm: Arm, before: SceneJSON, calls: CallLog[]): ArmMetrics {
   const dir = join(caseDir(runId, caseId), arm);
@@ -47,10 +60,11 @@ export function armMetrics(runId: string, caseId: string, arm: Arm, before: Scen
   const stray = new Set([...diff.pictured, ...(result.pics?.failed ?? [])].filter((id) => !changed.has(id)));
   const product = result.calls.filter((c) => !EVAL_ROLES.has(c.role));
   // A follower got the leader's reply for free; both arms are charged the call, so sharing never reads as a saving.
+  // A replayed call is charged what it cost when recorded, so the arm the bank holds isn't free.
   const mine = calls.filter((c) => c.case === caseId && !EVAL_ROLES.has(c.role));
   const usd = mine
     .filter((c) => c.arm === arm)
-    .reduce((a, c) => a + (c.shared === "follower" && !c.listUsd ? (mine.find((l) => l.reqHash === c.reqHash && l.shared === "leader")?.listUsd ?? 0) : c.listUsd), 0);
+    .reduce((a, c) => a + (c.mode === "replay" ? recordedUsd(c) : c.shared === "follower" && !c.listUsd ? (mine.find((l) => l.reqHash === c.reqHash && l.shared === "leader")?.listUsd ?? 0) : c.listUsd), 0);
   const waits = product.map((c) => c.waitMs).filter((w): w is number => w !== undefined);
   return {
     ttfc: timing.ttfcMs ?? null, ttd: timing.ttdMs, ttlo: timing.ttloMs,
