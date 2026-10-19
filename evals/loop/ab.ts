@@ -142,6 +142,15 @@ export type RunSpec = {
   loadWaitMs?: number;
   faults?: Faults;
 };
+/**
+ * A case's tripped invariant (§7.5). Every one voids its case. A timing one (a dispatch offset or a gateway stall past
+ * the machine's limit: the PGX's dispatch tail passes 25 ms on ~1-2% of cases) stops there: the case is replaced like
+ * any void and counts toward the void rate. Any other (the arms sent or loaded different things, a stray picture, a
+ * blank capture, a 1-hour cache write) also voids the decision, and a V9 one stops the loop.
+ */
+export type Invariant = { case: string; why: string; timing: boolean };
+const TIMING = /^V9: (dispatch offset|gateway event-loop)/;
+
 /** fork.json as written here: §3.3's fields plus what the invariants and continuations read. */
 export type ForkFile = Fork & { enterAt: Record<Arm, number>; pageOrigin: Record<Arm, number>; cameras: Record<Arm, View>; svg: Record<Arm, string>; inputHash: Record<Arm, string>; sceneHash: Record<Arm, string>; loopP99Ms: number };
 
@@ -202,7 +211,7 @@ export function begin(rig: Rig, s: RunSpec) {
   const order: string[] = [];
   const done = new Map(readRows(s.run).map((r) => [r.case, r])); // a resumed run keeps its finished cases
   const meter = meterTail(s.run);
-  const invariants: { case: string; why: string }[] = [];
+  const invariants: Invariant[] = [];
   const started = Date.now();
   const sampler = setInterval(() => appendLine(runFile(s.run, "load.ndjson"), sampleLoad()), 5000);
   sampler.unref();
@@ -342,7 +351,7 @@ export function begin(rig: Rig, s: RunSpec) {
     const stray = caseMetrics(s.run, id, lines).strayPictures;
     if (stray) why.push(`${stray} stray pictures (drawn for shapes the send didn't change)`);
     for (const a of blank) why.push(`a blank capture of ${a}'s result (twice)`);
-    for (const w of why) invariants.push({ case: id, why: w });
+    for (const w of why) invariants.push({ case: id, why: w, timing: TIMING.test(w) });
     if (why.length) appendLine(runFile(s.run, "invariants.jsonl"), { case: id, why });
     // Still failing after the re-send: the case is void, counted only toward the void rate (§1.4 item 9).
     const transport = x.transport.length ? `V7: ${x.transport.length} product calls failed twice (${x.transport[0].role}: ${x.transport[0].apiError})` : undefined;
@@ -455,7 +464,7 @@ export type Decide = {
   continueFrom?: (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number, slot: number) => Promise<Row[]>;
 };
 export type ABResult = {
-  rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: { case: string; why: string }[];
+  rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: Invariant[];
   /** Set when the decision was closed between looks as over its budget (§6.7): never rerun, it counts toward the night's overruns. */
   overrun?: string;
 };
@@ -474,10 +483,10 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
     // A resumed decision's top-ups come back at its first shortage, where they first went in, and count toward the 48.
     const resumed = [...(d.toppedUp?.rows ?? [])];
     let heldout: Row[] | undefined, continuation: Row[] | undefined, topUps = d.toppedUp?.sends ?? 0, taken = 0;
-    const done = (dec: Decision) => (put(runFile(s.run, "verdict.json"), { ...dec, invariantsTripped: r.invariants.length, topUps }), { rows, heldout, continuation, decision: dec, topUps, invariants: r.invariants });
+    const done = (dec: Decision) => (put(runFile(s.run, "verdict.json"), { ...dec, invariantsTripped: r.invariants.length, timingVoids: r.invariants.filter((x) => x.timing).length, topUps }), { rows, heldout, continuation, decision: dec, topUps, invariants: r.invariants });
     for (;;) {
       const exhausted = taken >= order.length && !resumed.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
-      const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.length }, d.card, d.state);
+      const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.filter((x) => !x.timing).length }, d.card, d.state);
       // Measured from rows.jsonl: a resumed decision's finished cases count before they're read back, as their $ already do.
       const over = (dec.verdict === "more" || dec.pending) && d.overrun?.(readRows(s.run).filter((x) => !x.void).length + topUps);
       if (over) return { ...done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] }), overrun: over };

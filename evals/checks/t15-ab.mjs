@@ -249,6 +249,9 @@ if (import.meta.main) {
   const stray = await one("fault-stray", {}, [L.stray]);
   check(/stray picture/.test(stray.rows[0].void ?? ""), `a picture drawn for an unchanged shape didn't void the case (${stray.rows[0].void})`);
   check(!mis.rows[0].void.includes("stray") && !lim.rows[0].void.includes("event-loop"), "an invariant voided a case it shouldn't have");
+  // A timing trip voids its case only; the arms getting different things also voids the decision (and a V9 stops the loop).
+  check(stall.invariants.length && stall.invariants.every((x) => x.timing) && lim.invariants.every((x) => x.timing) && mis.invariants.every((x) => !x.timing),
+    `timing invariants aren't told apart: ${JSON.stringify([...stall.invariants, ...lim.invariants, ...mis.invariants].map((x) => [x.why.slice(0, 30), x.timing]))}`);
 
   // ---- 14. A D card: continuation forks through continueFrom, only ever a veto; G3 draws only H-gate cases.
   const asked = [];

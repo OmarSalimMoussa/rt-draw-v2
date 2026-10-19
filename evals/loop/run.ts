@@ -960,7 +960,8 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     }
     let d = result.decision!;
     const owner: string[] = [];
-    const v9 = result.invariants.some((x) => x.why.startsWith("V9"));
+    // A timing trip voided its case only (ab.ts' Invariant): the harness is suspect when the arms got different things.
+    const v9 = result.invariants.some((x) => x.why.startsWith("V9") && !x.timing);
     if (suspends.some((t) => t >= t0) && d.verdict !== "void") d = { ...d, verdict: "void", reasons: [...d.reasons, "V10: the machine was suspended during the decision"] };
     // A void is rerun once (new runs, after this rig closes), then goes to the owner list (§1.4 item 9). Not an overrun:
     // rerunning it would pay G2 again on the harness it suspects, and hide it from the night's overrun count.
