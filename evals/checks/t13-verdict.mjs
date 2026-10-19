@@ -115,12 +115,12 @@ const SLIGHT_LOSS = (i) => [1, -1, 0, -1, 1, -1, 0, 0, 1, -1, 0, 0, 0, 0, 0, 0][
 const card = (o = {}) => ({ id: "h1", component: "draw", kind: "knob", change: "x", goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [], ...o });
 const STATE = { latencyDebt: false, qualityDebt: false, costVsAnchor: 1 };
 const noise = (i) => 1 + 0.01 * Math.sin(i * 1.7);
-/** n rows over sessions of 4; `s(i)` scores case i; B's latency is `lat` × A's. */
+/** n rows over sessions of 4; `s(i)` scores case i; A's latency is `latA` × 2 s, B's is `lat` × A's. */
 const rows = (n, o = {}) =>
   Array.from({ length: n }, (_, i) => ({
     case: `c${i}`, cluster: `s${Math.floor(i / 4)}`, affected: true, class: o.class ?? "Q",
     s: (o.s ?? ((i) => [1, 1, 1, 0][i % 4]))(i), sCraft: o.sCraft?.(i),
-    ttfc: [2000 * noise(i), 2000 * noise(i) * (o.lat?.(i) ?? 1)], ttd: [6000, 6000 * (o.ttd?.(i) ?? 1)],
+    ttfc: [2000 * noise(i) * (o.latA?.(i) ?? 1), 2000 * noise(i) * (o.latA?.(i) ?? 1) * (o.lat?.(i) ?? 1)], ttd: [6000, 6000 * (o.ttd?.(i) ?? 1)],
     work: [o.workA?.(i) ?? 3, o.workB?.(i) ?? 3], usd: [0.02, 0.02 * (o.usd ?? 1)], thought: [false, false], overuse: [false, o.overB?.(i) ?? false],
     pics: [[1, 0], [1, o.failB?.(i) ?? 0]], ask: o.ask?.(i) ?? "add", firstArm: o.first?.(i) ?? (i % 2 ? "B" : "A"),
     ...(o.void?.(i) ? { void: "invariant" } : {}),
@@ -186,18 +186,31 @@ const futile = decide({ tuning: rows(16, { class: "S", lat: () => 1.04 }) }, LAT
 check(says(futile, "revert") && futile.counts.look === 16, `a slower latency card isn't reverted at look 16: ${futile.verdict} ${futile.counts.look}`);
 const fast = decide({ tuning: rows(80, { class: "S", lat: () => 0.85, s: () => 0 }), exhausted: true }, LAT, STATE);
 check(says(fast, "keep") && fast.counts.look === 32 && !fast.pending, `a faster S card doesn't keep at look 32: ${fast.verdict} ${fast.counts.look} ${fast.pending}`);
-// Seeded noisy B/A around `mid` (per case and per session): sets picked to reach each later look.
+// Seeded noisy B/A around `mid`: cases differ, each arm has its own noise and session shift, so both arms spread alike
+// as in a run (the tails compare the arms' spreads) and log B/A has the old 0.3 per case, 0.15 per session. Sets picked
+// to reach each later look.
 const noisy = (mid, seed) => {
   const r = rng(seed);
-  const sess = Array.from({ length: 20 }, () => gauss(r));
-  const lat = Array.from({ length: 80 }, (_, i) => mid * Math.exp(0.3 * gauss(r) + 0.15 * sess[i >> 2]));
-  return rows(80, { class: "S", s: () => 0, lat: (i) => lat[i] });
+  const sess = Array.from({ length: 20 }, () => [gauss(r), gauss(r)]);
+  const arm = (k) => (i) => 0.21 * gauss(r) + 0.106 * sess[i >> 2][k];
+  const base = Array.from({ length: 80 }, () => Math.exp(0.4 * gauss(r)));
+  const [a, b] = [Array.from({ length: 80 }, (_, i) => arm(0)(i)), Array.from({ length: 80 }, (_, i) => arm(1)(i))];
+  return rows(80, { class: "S", s: () => 0, latA: (i) => base[i] * Math.exp(a[i]), lat: (i) => mid * Math.exp(b[i] - a[i]) });
 };
-const flat = decide({ tuning: noisy(0.99, 3), exhausted: true }, LAT, STATE);
+const flat = decide({ tuning: noisy(0.99, 5), exhausted: true }, LAT, STATE);
 check(says(flat, "revert") && flat.counts.look === 48, `a no-gain latency card (est ≥ 0.98 at 48) isn't reverted at look 48: ${flat.verdict} ${flat.counts.look} ${flat.reasons}`);
-const late = [decide({ tuning: noisy(0.96, 20), exhausted: true }, LAT, STATE), decide({ tuning: noisy(0.96, 17), exhausted: true }, LAT, STATE)];
+const late = [decide({ tuning: noisy(0.96, 6), exhausted: true }, LAT, STATE), decide({ tuning: noisy(0.96, 8), exhausted: true }, LAT, STATE)];
 check(says(late[0], "keep") && late[0].counts.look === 80 && late[0].latency.ttfc.hi90 < 1, `a small sure gain isn't kept at look 80: ${late[0].verdict} ${late[0].counts.look}`);
 check(says(late[1], "revert") && late[1].counts.look === 80 && late[1].latency.ttfc.hi90 >= 1, `an unsure small gain isn't reverted at look 80: ${late[1].verdict} ${late[1].counts.look}`);
+// The slow sends (LOOP.latTails): a quarter of the sends think (A ×3) and B stops that; the median send doesn't move,
+// so the median alone calls it no gain, and the p90 keeps it at look 32. A fidelity winner that makes those sends ×1.6
+// slower instead is reverted by the tail's latency veto.
+const slowA = (i) => (i % 4 === 3 ? 3 : 1) * Math.exp(0.1 * Math.sin(i * 2.3));
+const thinkless = decide({ tuning: rows(80, { class: "S", s: () => 0, latA: slowA, lat: (i) => (i % 4 === 3 ? 0.4 : 1) }), exhausted: true }, LAT, STATE);
+check(says(thinkless, "keep", /^ttfc p9[05] ×0\.[3-5]/) && thinkless.counts.look === 32 && Math.abs(thinkless.latency.ttfc.est - 1) < 0.01 && thinkless.latency.tails["ttfc p90"].hi95 < 1,
+  `a change that speeds only the slow quarter isn't kept on its tail at look 32: ${thinkless.verdict} ${thinkless.counts.look} ${thinkless.reasons}`);
+const slowTail = run(rows(32, { latA: slowA, lat: (i) => (i % 4 === 3 ? 1.6 : 1) }));
+check(says(slowTail, "revert", /latency veto: ttfc p9[05]/) && Math.abs(slowTail.latency.ttfc.est - 1) < 0.01, `a fidelity winner ×1.6 slower on the slow quarter isn't vetoed on its tail: ${slowTail.verdict} ${slowTail.vetoes}`);
 const qFast = (s) => decide({ tuning: rows(80, { class: "Q", lat: () => 0.85, s }), heldout: rows(16), exhausted: true }, LAT, STATE);
 check(says(qFast((i) => [1, -1, 0, 0][i % 4]), "keep"), "a faster Q card with fidelity holding isn't kept");
 check(says(qFast((i) => [-1, -1, 0, 1][i % 4]), "revert", /costs fidelity/) && qFast((i) => [-1, -1, 0, 1][i % 4]).counts.look === 32, "a faster Q card that clearly loses fidelity isn't reverted at look 32");

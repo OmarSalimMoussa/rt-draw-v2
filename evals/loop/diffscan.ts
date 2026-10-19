@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { caseFile } from "../judge/packet.ts";
 import { type ForkFile, type Rig, type RunSpec, runAB } from "./ab.ts";
 import { LOOP } from "./config.ts";
-import { pairedRatio } from "./latency.ts";
+import { pairedRatio, tailsOf } from "./latency.ts";
 import { caseDir, put, runFile } from "./record.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import type { CaseInfo, DecisionClass, Ratio, RecordedReply, SceneJSON, SetId } from "./types.ts";
@@ -32,7 +32,7 @@ export type ScanResult = {
   affected: Partial<Record<SetId, string[]>>;
   /** Identical request hashes over the affected cases: RunSpec.cached for G2 and G3. */
   cached: string[];
-  timed?: { run: string; ttfc?: Ratio; ttd?: Ratio };
+  timed?: { run: string; ttfc?: Ratio; ttd?: Ratio; /** "ttfc p90" … "ttd p95" */ tails?: Record<string, Ratio> };
 };
 
 const json = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
@@ -87,9 +87,10 @@ export async function scan(rig: Rig, o: Pick<RunSpec, "run" | "arms" | "seed" | 
     const ids = entryOrder(tuning.map((c) => c.case), (id) => json<CaseInfo>(caseFile(id, "case.json", o.run)).originSession, seedOf(o.seed)).slice(0, LOOP.nTimedCases);
     const run = `${o.run}-timed`;
     const t = await runAB(rig, { ...o, run, kind: "scan", mode: "replay", share: true, cases: ids, cls: "N", classify: () => ({ affected: false, class: "N" }) });
-    timed = { run, ttfc: pairedRatio(t.rows, "ttfc"), ttd: pairedRatio(t.rows, "ttd") };
+    timed = { run, ttfc: pairedRatio(t.rows, "ttfc"), ttd: pairedRatio(t.rows, "ttd"), tails: tailsOf(t.rows) };
+    // The slow sends too: a schedule change on a few sends (the picture-heavy ones) moves a tail, not the median.
     const flat = (r?: Ratio) => !r || Math.abs(r.est - 1) <= LOOP.nTimingBand;
-    cls = flat(timed.ttfc) && flat(timed.ttd) ? "N" : "S";
+    cls = [timed.ttfc, timed.ttd, ...Object.values(timed.tails!)].every(flat) ? "N" : "S";
   }
   const affected: ScanResult["affected"] = {};
   for (const c of cases.filter((x) => x.affected)) (affected[c.set] ??= []).push(c.case);

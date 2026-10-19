@@ -23,7 +23,7 @@ export const CARD_SCHEMA = `type HypothesisCard = {
   change: string;             // one line
   knobs?: Record<string, number>;   // kind "knob" (and "variant"): the values, by knob key in src/core/tuning.ts
   goal: "fidelity" | "craft" | "latency";   // what decides it: the fidelity judge, the craft judge (render, tidy, picture look), or the harness clock
-  metric?: "ttfc" | "ttd";    // latency cards: time to the first lasting change, or to done
+  metric?: "ttfc" | "ttd";    // latency cards: time to the first lasting change, or to done; kept when the median send or the slow sends (p90, p95: the third that think, the picture-heavy few) get surely faster, so a change for the slow sends alone counts
   classGuess: "S" | "R" | "Q" | "D";   // S schedule only, R parse only, Q a request differs, D Q plus what a next send reads
   dialogue: boolean;          // does it change what a next send reads (camera continuity, scene growth, doodle reuse)?
   predicts: string;           // what should move, by how much, and where

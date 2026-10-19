@@ -893,7 +893,7 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     return d;
   };
   const gate = (verdict: "revert" | "owner", reasons: string[], o: { owner?: string[]; cls?: Decision["class"] } = {}): Decided => {
-    const d: Decision = { verdict, reasons, goal: c.card.goal, class: o.cls ?? c.card.classGuess, looks: [], vetoes: [], configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
+    const d: Decision = { verdict, reasons, goal: c.card.goal, class: o.cls ?? c.card.classGuess, looks: [], vetoes: [], configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {}, tails: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
     put(runFile(run("g0"), "verdict.json"), d);
     record(d, run("g0"), undefined, o.owner ?? (verdict === "owner" ? reasons : []));
     return settle({ id, verdict, component: c.card.component, at: new Date().toISOString() });

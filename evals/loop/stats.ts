@@ -162,6 +162,31 @@ export function logRatio(logs: number[], clusters: string[], seed: number): Rati
   return { est: Math.exp(est), lo90: Math.exp(quantile(meds, 0.1)), hi90: Math.exp(quantile(meds, 0.9)), lo95: Math.exp(quantile(meds, 0.05)) };
 }
 
+/**
+ * A tail's B/A ratio: the p quantile of B's values over the p quantile of A's (the slowest sends' latency in each arm),
+ * with bounds from LOOP.bootstrap draws of whole sessions. The median paired ratio can't see a change on fewer than
+ * half the sends (the ones that think, the picture-heavy ones); a tail can.
+ */
+export function quantileRatio(a: number[], b: number[], clusters: string[], p: number, seed: number): Ratio {
+  const by = new Map<string, number[]>();
+  clusters.forEach((c, i) => (by.get(c) ?? by.set(c, []).get(c)!).push(i));
+  const groups = [...by.values()];
+  const size = groups.length * Math.max(...groups.map((g) => g.length));
+  const [bufA, bufB] = [new Float64Array(size), new Float64Array(size)];
+  const at = (n: number) => Math.min(n - 1, Math.max(0, Math.floor(p * n)));
+  const r = rng(seed);
+  const logs = new Float64Array(LOOP.bootstrap);
+  for (let k = 0; k < LOOP.bootstrap; k++) {
+    let n = 0;
+    for (let g = 0; g < groups.length; g++) for (const i of groups[Math.floor(r() * groups.length)]) (bufA[n] = a[i]), (bufB[n++] = b[i]);
+    logs[k] = Math.log(select(bufB, n, at(n)) / select(bufA, n, at(n)));
+  }
+  logs.sort();
+  const est = Math.log(select(Float64Array.from(b), b.length, at(b.length)) / select(Float64Array.from(a), a.length, at(a.length)));
+  const e = (q: number) => Math.exp(quantile(logs, q));
+  return { est: Math.exp(est), lo90: e(0.1), hi90: e(0.9), lo95: e(0.05), hi95: e(0.95) };
+}
+
 // ---- Chains of same-run ratios (latency and quality debt, §1.4)
 
 /** One run's paired estimate on the log scale: a log-ratio, or a share in log-odds. */

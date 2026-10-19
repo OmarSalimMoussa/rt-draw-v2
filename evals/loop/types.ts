@@ -145,7 +145,7 @@ export type AgentLog = {
 
 // ---- History: branch eval/history (§5.3)
 
-export type Ratio = { est: number; lo90: number; hi90: number; lo95: number };
+export type Ratio = { est: number; lo90: number; hi90: number; lo95: number; /** the tails' (LOOP.latTails) keep bound */ hi95?: number };
 export type Lat = { ttfcP50: number; ttfcP75: number; ttdP50: number; ttdP75: number };
 type Share = { n: number; share: number; lo90: number; hi90: number };
 export type EpochRow = { epoch: number; at: string; era: number; machine: "pgx" | "laptop"; championSha: string; configId: string;
@@ -160,7 +160,7 @@ export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: numb
   looks: { n: number; decisive: number; z: number }[]; counts: { wins: number; losses: number; ties: number; exactTies: number };
   affected: { tuning: number; of: number; topUp: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
   overuse?: { detector: string; a: number; b: number }; checkpoint?: string /* owner steps */;
-  latency: { ttfc: Ratio; ttd: Ratio; byThinking?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;
+  latency: { ttfc: Ratio; ttd: Ratio; byThinking?: Record<string, Ratio>; /** "ttfc p90" … "ttd p95" */ tails?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;
   cost: { usdPerCaseRatio: number; listUsd: number; calls: number }; minutes: number; run: string; judgeId: string; configId: string };
 export type CheckpointRow = { id: string; epoch: number; era: number; at: string; machine: string; trust: "green" | "amber" | "void";
   champion: string; anchor: string; anchorMoved: boolean;
