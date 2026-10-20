@@ -36,7 +36,7 @@ const B = (key: string, value: 0 | 1, name: string, doc: string): Knob => ({ key
 /** A patch on a purpose-built model's output (see the top of this file). */
 const patch = (model: string, k: Knob, neutral?: number): Knob => ({ ...k, patches: model, neutral });
 /** Which of a role's prompt texts it is asked with (src/core/prompts.ts; 0 is the shipped text). */
-const P = (role: keyof typeof PROMPTS): Knob => K(PROMPT_KNOB[role], 0, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
+const P = (role: keyof typeof PROMPTS, value = 0): Knob => K(PROMPT_KNOB[role], value, 0, PROMPTS[role].length - 1, 1, `which ${role} prompt text is sent: ${PROMPTS[role].map((v, i) => `${i} ${v.name}`).join(", ")} (src/core/prompts.ts)`);
 
 export const KNOBS: Knob[] = [
   // Ink: how strokes are drawn and when a stroke is a dot.
@@ -129,16 +129,16 @@ export const KNOBS: Knob[] = [
   P("resolve"),
   B("resolve.noThink", 1, "no thinking", "on: ask the API not to think (it thinks on nearly every resolver call, which delays its first text); off: the model decides"),
   // Jev (TypeSafe AI's decision model): one yes/no per candidate shape in a single call of about 0.1 s, each a probability.
-  K("resolve.engine", 0, 0, 2, 1, "who resolves: 0 Claude (resolve.model), 1 Jev alone, 2 Jev, and Claude when Jev is unsure of a shape (resolve.jevSure)"),
+  K("resolve.engine", 1, 0, 2, 1, "who resolves: 0 Claude (resolve.model), 1 Jev alone, 2 Jev, and Claude when Jev is unsure of a shape (resolve.jevSure)"),
   K("resolve.jevModel", 0, 0, 1, 1, "Jev version (0 jev-1.13.0, pinned; 1 jev-latest)"),
   K("resolve.jevMaxCandidates", 8, 1, 40, 1, "shapes Jev is asked about (each one more yes/no in the same call): the ink's hits first, then by word overlap, then every page"),
   K("resolve.jevYes", 0.5, 0.05, 0.95, 0.05, "Jev: a shape is meant at or above this probability"),
   K("resolve.jevSure", 0.3, 0, 0.5, 0.05, "engine 2: Jev is unsure when a shape's probability is within this of resolve.jevYes, and then Claude resolves (0: Jev always decides)"),
   B("resolve.jevRace", 0, "race Claude", "engine 2: on: ask Claude at the same time as Jev and use its answer only when Jev is unsure (no wait for Claude after Jev, but a Claude call every send); off: ask Claude only once Jev is unsure"),
-  B("resolve.jevHints", 0, "unsure shapes as hints", "on: when Jev decided, the drawing model also gets the shapes it was unsure of, with how likely each is (at least resolve.jevHintMin)"),
+  B("resolve.jevHints", 1, "unsure shapes as hints", "on: when Jev decided, the drawing model also gets the shapes it was unsure of, with how likely each is (at least resolve.jevHintMin)"),
   K("resolve.jevHintMin", 0.2, 0.05, 0.9, 0.05, "the least probability a hint shape has"),
   P("resolveJev"),
-  B("resolve.speculate", 0, "draw on a guess", "on: Jev guesses the references in about 0.1 s and the drawing call starts on that guess, its ops held back; the resolver still answers, and the guess's drawing lands only when the resolver's answer gives exactly the same prompt (else it's dropped and drawing starts again on the answer, as with this off). A right guess saves the resolver's wait; the references are sent as ids alone, so a guess can match"),
+  B("resolve.speculate", 1, "draw on a guess", "on: Jev guesses the references in about 0.1 s and the drawing call starts on that guess, its ops held back; the resolver still answers, and the guess's drawing lands only when the resolver's answer gives exactly the same prompt (else it's dropped and drawing starts again on the answer, as with this off). A right guess saves the resolver's wait; the references are sent as ids alone, so a guess can match"),
 
   // Draw: one send → ops.
   K("draw.model", 1, 0, 2, 1, "model that writes the ops (0 haiku, 1 sonnet, 2 opus)"),
@@ -157,6 +157,9 @@ export const KNOBS: Knob[] = [
   B("draw.thinkRouter", 0, "Jev decides thinking", "on: Jev decides per send whether the drawing model may think (one call of about 0.1 s, alongside the resolver): a small clear edit goes without thinking; off: draw.noThink decides"),
   K("draw.thinkYes", 0.5, 0.05, 0.95, 0.05, "with draw.thinkRouter: the drawing model may think when Jev's probability that the send needs it is at or above this"),
   K("draw.thinkJevModel", 0, 0, 1, 1, "with draw.thinkRouter: the Jev version (0 jev-1.13.0, 1 jev-latest)"),
+  B("draw.addHint", 1, "short-description warning on add asks", "on: Jev answers beside the resolver whether the person asks for something new to be added or built, and on yes the drawing model's user text (never its system prompt) ends with a line that every shape() description needs at least 6 words; a failed or late Jev call leaves the text unchanged"),
+  K("draw.addYes", 0.5, 0.05, 0.95, 0.05, "with draw.addHint: the line is added when Jev's probability that the send asks for something new is at or above this"),
+  K("draw.addWaitMs", 1500, 100, 5000, 100, "with draw.addHint: Jev's answer later than this is dropped (no line)", "ms"),
   K("draw.copies", 1, 1, 3, 1, "copies of the drawing call sent at once: the API's wait before the first text varies from call to call, so the first copy to stream is kept and the others are dropped (each copy pays its input)"),
   K("draw.copyAfterMs", 0, 0, 3000, 100, "with draw.copies above 1: a copy after the first goes out only when no text has come this long (0: all at once)", "ms"),
   P("drawThink"),
@@ -164,7 +167,7 @@ export const KNOBS: Knob[] = [
 
   // Picture: a doodle inside a shape.
   K("picture.model", 1, 0, 2, 1, "model that draws pictures (0 haiku, 1 sonnet, 2 opus)"),
-  K("picture.maxPaths", 16, 4, 80, 1, "a doodle may use at most this many paths"),
+  K("picture.maxPaths", 12, 4, 80, 1, "a doodle may use at most this many paths"),
   K("picture.colors", 4, 1, 10, 1, "and at most this many colors"),
   K("picture.roughness", 1.4, 0, 3, 0.1, "wobble applied to the doodle's paths"),
   K("picture.parallel", 3, 1, 8, 1, "pictures drawn at the same time after a send"),
@@ -172,7 +175,8 @@ export const KNOBS: Knob[] = [
   K("picture.timeoutMs", 120000, 5000, 300000, 5000, "a picture call still going after this long is stopped and counts as failed (its shape stays a placeholder)", "ms"),
   K("picture.copies", 1, 1, 3, 1, "copies of each picture call sent at once: the first to stream is kept, the others are dropped (each copy pays its input)"),
   K("picture.copyAfterMs", 0, 0, 3000, 100, "with picture.copies above 1: a copy after the first goes out only when no text has come this long (0: all at once)", "ms"),
-  P("picture"),
+  P("picture", 2),
+  K("picture.strokeWidth", 3, 1, 6, 0.5, "with the short-stroke picture prompt: the outline width every element has unless it says its own stroke-width", "px"),
   B("picture.noThink", 0, "no thinking", "on: ask the API not to think; off: the model decides"),
 
   // Board: what a model is shown of an infinite board.

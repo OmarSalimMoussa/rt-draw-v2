@@ -37,6 +37,7 @@ Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the to
 style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).
 Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
 A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
+Order: a shape() always comes before any text(), drawing() or move() on its id, and a text() only targets a shape that already exists (a new id never gets a bare text(): shape it first). Put each drawing() on the line right after its shape(), before the page's text and chrome, so pictures can start drawing while you are still writing.
 
 The user's words carry [ink n] markers: n is the red ink mark labeled [n] in the ${board ? "pictures" : "screenshot"}, drawn while they said that word. Their ink points at things or sketches a shape and place; it is never part of the page, so don't copy it unless they ask you to draw what they sketched. If the request is unclear, make the most likely change.`;
 }
@@ -86,6 +87,16 @@ Example (a smiling sun in a 100 x 100 box):
 <circle cx="50" cy="50" r="28" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>
 <path d="M38 56 Q50 66 62 56" fill="none" stroke="#1e1e1e" stroke-width="3"/>`;
 
+// The short-stroke variant: every element is already outlined in #1e1e1e at the default width, so the model writes stroke and stroke-width only when they differ.
+const pictureRulesShort = (t: Tuning) => `Use only these elements, each on its own line and self-closing: <path d="..."/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>.
+Attributes: geometry, fill, stroke, stroke-width. Absolute coordinates, no transforms, no groups, no style attribute.
+At most ${t["picture.maxPaths"]} elements and ${t["picture.colors"]} colors (hex, like #e8590c; fill="none" for outlines).
+Every element is outlined in near-black #1e1e1e at stroke-width ${t["picture.strokeWidth"]} unless it says otherwise, so leave out stroke and stroke-width when they are those. Write stroke="none" on a fill-only detail (a pupil, a highlight), or another stroke color or stroke-width where you want one.
+Example (a smiling sun in a 100 x 100 box):
+<circle cx="50" cy="50" r="28" fill="#ffd43b"/>
+<path d="M38 56 Q50 66 62 56" fill="none"/>
+<circle cx="42" cy="44" r="3" fill="#1e1e1e" stroke="none"/>`;
+
 export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: DescribeText[]; picture: PictureText[]; resolveJev: ResolveJevText[]; drawThink: DrawThinkText[] } = {
   draw: [{ name: "shipped", system: drawShipped }],
   resolve: [{ name: "shipped", system: RESOLVE_SHIPPED }],
@@ -124,7 +135,25 @@ ${pictureRules(t)}`,
       user: (subject, w, h) => `Doodle: ${subject}
 The box is ${w} wide and ${h} tall.`,
     },
+    // Shipped layout, but outlines are the default: the model leaves out stroke="#1e1e1e" stroke-width and the renderer supplies them (picture.ts).
+    {
+      name: "short-stroke",
+      system: () => PICTURE_SYSTEM,
+      user: (subject, w, h, t) => `Doodle: ${subject}
+
+${PICTURE_LOOK}
+The box is ${w} wide and ${h} tall (x right, y down, 0 0 at the top left). Fill most of it, centered, and keep everything inside it.
+${pictureRulesShort(t)}`,
+    },
   ],
+};
+
+/** Jev's question for draw.addHint (does the send ask for something new?), and the line the drawing model's user text gets on yes (never its system prompt). */
+export const DRAW_ADD = {
+  question: "Do they ask for something new to be added or built?",
+  yes: "They want a new page, section, card, button, list, label or any other shape that is not on the canvas yet, drawn or built for them.",
+  no: "They only change, move, remove, recolor, resize, rename or look at shapes that already exist.",
+  line: 'Every shape() description is at least 6 words (count them); a shorter one is thrown away together with the text() or drawing() that follows it. For a name, price, label or button write e.g. "starter plan price line near top of card".',
 };
 
 export type Role = keyof typeof PROMPTS;
