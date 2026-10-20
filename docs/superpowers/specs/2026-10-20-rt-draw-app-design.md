@@ -74,7 +74,7 @@ This project puts the two together. **The product is v1's UI on v2's engine and 
 
 ## Goals
 
-1. **Local URL:** `npm run app` serves the product at a local URL.
+1. **Local URL:** `npm --prefix app run dev` serves the product at http://localhost:5180.
    - The owner can draw, talk or type, press Enter, and watch shapes stream onto the board and pictures fill in.
    - Each send then shows in the overlay.
 2. **Speed matches the eval:** a send is as fast as the eval measured. With warm processes, the overlay's TTFC and done times are in the same range as ck-10 (medians about 2.4 s and 3.9 s) for similar sends.
@@ -178,7 +178,7 @@ These would make it a failure even if it works:
   - its first gate typechecks the root tree, and those root files are frozen for candidates (`evals/optimizer/gates.ts`).
 
   The cost of this choice: a change to a core signature can break `app/` without the root typecheck catching it, so `app/`'s own typecheck has to be run as well.
-- **Port:** its own Vite config (`app/vite.config.ts`) and script, `npm run app`, on its own port. It shows the product at `/` and `/projects`, with v2's API plugins (`modelApi`, `sttToken`) and the new projects plugin. `npm run dev` and the playgrounds are untouched.
+- **Port:** its own Vite config (`app/vite.config.ts`) run with `npm --prefix app run dev` (a root script would change the root `package.json`, which stays as it is), on port 5180. It shows the product at `/` and `/projects`, with v2's API plugins (`modelApi`, `sttToken`) and the new projects plugin. `npm run dev` and the playgrounds are untouched.
 - **React:** React 19 and `@vitejs/plugin-react` are added, because v1's UI is React. v1's components, styles, sketch helpers, fonts and speech UI are copied into `app/` and adapted. v1's repo isn't imported from, so it stays independent.
 - **The engine:** v2's `boardStage` is used as a basis, or replaced, as the canvas controls need. The rendering, ops, send, ink and speech come from `src/core/*`.
 
