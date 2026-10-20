@@ -166,7 +166,8 @@ const H = p.history;
 const dec = Object.fromEntries(lines(join(H, "decisions.jsonl")).map((d) => [d.id, d]));
 const say = (d) => (d ? `${d.verdict} (${d.class}): ${d.reasons.join("; ")}` : "none");
 check(dec["e1-h1"]?.verdict === "keep" && dec["e1-h1"].class === "Q", `the knob card: ${say(dec["e1-h1"])}`);
-check(dec["e1-h2"]?.verdict === "revert" && dec["e1-h2"].class === "Q", `the code patch: ${say(dec["e1-h2"])}`);
+// A resolver card is class D (08aed14: what a later send's words point at moves, so the continuation sends run).
+check(dec["e1-h2"]?.verdict === "revert" && dec["e1-h2"].class === "D", `the code patch: ${say(dec["e1-h2"])}`);
 check(dec["e1-h3"]?.verdict === "revert" && dec["e1-h3"].class === "N" && /no effect/.test(dec["e1-h3"].reasons.join()), `the no-op: ${say(dec["e1-h3"])}`);
 const noopCalls = upstream(all).filter((l) => /-e1-h3-/.test(l.run)).length;
 check(noopCalls === 0, `the no-op's decision made ${noopCalls} calls`);
