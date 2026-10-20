@@ -164,7 +164,7 @@ export const KNOBS: Knob[] = [
 
   // Picture: a doodle inside a shape.
   K("picture.model", 1, 0, 2, 1, "model that draws pictures (0 haiku, 1 sonnet, 2 opus)"),
-  K("picture.maxPaths", 16, 4, 80, 1, "a doodle may use at most this many paths"),
+  K("picture.maxPaths", 12, 4, 80, 1, "a doodle may use at most this many paths"),
   K("picture.colors", 4, 1, 10, 1, "and at most this many colors"),
   K("picture.roughness", 1.4, 0, 3, 0.1, "wobble applied to the doodle's paths"),
   K("picture.parallel", 3, 1, 8, 1, "pictures drawn at the same time after a send"),
