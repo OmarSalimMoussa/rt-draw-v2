@@ -148,6 +148,14 @@ ${pictureRulesShort(t)}`,
   ],
 };
 
+/** Jev's question for draw.addHint (does the send ask for something new?), and the line the drawing model's user text gets on yes (never its system prompt). */
+export const DRAW_ADD = {
+  question: "Do they ask for something new to be added or built?",
+  yes: "They want a new page, section, card, button, list, label or any other shape that is not on the canvas yet, drawn or built for them.",
+  no: "They only change, move, remove, recolor, resize, rename or look at shapes that already exist.",
+  line: 'Every shape() description is at least 6 words (count them); a shorter one is thrown away together with the text() or drawing() that follows it. For a name, price, label or button write e.g. "starter plan price line near top of card".',
+};
+
 export type Role = keyof typeof PROMPTS;
 
 /** Each role's prompt knob: <role>.prompt, except Jev's questions, which belong to the part that asks them. */

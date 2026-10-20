@@ -18,7 +18,7 @@ import { OpStream, type Parsed, applyOp } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
 import { type TraceContext, mark, span, spanSync, timed } from "./trace.ts";
-import { promptOf, thinkingOf } from "./prompts.ts";
+import { DRAW_ADD, promptOf, thinkingOf } from "./prompts.ts";
 import { DEFAULTS, type Tuning, tune } from "./tuning.ts";
 
 export type Prompt = {
@@ -133,6 +133,10 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     const resolved = refsCall?.then((r) => ((resolveMs = Math.round(performance.now() - r0t)), r));
     // Whether the drawing model may think on this send: Jev's one question, alongside the resolver (a failed call leaves it to draw.noThink).
     const thinkCall = t["draw.thinkRouter"] ? span("decide thinking", ctx, (dctx) => needsThought(scene, transcript, readings, t, dctx)).catch(() => undefined) : undefined;
+    // Whether the send asks for something new: Jev's one question beside the resolver (a failed or late call leaves the text unchanged).
+    const addCall = t["draw.addHint"]
+      ? span("decide add", ctx, (dctx) => Promise.race([asksForNew(scene, transcript, readings, t, dctx), new Promise<undefined>((res) => setTimeout(res, t["draw.addWaitMs"]))])).catch(() => undefined)
+      : undefined;
     const shotCall = t["draw.sendScreenshot"] && !camera
       ? span("screenshot", ctx, async (sctx) => {
           const sh = await takeShot(scene, strokes, tune({ "shot.gridCellPx": cell }, t));
@@ -146,11 +150,11 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     const boardFor = (refs?: Promise<Ref[] | undefined>) => (t["draw.sendScreenshot"] && camera ? sendShots(scene, camera, strokes, said.map((w) => w.word).join(" "), t, refs, ctx) : undefined);
     // resolve.speculate: the same prompt on Jev's guess at the references, for a drawing call that starts before the resolver answers.
     const guessCall = t["resolve.speculate"] && refsCall ? span("guess references", ctx, (gctx) => guessRefs(said, marks, scene, hits, t, "draw-refs-guess", gctx)).catch(() => undefined) : undefined;
-    onGuess?.(guessCall ? guessCall.then(async (g) => g && finish(...(await Promise.all([shotCall, boardFor(Promise.resolve(g.refs)), g, thinkCall])))) : Promise.resolve(undefined));
+    onGuess?.(guessCall ? guessCall.then(async (g) => g && finish(...(await Promise.all([shotCall, boardFor(Promise.resolve(g.refs)), g, thinkCall, addCall])))) : Promise.resolve(undefined));
     // The pictures and the resolver: side by side.
-    return finish(...(await Promise.all([shotCall, boardFor(resolved?.then((r) => r.refs)), resolved, thinkCall])));
+    return finish(...(await Promise.all([shotCall, boardFor(resolved?.then((r) => r.refs)), resolved, thinkCall, addCall])));
 
-    function finish(shot: Shot | undefined, board: Awaited<ReturnType<typeof sendShots>> | undefined, refs: Resolution | undefined, thinkP: number | undefined): Prompt {
+    function finish(shot: Shot | undefined, board: Awaited<ReturnType<typeof sendShots>> | undefined, refs: Resolution | undefined, thinkP: number | undefined, addP: number | undefined): Prompt {
       const shots = board?.shots;
 
       const parts: string[] = [];
@@ -184,6 +188,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
       }
       if (refs?.hints?.length) parts.push(`Maybe also meant (the resolver was unsure; how likely each is):\n${refs.hints.map((h) => `${h.id} (${Math.round(h.p * 100)}%)`).join("\n")}`);
       parts.push(`Request: ${transcript || "(no words)"}`);
+      if (addP !== undefined && addP >= t["draw.addYes"]) parts.push(DRAW_ADD.line);
       const user = parts.join("\n\n");
       const pictures = shots ? shots.map((s) => s.shot) : shot ? [shot] : [];
       const imageTokens = pictures.reduce((a, p) => a + Math.round((p.width * p.height) / 750), 0);
@@ -205,6 +210,13 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
       };
     }
   });
+}
+
+/** Jev's probability that this send asks for something new to be added or built (draw.addHint); undefined when it gave none. */
+async function asksForNew(scene: Scene, transcript: string, readings: Reading[], t: Tuning, parent?: TraceContext): Promise<number | undefined> {
+  const state = { canvas: scene.shapes.size ? `${scene.shapes.size} shapes` : "empty", said: transcript || "(no words)", ink: readings.map((r) => (r.kind === "sketch" ? "a sketch" : `a ${r.how}`)) };
+  const d = await decide(jevOf(t["draw.thinkJevModel"]), state, { add: { type: "noul", instructions: DRAW_ADD.question, criteria: { yes: DRAW_ADD.yes, no: DRAW_ADD.no } } }, "draw-add", parent);
+  return d.yes.add;
 }
 
 /** Jev's probability that this send needs the drawing model to think first (draw.thinkRouter); undefined when it gave none. */
