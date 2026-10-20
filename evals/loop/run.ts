@@ -1217,7 +1217,10 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
     ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(),
   });
   const analysis = await engine().analyst(digest, run);
-  const r = await engine().critic({ run: `${st.stamp}-e${st.epoch}-critic`, token: await agents.slotToken(tokens(), gw), analysis, digest, tried: triedIndex(), tree: treeOf(sha), mockApi: await agentMock() });
+  const criticRun = `${st.stamp}-e${st.epoch}-critic`;
+  const r = await engine().critic({ run: criticRun, token: await agents.slotToken(tokens(), gw), analysis, digest, tried: triedIndex(), tree: treeOf(sha), mockApi: await agentMock() });
+  // Its answer as written, so a dropped or empty epoch can be read back.
+  put(runFile(criticRun, "critic.json"), { text: r.result?.text ?? "", cards: r.cards.map((c) => c.id), dropped: r.dropped });
   if (r.dropped.length) say(`critic: dropped ${r.dropped.join("; ")}`);
   return r.cards.slice(0, 3);
 }

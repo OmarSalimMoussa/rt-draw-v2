@@ -174,14 +174,31 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
   return r;
 }
 
-/** The first JSON value of a kind in a reply (models wrap it in prose or fences now and then). */
-function jsonIn<T>(text: string, open: "[" | "{"): T | undefined {
-  const close = open === "[" ? "]" : "}";
-  try {
-    return JSON.parse(text.slice(text.indexOf(open), text.lastIndexOf(close) + 1)) as T;
-  } catch {
-    return undefined;
+/**
+ * The first JSON value of a kind in a reply that parses and passes `ok`. Models wrap it in prose or fences, and the
+ * prose has brackets of its own ("[ink 1]", "the cap [24]"): each opening bracket is tried in turn up to its matching close.
+ */
+export function jsonIn<T>(text: string, open: "[" | "{", ok: (v: unknown) => boolean = () => true): T | undefined {
+  for (let start = text.indexOf(open); start >= 0; start = text.indexOf(open, start + 1)) {
+    let depth = 0, str = false, esc = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (str) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') str = false;
+      } else if (ch === '"') str = true;
+      else if (ch === "[" || ch === "{") depth++;
+      else if ((ch === "]" || ch === "}") && --depth === 0) {
+        try {
+          const v = JSON.parse(text.slice(start, i + 1));
+          if (ok(v)) return v as T;
+        } catch {}
+        break;
+      }
+    }
   }
+  return undefined;
 }
 
 /** The analyst: one call, no tools, on the analyst digest (§8.2). */
@@ -193,7 +210,7 @@ export type FailureNote = { case: string; component: string; evidence: string; t
 /** The failure analyst on a digest of at most 12 cases. */
 export async function failureAnalyst(digest: string, run: string): Promise<FailureNote[]> {
   const { text } = await ask({ role: "failure", model: "sonnet", system: FAILURE_SYSTEM, user: digest, effort: "medium", run });
-  return jsonIn<FailureNote[]>(text, "[") ?? [];
+  return jsonIn<FailureNote[]>(text, "[", objects) ?? [];
 }
 
 /** The failure analyst on the champion's worst misses, once per champion sha (reused until the champion moves). */
@@ -205,6 +222,9 @@ export async function championFailures(sha: string, run: string, checkpoint?: Ch
   put(file, notes);
   return notes;
 }
+
+/** A non-empty array of objects: what a list of cards or notes is. */
+const objects = (v: unknown) => Array.isArray(v) && v.length > 0 && v.every((x) => x !== null && typeof x === "object" && !Array.isArray(x));
 
 const KINDS = ["knob", "variant", "code", "op", "newknob"];
 const GOALS = ["fidelity", "craft", "latency"];
@@ -223,7 +243,8 @@ function cardFault(c: Partial<HypothesisCard>): string | undefined {
 
 /** At most 3 well-formed cards, knob cards first; the rest with why they were dropped. */
 export function readCards(text: string): { cards: HypothesisCard[]; dropped: string[] } {
-  const all = jsonIn<Partial<HypothesisCard>[]>(text, "[");
+  // A list of cards, else an empty list (no card worth running): never an array the prose quotes ("the cap [24]").
+  const all = jsonIn<Partial<HypothesisCard>[]>(text, "[", objects) ?? jsonIn<[]>(text, "[", (v) => Array.isArray(v) && !v.length);
   if (!Array.isArray(all)) return { cards: [], dropped: ["no JSON array of cards in the critic's answer"] };
   const dropped = all.flatMap((c) => (cardFault(c) ? [`${c.id ?? "?"}: ${cardFault(c)}`] : []));
   const ok = all.filter((c) => !cardFault(c)) as HypothesisCard[];
