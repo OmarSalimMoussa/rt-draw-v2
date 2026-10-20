@@ -835,11 +835,13 @@ function differs(run: string, id: string): boolean {
 /** A top-up's fork case (bank.ts' c-u<k>-s<n>-<send>), not a continuation of one (<case>-k<n>). */
 const TOP_UP = /^c-u\d+-s\d+-\d+$/;
 const clusterIn = (run: string) => (id: string) => maybe<CaseInfo>(caseFile(id, "case.json", run))!.originSession;
+/** A top-up whose case was written whole: one whose expectation came back unreadable (V7) has sends but no case.json. */
+const deposited = (run: string, id: string) => existsSync(caseFile(id, "case.json", run));
 /** Top-ups (§1.3) for a decision whose bank ran short: live fork sends on the champion, continuing on A, deposited as new cases. */
 const topUps = (rig: Rig, arms: Arms, run: string, judge: Judge, cls: Row["class"]) => async (n: number): Promise<Row[]> => {
   const { ctx, slots } = await forkCtx(rig, arms, run);
   const k = nextTopUp();
-  const ids = (await topUp(ctx, slots, n, k)).filter((id) => existsSync(caseDir(run, id)) && differs(run, id));
+  const ids = (await topUp(ctx, slots, n, k)).filter((id) => existsSync(caseDir(run, id)) && deposited(run, id) && differs(run, id));
   return forkedRows(run, ids, judge, { seed: `${run} top-up ${k}`, cls, cluster: clusterIn(run) });
 };
 /**
@@ -851,7 +853,7 @@ async function toppedUp(run: string, banked: string[], judge: Judge, cls: Row["c
   const not = new Set(banked);
   const ids = [...new Set(dirs.map((d) => d.replace(/\.void(\.\d+)?$/, "")))].filter((id) => TOP_UP.test(id) && !not.has(id));
   const had = new Set(readRows(run).map((r) => r.case));
-  const cut = ids.filter((id) => !had.has(id) && existsSync(join(caseDir(run, id), "done")) && differs(run, id));
+  const cut = ids.filter((id) => !had.has(id) && existsSync(join(caseDir(run, id), "done")) && deposited(run, id) && differs(run, id));
   if (cut.length) await forkedRows(run, cut, judge, { seed: `${run} top-up resumed`, cls, cluster: clusterIn(run) });
   const own = new Set(ids);
   return { sends: ids.length, rows: readRows(run).filter((r) => own.has(r.case)) };
