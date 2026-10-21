@@ -23,6 +23,8 @@ import { Canvas, type Tool } from "./canvas/Canvas.tsx";
 import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScreen, viewShowing } from "./canvas/view.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
+import { createProject } from "./projects/storage.ts";
+import { navigate } from "./router.ts";
 import { onSettings, getModel, showsLatency } from "./settings.ts";
 import { SettingsMenu } from "./SettingsMenu.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -30,12 +32,11 @@ import { StatusBadge } from "./StatusBadge.tsx";
 import { Icon } from "./sketch/Icon.tsx";
 import { MarkSketch } from "./sketch/MarkSketch.tsx";
 import { Voice, onInkClock, withTyped } from "./speech/voice.ts";
+import { keepWarm } from "./warm.ts";
 
 /** Height kept clear at the top for the toolbar. */
 const TOOLBAR_HEIGHT = 64;
 const HINT_KEY = "rt-draw.hint.gestures";
-/** A waiting Claude process is closed after 10 minutes (dev/model-plugin.ts): top them up well before. */
-const WARM_EVERY_MS = 240_000;
 /** How long a page pick glides (camera.easeMs). */
 const GLIDE_MS = 450;
 
@@ -132,9 +133,12 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         model: () => getModel().label,
         clock: () => clock.current,
         lastCall: () => calls.at(-1)?.n ?? 0,
+        failedCalls: (from, to) => calls.filter((c) => c.n > from && c.n <= to && c.error).map((c) => `${c.req.model.startsWith("jev") ? "Jev" : (c.req.from ?? c.req.model)}: ${c.error}`),
         onStart: () => {
           board.busy = true;
           board.stopLooking();
+          // Painted before the clock starts, so going back to the live board doesn't count as the send's changes.
+          board.flush();
         },
         onEnd: (job, landed) => {
           board.busy = false;
@@ -171,20 +175,18 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     return () => removeEventListener(CALLS_EVENT, onCalls);
   }, []);
 
-  // Claude processes started before they're needed, as the eval had them for every case.
+  // Claude processes started before they're needed, as the eval had them for every case (warm.ts).
   useEffect(() => {
-    const warm = () => {
+    const warm = keepWarm((spare) => {
       const t = board.tuning;
-      warmModel(modelOf(t["draw.model"]), promptOf("draw", t).system(true, board.scene.width, board.scene.height, 0, SCREEN.w), 2, thinkingOf("draw", t));
-      warmModel(modelOf(t["picture.model"]), promptOf("picture", t).system(t), t["picture.parallel"] * t["picture.copies"], thinkingOf("picture", t));
-    };
-    warm();
-    const every = setInterval(warm, WARM_EVERY_MS);
-    addEventListener("focus", warm);
-    const off = onSettings(warm);
+      warmModel(modelOf(t["draw.model"]), promptOf("draw", t).system(true, board.scene.width, board.scene.height, 0, SCREEN.w), 2 + spare, thinkingOf("draw", t));
+      warmModel(modelOf(t["picture.model"]), promptOf("picture", t).system(t), t["picture.parallel"] * t["picture.copies"] + spare, thinkingOf("picture", t));
+    });
+    addEventListener("focus", warm.now);
+    const off = onSettings(warm.now);
     return () => {
-      clearInterval(every);
-      removeEventListener("focus", warm);
+      warm.stop();
+      removeEventListener("focus", warm.now);
       off();
     };
   }, []);
@@ -193,6 +195,17 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   const voice = useMemo(() => new Voice({ mic: () => new Mic(), engine: (events, mic) => new ScribeEngine(events, mic as Mic, () => board.tuning) }), []);
   useSyncExternalStore(voice.subscribe, voice.getVersion);
   const spoken = `${voice.heard} ${voice.interim}`.trim();
+
+  // Another project opened in this tab mounts a new editor: this one's send stops (what landed is kept in its
+  // project's versions), the mic is let go, and its board stops following saves and settings.
+  useEffect(() => {
+    const off = board.listen();
+    return () => {
+      off();
+      sender.stop();
+      void voice.stop();
+    };
+  }, []);
 
   // The pen: strokes on this send's ink clock, which restarts at every Enter.
   const [tool, setTool] = useState<Tool>("draw");
@@ -222,13 +235,9 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     nextStroke.current = 1;
   }
 
-  /** A new, empty project (the old one stays in the projects list), with nothing left over from the old one. */
+  /** A new, empty project (the old one stays in the projects list): a new editor, as opening any project is. */
   function startFromScratch() {
-    sender.stop();
-    void voice.take();
-    setStrokes([]);
-    setPrompt("");
-    board.newProject();
+    navigate(`/?p=${createProject().id}`);
   }
 
   // Esc leaves the hand, or else takes back the last stroke; so does cmd/ctrl+Z while there are strokes.

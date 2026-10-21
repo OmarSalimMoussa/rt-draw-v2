@@ -2,7 +2,9 @@
 // still be on their way from Scribe), and a job runs once the one before it has
 // finished, pictures and glide included, as every send the eval measured ran
 // alone. Stop ends the running send and drops the queued ones. Each send is timed
-// step by step (latency.ts) and by the eval's own clock on the board.
+// step by step (latency.ts) and by the eval's own clock on the board. A failure
+// stays on show until the sends queued with it are over, and the next Enter after
+// that starts clean.
 import type { Clock } from "../../../evals/bridge/timing.ts";
 import type { OpResult } from "../../../src/core/draw.ts";
 import type { Stroke } from "../../../src/core/ink.ts";
@@ -21,6 +23,8 @@ export type SenderDeps = {
   clock: () => Pick<Clock, "enter" | "measure"> | undefined;
   /** n of the newest model call so far. */
   lastCall: () => number;
+  /** The model calls numbered from < n ≤ to that failed (a send can go through without them: Jev's fallback, a picture), as "who: why". */
+  failedCalls?: (from: number, to: number) => string[];
   /** Until the last change is on screen: two animation frames. */
   frame?: () => Promise<void>;
   /** A send is starting. */
@@ -30,7 +34,8 @@ export type SenderDeps = {
   log: LatencyLog;
 };
 
-export type SendStatus = { running: boolean; queued: number; ops: number; settling: boolean; done: boolean; error?: string; rejected: number };
+/** `failed`, `error` (the latest reason) and `callErrors` cover every send since the queue was last empty. */
+export type SendStatus = { running: boolean; queued: number; ops: number; settling: boolean; done: boolean; error?: string; failed: number; callErrors: string[]; rejected: number };
 
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -41,7 +46,7 @@ export class Sender {
   private epoch = 0;
   private waiting = 0;
   private current?: { times: SendTimes; abort: AbortController };
-  private status: SendStatus = { running: false, queued: 0, ops: 0, settling: false, done: false, rejected: 0 };
+  private status: SendStatus = { running: false, queued: 0, ops: 0, settling: false, done: false, failed: 0, callErrors: [], rejected: 0 };
   private listeners = new Set<() => void>();
 
   constructor(private deps: SenderDeps) {}
@@ -66,9 +71,11 @@ export class Sender {
     };
     job.words.then(settled, settled);
     const epoch = this.epoch;
+    const fresh = !this.status.running && this.waiting === 0;
     this.waiting++;
-    this.set({ queued: this.waiting });
-    this.chain = this.chain.then(() => this.run(job, times, epoch));
+    this.set({ queued: this.waiting, ...(fresh && { error: undefined, failed: 0, callErrors: [] }) });
+    // A throw in a hook mustn't stop the sends queued after it.
+    this.chain = this.chain.then(() => this.run(job, times, epoch)).catch((e) => this.crashed(times, e));
   }
 
   stop() {
@@ -81,6 +88,15 @@ export class Sender {
     const t = this.current?.times;
     if (!t || t.firstText !== undefined || t.start === undefined) return;
     t.firstText = at;
+    this.deps.log.touch();
+  }
+
+  private crashed(times: SendTimes, e: unknown) {
+    this.current = undefined;
+    times.status = "error";
+    times.error = message(e);
+    times.end ??= performance.now();
+    this.set({ running: false, settling: false, queued: this.waiting, done: false, error: message(e), failed: this.status.failed + 1 });
     this.deps.log.touch();
   }
 
@@ -103,7 +119,7 @@ export class Sender {
     const abort = new AbortController();
     this.current = { times, abort };
     times.status = "running";
-    this.set({ running: true, queued: this.waiting, ops: 0, rejected: 0, settling: false, done: false, error: undefined });
+    this.set({ running: true, queued: this.waiting, ops: 0, rejected: 0, settling: false, done: false });
     deps.onStart?.(job);
     times.start = performance.now();
     times.callsFrom = deps.lastCall();
@@ -158,7 +174,16 @@ export class Sender {
     times.status = stopped ? "stopped" : error ? "error" : "done";
     this.current = undefined;
     const more = this.waiting > 0;
-    this.set({ running: false, settling: false, done: !error && !stopped && !more, error });
+    const failed = this.status.failed + (error ? 1 : 0);
+    const callErrors = stopped || error ? [] : (deps.failedCalls?.(times.callsFrom, times.callsTo) ?? []);
+    this.set({
+      running: false,
+      settling: false,
+      done: !failed && !stopped && !more,
+      error: error ?? this.status.error,
+      failed,
+      callErrors: [...this.status.callErrors, ...callErrors],
+    });
     log.touch();
     deps.onEnd(job, landed, error);
   }

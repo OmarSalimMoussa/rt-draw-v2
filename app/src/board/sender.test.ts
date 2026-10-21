@@ -70,6 +70,52 @@ describe("sender", () => {
     expect(runs).toHaveLength(2);
   });
 
+  it("a send that fails while another is queued still shows its error once the queue is done", async () => {
+    const { sender, runs, job } = rig();
+    sender.enqueue(job("A"));
+    sender.enqueue(job("B"));
+    await tick();
+    runs[0].fail(new Error("Jev 401: bad key"));
+    await tick();
+    expect(sender.getStatus()).toMatchObject({ running: true, failed: 1, error: expect.stringContaining("Jev 401") });
+    runs[1].done();
+    await sender.idle();
+    expect(sender.getStatus()).toMatchObject({ running: false, done: false, failed: 1, error: expect.stringContaining("Jev 401") });
+    // The next Enter, once all that's over, starts clean.
+    sender.enqueue(job("C"));
+    expect(sender.getStatus()).toMatchObject({ failed: 0, error: undefined });
+  });
+
+  it("a send that went through with a failed model call says so", async () => {
+    const failedCalls = vi.fn(() => ["Jev: TYPESAFE_API_KEY is not set in .env"]);
+    const { sender, runs, job, setLast } = rig({ failedCalls });
+    setLast(2);
+    sender.enqueue(job("A"));
+    await tick();
+    setLast(5);
+    runs[0].done();
+    await sender.idle();
+    expect(failedCalls).toHaveBeenCalledWith(2, 5);
+    expect(sender.getStatus()).toMatchObject({ done: true, error: undefined, callErrors: ["Jev: TYPESAFE_API_KEY is not set in .env"] });
+  });
+
+  it("a throw after a send doesn't wedge the queue", async () => {
+    const onEnd = vi.fn().mockImplementationOnce(() => {
+      throw new Error("save failed");
+    });
+    const { sender, runs, job } = rig({ onEnd });
+    sender.enqueue(job("A"));
+    sender.enqueue(job("B"));
+    await tick();
+    runs[0].done();
+    await tick();
+    await tick();
+    expect(runs).toHaveLength(2);
+    runs[1].done();
+    await sender.idle();
+    expect(sender.getStatus()).toMatchObject({ running: false, queued: 0, error: expect.stringContaining("save failed") });
+  });
+
   it("stop aborts the running send and drops the queued ones", async () => {
     const { sender, runs, log, job } = rig();
     sender.enqueue(job("A"));

@@ -70,6 +70,9 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 .pg-state.done { color: var(--ok); }
 .pg-state.bad { color: var(--bad); }
 .pg-state-detail { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* A reason to hover for: the failures, the failed model calls. */
+.pg-state[title], .pg-state [title] { pointer-events: auto; }
+.pg-state-detail.bad { color: var(--bad); }
 .pg-pencil { transform-origin: 20% 80%; animation: pg-scribble 0.7s ease-in-out infinite alternate; }
 @keyframes pg-scribble { from { transform: rotate(-10deg) translateX(-1px); } to { transform: rotate(8deg) translateX(1px); } }
 @media (prefers-reduced-motion: reduce) { .pg-pencil { animation: none; } }

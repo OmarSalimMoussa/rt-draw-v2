@@ -2,11 +2,13 @@
 // scene a send draws on, in place), its history, and the tuning sends run with.
 // After v1's PageStore (src/page/store.ts) without the HTML: redraws go to the
 // board's <svg> once per animation frame (BoardView.tsx), as the eval's bridge
-// coalesces them, and the React parts subscribe for everything else.
+// coalesces them, and the React parts subscribe for everything else. One Board per
+// project opened in the tab: opening another one (New project included) mounts a new
+// editor (Root.tsx), so a send still finishing commits to the project it began on.
 import { Scene } from "../../../src/core/scene.ts";
 import type { Tuning } from "../../../src/core/tuning.ts";
 import { tuningFor } from "../models.ts";
-import { SAVED_EVENT, blankBoard, createProject, currentProjectId, listProjects, loadVersions, renameProject, saveVersions, savedFor } from "../projects/storage.ts";
+import { SAVED_EVENT, blankBoard, currentProjectId, listProjects, loadVersions, renameProject, saveVersions, savedFor } from "../projects/storage.ts";
 import { getModel, onSettings } from "../settings.ts";
 import { History } from "./history.ts";
 
@@ -35,12 +37,21 @@ export class Board {
     this.scene = this.latestScene();
     this.tuning = tuningFor(getModel());
     this.keepUrl();
-    onSettings(() => {
+  }
+
+  /** Follows the settings (the model) and other tabs' saves, until the returned function lets go (the editor unmounting). */
+  listen(): () => void {
+    const offSettings = onSettings(() => {
       this.tuning = tuningFor(getModel());
       this.draw();
     });
     // Another tab saved: follow it, so this tab never builds on (or saves) a stale copy.
-    addEventListener(SAVED_EVENT, (e) => savedFor(e, this.project) && this.adoptSaved());
+    const onSaved = (e: Event) => savedFor(e, this.project) && this.adoptSaved();
+    addEventListener(SAVED_EVENT, onSaved);
+    return () => {
+      offSettings();
+      removeEventListener(SAVED_EVENT, onSaved);
+    };
   }
 
   subscribe = (fn: () => void) => {
@@ -73,6 +84,15 @@ export class Board {
       this.changed();
     });
   };
+
+  /** A redraw still waiting for its frame happens now: the eval's clock starts from what's on screen (as the bridge renders before Enter). */
+  flush() {
+    if (!this.frame) return;
+    cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.painters.forEach((fn) => fn());
+    this.changed();
+  }
 
   private changed() {
     this.version++;
@@ -113,21 +133,6 @@ export class Board {
     const v = this.history.restore(n);
     this.scene = Scene.fromJSON(v.doc);
     this.save();
-  }
-
-  /** A new, empty project in this tab; the current one stays in the projects. */
-  newProject() {
-    this.open(createProject().id);
-  }
-
-  open(id: string) {
-    this.project = id;
-    this.history = new History(loadVersions(id));
-    this.parsed.clear();
-    this.scene = this.latestScene();
-    this.fresh = true;
-    this.keepUrl();
-    this.draw();
   }
 
   private latestScene() {
