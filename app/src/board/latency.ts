@@ -48,7 +48,7 @@ export const PHASES = [
   { key: "queue", label: "queue", hint: "waiting for the send before" },
   { key: "prompt", label: "prompt", hint: "marks, ink links, board shots, Jev" },
   { key: "model", label: "model", hint: "the drawing call, to its first text" },
-  { key: "line", label: "1st change", hint: "the model writing its first change" },
+  { key: "line", label: "1st line", hint: "the model writing its first change" },
   { key: "changes", label: "changes", hint: "the rest of the reply streaming in" },
   { key: "pictures", label: "pictures", hint: "pictures drawn into their shapes" },
   { key: "camera", label: "camera", hint: "the last glide settling" },

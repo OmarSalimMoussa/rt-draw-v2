@@ -131,7 +131,8 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 /* Latency overlay (dev; LatencyOverlay.tsx): each step of a turn as a pastel stretch of one inked bar. */
 .lt {
   --lt-queue: #dee2e6; --lt-send: #ffc9c9; --lt-model: #a5d8ff; --lt-line: #d0bfff; --lt-changes: #b2f2bb; --lt-layout: #ffd8a8; --lt-paint: #fcc2d7; --lt-pics: #ffe066;
-  position: absolute; right: 12px; bottom: 12px; z-index: 4; width: 360px; max-width: calc(100% - 24px); box-sizing: border-box;
+  --lt-listen: #c3fae8; --lt-prompt: #ffd8a8; --lt-camera: #fcc2d7;
+  position: absolute; right: 12px; bottom: 12px; z-index: 4; width: 360px; max-width: calc(100% - 24px); max-height: calc(100% - 80px); overflow: hidden auto; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: 13px;
   background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.15);
 }
@@ -178,6 +179,17 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 .lt-changes { background: var(--lt-changes); }
 .lt-layout { background: var(--lt-layout); }
 .lt-paint { background: var(--lt-paint); }
+.lt-listen { background: var(--lt-listen); }
+.lt-prompt { background: var(--lt-prompt); }
+.lt-pictures { background: var(--lt-pics); }
+.lt-camera { background: var(--lt-camera); }
+.lt-open { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.lt-open:hover .lt-text { text-decoration: underline; }
+.lt-calls { list-style: none; margin: 4px 0 2px; padding: 0 0 0 8px; display: flex; flex-direction: column; gap: 2px; border-left: 1.5px dashed var(--line); }
+.lt-calls button { display: flex; gap: 6px; width: 100%; padding: 1px 4px; border: 0; border-radius: 4px; background: transparent; color: inherit; font-size: 11px; text-align: left; cursor: pointer; }
+.lt-calls button:hover { background: rgb(43 43 43 / 0.06); }
+.lt-who { flex: none; min-width: 72px; }
+.lt-what { color: var(--muted); font-variant-numeric: tabular-nums; }
 .lt-hatch { background: repeating-linear-gradient(-45deg, var(--lt-pics) 0 3px, transparent 3px 6px); }
 .lt-foot { display: flex; gap: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lt-n { margin-left: auto; }

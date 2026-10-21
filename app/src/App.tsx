@@ -22,7 +22,8 @@ import { Sender } from "./board/sender.ts";
 import { Canvas, type Tool } from "./canvas/Canvas.tsx";
 import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScreen, viewShowing } from "./canvas/view.ts";
-import { onSettings, getModel } from "./settings.ts";
+import { LatencyOverlay } from "./LatencyOverlay.tsx";
+import { onSettings, getModel, showsLatency } from "./settings.ts";
 import { SettingsMenu } from "./SettingsMenu.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
@@ -150,6 +151,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     [],
   );
   const status = useSyncExternalStore(sender.subscribe, sender.getStatus);
+  const latency = useSyncExternalStore(onSettings, showsLatency);
   const busy = status.running || status.queued > 0;
   // Lets browser checks read the board and the timings.
   useEffect(() => {
@@ -305,6 +307,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <StatusBadge status={status} />
+      {latency && <LatencyOverlay log={log} />}
       {lost && (
         <div className="pg-lost">
           <button type="button" onClick={fitAll} title="Fit all your pages into view (shift+1)">
