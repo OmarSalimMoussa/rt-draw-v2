@@ -87,9 +87,18 @@ export function warmModel(model: ModelName, system: string, n = 1, opts: { effor
 /** Every call made from this page, newest last, exactly as sent: what the Model calls drawer shows. */
 export type CallRecord = { n: number; at: string; page: string; req: ModelRequest; reply: string; stats?: ModelStats; error?: string; running: boolean };
 export const calls: CallRecord[] = [];
+/** Calls numbered so far: numbers keep counting when old calls are forgotten. */
+let made = 0;
 /** Fired on window whenever a call starts, streams or ends. */
 export const CALLS_EVENT = "rt-model-calls";
 const changed = () => window.dispatchEvent(new Event(CALLS_EVENT));
+
+/** Drops the calls numbered below n, for a page that stays open (each keeps its request, pictures included). */
+export function forgetCallsBefore(n: number) {
+  const keep = calls.findIndex((c) => c.n >= n);
+  calls.splice(0, keep < 0 ? calls.length : keep);
+  changed();
+}
 
 export async function callModel(req: ModelRequest, onText?: (chunk: string, soFar: string) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ text: string; stats: ModelStats }> {
   return span(`model call · ${req.from ?? "?"} · ${req.model}`, parent, async (ctx, s) => {
@@ -170,7 +179,7 @@ function race(req: ModelRequest, onText: (chunk: string, soFar: string) => void,
 }
 
 async function record(req: ModelRequest, onText: (chunk: string, soFar: string) => void, signal?: AbortSignal): Promise<{ text: string; stats: ModelStats }> {
-  const rec: CallRecord = { n: calls.length + 1, at: new Date().toISOString(), page: location.pathname, req, reply: "", running: true };
+  const rec: CallRecord = { n: ++made, at: new Date().toISOString(), page: location.pathname, req, reply: "", running: true };
   calls.push(rec);
   changed();
   try {

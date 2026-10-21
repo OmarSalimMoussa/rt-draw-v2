@@ -72,3 +72,13 @@ export const mark = (ctx: Context | undefined, name: string, attrs?: Attributes)
 
 /** Every finished span so far. */
 export const finished = (): ReadableSpan[] => exporter.getFinishedSpans();
+
+/**
+ * Keeps only the finished spans that started at or after `ms` (performance.now() ms), for a page that stays open.
+ * A span's start read back on the page clock can come out a few µs early, hence the 1 ms of slack (as the eval's bridge allows).
+ */
+export function forgetSpansBefore(ms: number) {
+  const kept = exporter.getFinishedSpans().filter((s) => s.startTime[0] * 1000 + s.startTime[1] / 1e6 - performance.timeOrigin >= ms - 1);
+  exporter.reset();
+  if (kept.length) exporter.export(kept, () => {});
+}
