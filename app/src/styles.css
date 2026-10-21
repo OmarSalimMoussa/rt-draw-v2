@@ -1,0 +1,347 @@
+/* The sketchbook look: warm paper and ink, and Excalifont (src/page/fonts, OFL) for every word, menus included. */
+@font-face { font-family: "Excalifont"; src: url("./fonts/Excalifont-Regular.woff2") format("woff2"); font-display: block; }
+
+:root {
+  --bg: #fbf8f1;
+  --panel: #fffdf8;
+  --text: #1e1e1e;
+  --muted: #6c6457;
+  --line: #2b2b2b;
+  --ok: #2f9e44;
+  --bad: #e03131;
+  --accent: #1e1e1e;
+  --hand: "Excalifont", "Comic Sans MS", cursive;
+  /* v2's model call inspector (src/modal.ts, src/callsView.ts) is styled with these. */
+  --paper: var(--bg);
+  --ink: var(--text);
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* Hand-drawn outlines: uneven corners for panels, and smaller ones for controls. */
+  --wobble: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  --wobble-s: 14px 5px 12px 6px / 6px 12px 5px 14px;
+  font: 15px/1.4 var(--hand);
+  color: var(--text);
+}
+
+body { margin: 0; background: var(--bg); }
+.muted { color: var(--muted); }
+/* Hand-drawn cursors everywhere (sketch/cursors.ts sets the --cur-* variables). */
+html { cursor: var(--cur-default, default); }
+:is(a[href], [role="button"], [role="link"], [data-click], select, summary, label:has(> input)) { cursor: var(--cur-pointer, pointer); }
+textarea, input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"]), [contenteditable="true"] { cursor: var(--cur-text, text); }
+button:disabled { cursor: var(--cur-not-allowed, not-allowed); }
+/* Outlined buttons, dropdowns and text fields get the same hand-drawn outline as the panels: an ink line with uneven corners. */
+button { font: inherit; cursor: var(--cur-pointer, pointer); border: 2px solid var(--line); background: var(--panel); border-radius: var(--wobble-s); padding: 3px 10px; }
+select { font: inherit; border: 2px solid var(--line); border-radius: var(--wobble-s); background: var(--panel); color: var(--text); padding: 3px 6px; }
+input:not([type="checkbox"], [type="radio"], [type="range"]) { font: inherit; border: 2px solid var(--line); border-radius: var(--wobble-s); background: var(--panel); padding: 3px 6px; }
+input, select, textarea { font-family: var(--hand); }
+
+pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background: var(--bg); padding: 6px; border-radius: 4px; }
+
+/* Playground */
+.pg { position: fixed; inset: 0; }
+.pg-bar {
+  position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 4;
+  width: min(720px, calc(100% - 32px)); box-sizing: border-box;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.pg-row { display: flex; gap: 8px; align-items: center; }
+.pg-bar textarea {
+  flex: 1; resize: none; font: inherit; font-size: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+}
+.pg-bar textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.pg-send, .pg-stop { align-self: stretch; min-width: 72px; font-weight: 600; color: #fff; border: 0; border-radius: 8px; }
+.pg-send { background: var(--accent); }
+.pg-send:disabled { opacity: 0.5; cursor: var(--cur-not-allowed, not-allowed); }
+.pg-stop { background: var(--bad); }
+.pg-controls { flex-wrap: wrap; font-size: 12px; }
+.pg-controls button { border-color: transparent; background: #f1f3f5; }
+.pg-controls button:hover { background: #e9ecef; }
+.pg-controls .pg-chip { color: var(--bad); border-color: currentColor; }
+/* What the app is doing: top center, clear of the drawing. Clicks go through it. */
+.pg-state {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; pointer-events: none;
+  display: flex; align-items: center; gap: 10px; padding: 12px 22px; font-size: 22px; font-weight: 700; white-space: nowrap;
+  background: var(--panel); border-radius: 10px; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.05), 0 2px 8px rgb(0 0 0 / 0.1);
+}
+.pg-state svg { width: 26px; height: 26px; }
+.pg-state.bad { pointer-events: auto; }
+.pg-state.drawing { color: var(--accent); }
+.pg-state.done { color: var(--ok); }
+.pg-state.bad { color: var(--bad); }
+.pg-state-detail { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pg-pencil { transform-origin: 20% 80%; animation: pg-scribble 0.7s ease-in-out infinite alternate; }
+@keyframes pg-scribble { from { transform: rotate(-10deg) translateX(-1px); } to { transform: rotate(8deg) translateX(1px); } }
+@media (prefers-reduced-motion: reduce) { .pg-pencil { animation: none; } }
+@keyframes pg-pulse { to { opacity: 0.3; } }
+
+.pg-marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; overflow: visible; }
+/* The user's drawings, in red pencil: the line keeps its on-screen thickness at any zoom. */
+.pg-marks path { fill: none; stroke: var(--bad); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.pg-marks path.mk-fill { stroke-width: 1; opacity: 0.25; }
+.pg-marks text { fill: var(--bad); font: 700 18px var(--hand); }
+.pg-captions { display: flex; flex-direction: column; gap: 2px; font-size: 13px; padding: 0 2px; }
+.pg-heard { color: var(--muted); font-style: italic; }
+.pg-mic { align-self: stretch; display: grid; place-items: center; width: 48px; padding: 0; border-radius: 8px; color: #495057; }
+.pg-mic:hover { background: #f1f3f5; }
+.pg-mic.on { background: var(--bad); border-color: var(--bad); color: #fff; animation: pg-pulse 1s infinite alternate; }
+/* Shown when none of the pages is in view: one click brings them all back. */
+.pg-lost { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; }
+.pg-lost button { display: flex; align-items: center; gap: 8px; padding: 10px 20px; font-size: 18px; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.15); }
+.pg-hint {
+  position: absolute; top: 72px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 8px;
+  padding: 6px 6px 6px 14px; white-space: nowrap; color: var(--muted); background: var(--panel); border-radius: 999px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.05), 0 2px 8px rgb(0 0 0 / 0.1);
+}
+.pg-hint button { border: 0; padding: 2px 8px; border-radius: 999px; color: var(--muted); }
+.pg-hint button:hover { background: #f1f3f5; }
+/* Top right: new project, all projects and settings, as small icon buttons. */
+.pg-tools { position: absolute; top: 12px; right: 12px; z-index: 5; display: flex; gap: 8px; }
+.st { position: relative; }
+.pg-tool, .st-gear {
+  display: grid; place-items: center; box-sizing: border-box; width: 38px; height: 38px; padding: 0; color: #495057;
+  background: var(--panel); border: 0; border-radius: 10px; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.05), 0 2px 8px rgb(0 0 0 / 0.1);
+}
+.pg-tool { color: #495057; text-decoration: none; }
+/* Their icons fill the box (inside its 2px outline), drawn a little finer at that size. */
+:is(.pg-tool, .st-gear) .ic { width: 34px; height: 34px; stroke-width: 1.5; }
+.pg-tool:disabled { opacity: 0.4; }
+.st-gear:hover, .st-gear.on { color: var(--accent); }
+.st-menu {
+  position: absolute; top: 46px; right: 0; width: 300px; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+.st-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.st-models { display: flex; flex-direction: column; gap: 2px; }
+.st-models label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 13px; cursor: var(--cur-pointer, pointer); }
+.st-models label:hover { background: #f1f3f5; }
+.st-models label.on { background: #e7f5ff; }
+.st-models input { margin: 0; accent-color: var(--accent); }
+.st-models em { font-style: normal; font-size: 11px; color: var(--muted); }
+.st-price { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.st-note { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.st-toggle { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--wobble-s); font-size: 13px; }
+.st-toggle:hover { background: #f1f3f5; }
+.st-toggle input { margin: 0; accent-color: var(--accent); }
+.st-wipe-start { align-self: flex-start; font-size: 13px; }
+.st-wipe { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.st-wipe span { flex-basis: 100%; }
+.st-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+
+/* Latency overlay (dev; LatencyOverlay.tsx): each step of a turn as a pastel stretch of one inked bar. */
+.lt {
+  --lt-queue: #dee2e6; --lt-send: #ffc9c9; --lt-model: #a5d8ff; --lt-line: #d0bfff; --lt-changes: #b2f2bb; --lt-layout: #ffd8a8; --lt-paint: #fcc2d7; --lt-pics: #ffe066;
+  position: absolute; right: 12px; bottom: 12px; z-index: 4; width: 360px; max-width: calc(100% - 24px); box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: 13px;
+  background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.15);
+}
+.lt-head { display: flex; align-items: center; gap: 8px; }
+.lt-sub { margin-right: auto; font-size: 12px; color: var(--muted); }
+.lt-clear { padding: 0 8px; font-size: 12px; }
+.lt-x { padding: 0 4px; border: 0; background: transparent; color: var(--muted); }
+.lt-empty { margin: 0; font-size: 12px; color: var(--muted); }
+.lt-latest { display: flex; flex-direction: column; gap: 6px; }
+.lt-big { font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.lt-big small { margin-left: 8px; font-size: 13px; color: var(--muted); }
+.lt-big small.bad { color: var(--bad); }
+.lt-legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 12px; font-size: 12px; }
+.lt-legend li { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.lt-legend b { margin-left: auto; font-weight: 400; font-variant-numeric: tabular-nums; }
+.lt-swatch { flex: none; box-sizing: border-box; width: 11px; height: 11px; border: 1.5px solid var(--line); border-radius: 3px; }
+.lt-swatch.lt-tick { width: 2px; height: 13px; border: 0; border-radius: 0; background: var(--line); margin: 0 4px; }
+.lt-facts { font-size: 12px; color: var(--muted); }
+.lt-axis { position: relative; height: 14px; margin: 0 8px 0 0; font-size: 11px; color: var(--muted); }
+.lt-axis span { position: absolute; top: 0; transform: translateX(-50%); }
+.lt-axis span:first-child { transform: none; }
+.lt-axis span:last-child { transform: translateX(-100%); }
+.lt-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lt-label { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 12px; }
+.lt-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lt-tag { font-size: 11px; color: var(--muted); }
+.lt-tag.bad { color: var(--bad); }
+.lt-total { font-variant-numeric: tabular-nums; }
+.lt-track { position: relative; height: 15px; margin-right: 8px; overflow: hidden; }
+.lt-grid { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #dee2e6; }
+.lt-bar {
+  position: absolute; left: 0; top: 1px; bottom: 1px; min-width: 3px; box-sizing: border-box; display: flex; overflow: hidden;
+  border: 1.5px solid var(--line); border-radius: var(--wobble-s); background: var(--panel);
+}
+.lt-bar.live { border-style: dashed; }
+.lt-seg { flex: 0 0 0; min-width: 0; }
+.lt-seg + .lt-seg { border-left: 1px solid rgb(43 43 43 / 0.3); }
+.lt-pics { position: absolute; top: 4px; bottom: 4px; box-sizing: border-box; border: 1.5px dashed var(--line); border-left: 0; border-radius: 0 6px 6px 0; }
+.lt-first { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--line); border-radius: 1px; }
+.lt-queue { background: var(--lt-queue); }
+.lt-send { background: var(--lt-send); }
+.lt-model { background: var(--lt-model); }
+.lt-line { background: var(--lt-line); }
+.lt-changes { background: var(--lt-changes); }
+.lt-layout { background: var(--lt-layout); }
+.lt-paint { background: var(--lt-paint); }
+.lt-hatch { background: repeating-linear-gradient(-45deg, var(--lt-pics) 0 3px, transparent 3px 6px); }
+.lt-foot { display: flex; gap: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lt-n { margin-left: auto; }
+.pg-panel {
+  position: absolute; top: 12px; left: 12px; z-index: 4; width: 250px; max-height: calc(100% - 300px); overflow: hidden auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.08); padding: 10px;
+}
+
+/* Sidebar: project, sitemap and history */
+.lp-panel { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.lp-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; }
+.lp-head button { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 11px; padding: 2px 8px; }
+.lp-preview { color: var(--accent); border-color: var(--accent); }
+.lp-tree, .lp-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.lp-tree button, .lp-history button {
+  width: 100%; display: flex; align-items: center; gap: 6px; text-align: left; border: 0; border-radius: 6px;
+  padding: 4px 6px; background: transparent; min-width: 0;
+}
+.lp-tree button:hover, .lp-history button:hover { background: var(--bg); }
+.lp-tree button.on, .lp-history button.on { background: #e7f5ff; color: var(--accent); }
+.lp-glyph { width: 12px; color: var(--muted); flex: none; text-align: center; }
+.lp-state { font-style: italic; }
+/* The sidebar and its history scroll up and down only, and long names end in "…". A pixel of room around
+   the rows keeps their hover jitter from tipping the list into scrolling (which flashed scrollbars). */
+.lp-history { max-height: 40vh; overflow-y: auto; overflow-x: hidden; padding: 1px; }
+.lp-n { flex: none; min-width: 30px; font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+.lp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-ago { flex: none; color: var(--muted); font-size: 11px; }
+.lp-looking { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 6px; background: #fff9db; }
+.lp-looking span { flex: 1; font-weight: 600; }
+.lp-looking button { font-size: 11px; padding: 2px 8px; }
+.lp-restore { background: var(--accent); color: #fff; border-color: var(--accent); }
+.lp-empty { margin: 0; color: var(--muted); }
+.lp-project { display: flex; align-items: center; gap: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.lp-name { flex: 1; min-width: 0; text-align: left; border: 0; background: transparent; padding: 2px 4px; font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-name:hover { background: var(--bg); }
+.lp-project input { flex: 1; min-width: 0; font: inherit; font-weight: 700; font-size: 13px; padding: 2px 4px; border: 2px solid var(--line); border-radius: var(--wobble-s); }
+.lp-project button:not(.lp-name) { font-size: 11px; padding: 2px 8px; }
+.lp-project a { font-size: 11px; color: var(--accent); text-decoration: none; white-space: nowrap; }
+
+/* /debug: what the models were sent and sent back */
+@media (max-width: 1100px) { .dbg-cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* The canvas: pan and zoom over a dot grid; the pages and the laser trails. */
+.cv {
+  position: absolute; inset: 0; overflow: hidden; touch-action: none; user-select: none;
+  background-color: var(--bg); background-image: radial-gradient(circle, #d6cbb5 1px, transparent 1.2px);
+}
+/* The canvas edges fade into the paper, as if the site were being imagined. */
+.cv::after {
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: radial-gradient(ellipse 75% 70% at 55% 45%, transparent 55%, var(--bg) 100%);
+}
+.cv-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.cv-fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.cv-ink { fill: none; stroke: var(--bad); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+.cv-zoom {
+  position: absolute; left: 12px; bottom: 12px; z-index: 4; display: flex; gap: 2px; padding: 3px;
+  background: var(--panel); border-radius: 9px; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.05), 0 2px 8px rgb(0 0 0 / 0.1);
+}
+.cv-zoom button { border: 0; background: transparent; min-width: 28px; height: 26px; padding: 0 6px; border-radius: 6px; font-size: 13px; }
+.cv-zoom button:hover { background: #f1f3f5; }
+.cv-hand { display: grid; place-items: center; color: #495057; }
+.cv-hand.on { background: #e7f5ff !important; color: var(--accent); }
+.cv-pct { font-variant-numeric: tabular-nums; min-width: 48px !important; }
+
+/* ---- Sketchbook: ink outlines with uneven corners and a pencil shadow, in place of crisp panels ---- */
+.pg { font-size: 15px; }
+:is(.lp-panel, .lp-head, .lp-head button, .lp-ago, .lp-project button:not(.lp-name), .lp-project a, .pg-controls) { font-size: 14px; }
+.lp-head { letter-spacing: 0.02em; }
+.lp-name { font-size: 17px; }
+.pg-bar textarea { font-size: 16px; }
+:is(.pg-panel, .pg-bar, .st-menu) { border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.15); }
+:is(.pg-state, .st-gear, .pg-tool, .cv-zoom, .pg-hint, .pg-mic, .pg-bar textarea) {
+  border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12);
+}
+.pg-send { background: #1e1e1e; border-radius: var(--wobble-s); }
+:is(.lp-tree button.on, .lp-history button.on) { background: #fff3bf; color: #1e1e1e; }
+
+/* Icons (src/sketch/Icon.tsx): drawn in the text color, sitting on the text's baseline. */
+.ic { display: inline-block; flex: none; vertical-align: -0.18em; overflow: visible; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* At rest an icon shows its first drawing. Hovering its button or link (or an icon marked .ic-boil) flips
+   through all three, 0.15s each: the icon boils, like a hand-drawn animation. */
+.ic-frame + .ic-frame { visibility: hidden; }
+:is(button, a, [role="link"]):hover .ic-frame, .ic-boil .ic-frame { animation: ic-boil 0.45s steps(1, end) infinite; }
+:is(button, a, [role="link"]):hover .ic-frame:nth-child(2), .ic-boil .ic-frame:nth-child(2) { animation-delay: -0.3s; }
+:is(button, a, [role="link"]):hover .ic-frame:nth-child(3), .ic-boil .ic-frame:nth-child(3) { animation-delay: -0.15s; }
+@keyframes ic-boil { 0% { visibility: visible; } 33.33%, 100% { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .ic-frame { animation: none !important; } }
+
+/* Anything you can click boils while you hover it: it jitters between three spots half a pixel apart, 0.15s each,
+   like a frame of hand-drawn animation. It moves by layout offsets (not transforms), so the browser redraws
+   it sharp in each spot instead of resampling a blurry copy, and outlines and letters never break apart.
+   Drawn icons also flip between their own redrawings (Icon.tsx). In the app, and in the sites it draws, in the
+   preview and on the canvas. (Things placed absolutely or fixed, like the lab's buttons, the preview's minimized
+   tab and the pictures behind a site's blocks, keep their place and move by translates instead: made relative,
+   a picture behind would drop into the page with no size, out from under the pointer, and flicker.) */
+:is(button:not(:disabled), a[href], [role="button"], [role="link"], [data-click], select, summary, label:has(> input)):not(.lab-btn, .pv-dock, .wf-behind):hover,
+.wf-place :is(.wf-btn, .wf-links > span, .wf-img, .wf-icon):not(.wf-behind):hover {
+  position: relative;
+  animation: boil 0.45s steps(1, end) infinite;
+}
+@keyframes boil {
+  0% { left: 0.5px; top: 0; }
+  33.33% { left: -0.5px; top: 0.5px; }
+  66.66% { left: 0; top: -0.5px; }
+}
+:is(.lab-btn, .pv-dock):not(:disabled):hover, .wf-place .wf-behind:hover, .wf-behind[data-click]:hover { animation: boil-placed 0.45s steps(1, end) infinite; }
+@keyframes boil-placed {
+  0% { translate: 0.5px 0; }
+  33.33% { translate: -0.5px 0.5px; }
+  66.66% { translate: 0 -0.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(button, a[href], [role="button"], [role="link"], [data-click], select, summary, label:has(> input)):hover,
+  .wf-place :is(.wf-btn, .wf-links > span, .wf-img, .wf-icon):hover { animation: none !important; }
+}
+/* On the canvas the pages ignore the pointer (it draws), except to notice it hovering what the site's visitors could click. */
+.wf-place :is(.wf-btn, .wf-links > span, .wf-img, .wf-icon) { pointer-events: auto; }
+
+/* The sidebar's icons, a size up. */
+.lp-panel .ic { width: 1.4em; height: 1.4em; vertical-align: -0.3em; }
+.lp-glyph { width: 20px; }
+
+/* List rows (pages, history, sessions, models) aren't outlined (that would be a cage of boxes), but their highlight has the same uneven corners. */
+:is(.lp-tree button, .lp-history button, .st-models label, .lp-looking) { border-radius: var(--wobble-s); }
+
+/* Switching pages (Root.tsx): the editor hides under the other pages, and a load screen covers the swap. */
+/* Opacity as well as visibility: boiling drawings switch their own visibility on, which would show through. */
+.route-away { visibility: hidden; opacity: 0; }
+.veil { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: var(--bg); }
+.veil-in { animation: veil-in 0.12s ease-out both; }
+.veil-out { animation: veil-out 0.2s ease-in both; }
+@keyframes veil-in { from { opacity: 0; } }
+@keyframes veil-out { to { opacity: 0; } }
+/* The load screen's bubble: the small bubble rises and pops in, then the big one, then the cloud is drawn (0.9s);
+   then it boils (its three drawings, like the logo) until the page has drawn. */
+.vb { width: 120px; height: 120px; overflow: visible; }
+.vb path { fill: var(--panel); stroke: var(--text); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.vb-draw path { fill-opacity: 0; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.vb-dot { transform-box: fill-box; transform-origin: center; }
+.vb-small { animation: vb-rise 0.2s cubic-bezier(0.2, 1.6, 0.4, 1) both, vb-ink 0.15s ease-out forwards, vb-fill 0.1s ease 0.15s forwards; }
+.vb-big { animation: vb-rise 0.22s cubic-bezier(0.2, 1.6, 0.4, 1) 0.12s both, vb-ink 0.18s ease-out 0.12s forwards, vb-fill 0.1s ease 0.3s forwards; }
+.vb-cloud { animation: vb-ink 0.45s ease-in-out 0.25s forwards, vb-fill 0.15s ease 0.7s forwards; }
+.vb-draw { animation: vb-off 0s linear 0.9s forwards; }
+.vb-boil { opacity: 0; animation: vb-on 0s linear 0.9s forwards; }
+.vb-boil .lf { animation: ic-boil 0.45s steps(1, end) infinite; }
+.vb-boil .lf:nth-child(2) { animation-delay: -0.3s; }
+.vb-boil .lf:nth-child(3) { animation-delay: -0.15s; }
+@keyframes vb-rise { from { transform: translateY(12px) scale(0.2); opacity: 0; } }
+@keyframes vb-ink { to { stroke-dashoffset: 0; } }
+@keyframes vb-fill { to { fill-opacity: 1; } }
+@keyframes vb-off { to { opacity: 0; } }
+@keyframes vb-on { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .vb-draw, .vb-draw path { animation: none; stroke-dashoffset: 0; fill-opacity: 1; }
+  .vb-boil { display: none; }
+}
+
+/* The logo (sketch/Logo.tsx): paper inside, ink outline, boiling. */
+.logo { flex: none; overflow: visible; }
+.logo path { fill: var(--panel); stroke: var(--text); stroke-width: 4.4; stroke-linecap: round; stroke-linejoin: round; }
+.logo .lf + .lf { visibility: hidden; }
+.logo .lf { animation: ic-boil 0.45s steps(1, end) infinite; }
+.logo .lf:nth-child(2) { animation-delay: -0.3s; }
+.logo .lf:nth-child(3) { animation-delay: -0.15s; }
+@media (prefers-reduced-motion: reduce) { .logo .lf { animation: none; } }
