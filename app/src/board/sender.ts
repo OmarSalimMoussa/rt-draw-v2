@@ -137,7 +137,8 @@ export class Sender {
     this.waiting--;
     await deps.ready?.();
     if (epoch === this.epoch) await job.before?.();
-    const words = await job.words.catch(() => "");
+    // Stopped before its turn: its words may never come (a build's come from its before).
+    const words = epoch === this.epoch ? await job.words.catch(() => "") : "";
     if (epoch !== this.epoch) {
       times.status = "stopped";
       this.set({ queued: this.waiting, running: false });

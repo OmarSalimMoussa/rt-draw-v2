@@ -11,7 +11,7 @@ import { SCREEN, fitView, homeOf, pageName, pageTop, pagesOf, union } from "../.
 import { groupStrokes } from "../../src/core/marks.ts";
 import { CALLS_EVENT, calls, forgetCallsBefore, modelOf, warmModel } from "../../src/core/model.ts";
 import { promptOf, thinkingOf } from "../../src/core/prompts.ts";
-import type { Box } from "../../src/core/scene.ts";
+import type { Box, Shape } from "../../src/core/scene.ts";
 import { send } from "../../src/core/send.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { forgetSpansBefore, span } from "../../src/core/trace.ts";
@@ -26,6 +26,7 @@ import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScene, toScreen, viewShowing } from "./canvas/view.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
 import { type Building, Preview } from "./preview/Preview.tsx";
+import { buildJob } from "./preview/build.ts";
 import { previewHash, previewOfHash } from "./preview/preview.ts";
 import { createProject } from "./projects/storage.ts";
 import { navigate } from "./router.ts";
@@ -283,6 +284,28 @@ export function App({ hidden = false }: { hidden?: boolean }) {
 
   const [prompt, setPrompt] = useState("");
 
+  /**
+   * A click in the preview that leads nowhere yet: a send that builds its page (build.ts), queued like any
+   * other. The preview goes to the page at once, blank and pulsing, and fills in as the model draws it.
+   */
+  function startBuild(shape: Shape, from: Shape) {
+    const b = buildJob(
+      {
+        scene: () => board.scene,
+        settle: () => board.settle({ glideMs: SETTLE_MS }),
+        focus: (page) => glideTo(pageTop(page), GLIDE_MS),
+        enter: () => performance.now(),
+      },
+      { shape, from },
+      (status, landed, error) =>
+        // Built (something landed, so it stays): done. Nothing drawn: v1's strip says why.
+        setBuilding((w) => (!w || landed ? undefined : { ...w, running: false, failed: status === "stopped" ? "It was stopped before anything was drawn." : (error ?? "Nothing was drawn.") })),
+    );
+    setBuilding({ to: b.to, label: b.label, w: b.w, h: b.h, running: true });
+    sender.enqueue(b.job);
+    showPreview(b.to);
+  }
+
   function submit() {
     const typed = prompt.trim();
     const said = spoken;
@@ -502,11 +525,15 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           page={pv}
           building={building}
           onGo={showPreview}
-          onBuild={() => {}}
+          onBuild={startBuild}
           onLinked={() => !busy && void board.settle({ glideMs: 0 })}
           onEdit={editPage}
           onExit={exitPreview}
-          onDismiss={() => setBuilding(undefined)}
+          onDismiss={() => {
+            setBuilding(undefined);
+            // Its page was taken away: back to the page it was clicked from.
+            if (building && pv === building.to && !board.scene.get(building.to)) history.back();
+          }}
         />
       )}
     </div>
