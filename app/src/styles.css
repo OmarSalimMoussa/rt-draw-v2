@@ -369,3 +369,11 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 .bd-arrows g { animation: bd-fade-in 0.3s ease 0.3s both; }
 @keyframes bd-fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .bd-arrows g { animation: none; } }
+/* Top centre (App.tsx): the status badge, and after Edit this page the way back to the preview, side by side. */
+.pg-topline { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 10px; pointer-events: none; }
+.pg-topline .pg-state { position: static; transform: none; }
+.pg-back {
+  pointer-events: auto; display: flex; align-items: center; gap: 8px; padding: 7px 16px; font-size: 16px; white-space: nowrap;
+  border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.15);
+}
+.pg-back span { color: var(--muted); }

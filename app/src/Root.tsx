@@ -3,7 +3,7 @@
 // (paper, and the logo's thought bubble bubbling up) while the new page mounts.
 // Once opened, the editor stays mounted, hidden, on the projects page: a send
 // keeps going while you look at your projects, and coming back is instant with
-// nothing lost. (v1's Root.tsx, without the preview.)
+// nothing lost. The preview lives in the editor, over it (App.tsx). (v1's Root.tsx.)
 import { useEffect, useMemo, useRef, useState } from "react";
 import { App } from "./App.tsx";
 import { currentProjectId, ensureProject } from "./projects/storage.ts";
@@ -18,6 +18,8 @@ const VEIL_MIN_MS = 950;
 type Where = { route: Route; search: string };
 const here = (): Where => ({ route: routeOf(location.pathname), search: location.search });
 const withEditor = (r: Route) => r === "editor";
+/** The project an editor URL names (null: none, the one open). */
+const projectIn = (search: string) => new URLSearchParams(search).get("p");
 
 export function Root() {
   const [at, setAt] = useState(here);
@@ -25,6 +27,8 @@ export function Root() {
   atRef.current = at;
   // The project the editor has open; the editor stays mounted (hidden) once it's been opened.
   const [editorFor, setEditorFor] = useState<string | null>(() => (withEditor(at.route) ? currentProjectId() : null));
+  const editorRef = useRef(editorFor);
+  editorRef.current = editorFor;
   const [veil, setVeil] = useState<"in" | "out" | null>(null);
   const shownAt = useRef(0);
 
@@ -61,11 +65,12 @@ export function Root() {
       e.preventDefault();
       go(url.pathname + url.search + url.hash);
     };
-    // Back and Forward: a different page or project swaps too.
+    // Back and Forward: a different page or project swaps too (the preview's pages are the editor's hash, its own to follow).
     const onPop = () => {
       const next = here();
       const was = atRef.current;
-      if (next.route !== was.route || next.search !== was.search) go(null);
+      const p = projectIn(next.search);
+      if (next.route !== was.route || (withEditor(next.route) && p !== null && p !== editorRef.current)) go(null);
     };
     document.addEventListener("click", onClick);
     addEventListener("popstate", onPop);

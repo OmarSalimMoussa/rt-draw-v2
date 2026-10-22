@@ -4,7 +4,7 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import { act } from "react";
 import { type Root as ReactRoot, createRoot } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runScript } from "../../src/core/ops.ts";
 import { Scene, type SceneJSON } from "../../src/core/scene.ts";
 import type { Board } from "./board/board.ts";
@@ -171,3 +171,71 @@ describe("the editor", () => {
     expect(log.sends[0].ttfcMs).toBeUndefined();
   });
 });
+
+// A two-page site: Home's nav links to Services; a heading links nowhere.
+const SITE = `shape(nav-services, pill, 900 28 110 30, "the Services item in the nav of Home", link:services)
+text(nav-services, "Services")
+shape(title, rect, 80 200 600 80, "the big heading of the Home page hero")
+text(title, "Fresh bread every day")
+shape(services, frame, 1500 0 1280 800, "the Services page listing what the shop does")
+text(services, "Services")`;
+
+describe("the preview", () => {
+  /** Lays every page's <svg> out as 1280×800 at the window's top left, as a 100% preview of a 1280-wide page would be. */
+  const rect = Element.prototype.getBoundingClientRect;
+  const context = HTMLCanvasElement.prototype.getContext;
+  beforeAll(() => {
+    Element.prototype.getBoundingClientRect = function () {
+      return this.classList?.contains("pv-page") ? ({ left: 0, top: 0, width: 1280, height: 800, right: 1280, bottom: 800, x: 0, y: 0 } as DOMRect) : rect.call(this);
+    };
+    // happy-dom has no canvas: the renderer measures words to wrap them.
+    HTMLCanvasElement.prototype.getContext = (() => ({ font: "", measureText: (t: string) => ({ width: t.length * 10 }) })) as never;
+  });
+  afterAll(() => {
+    Element.prototype.getBoundingClientRect = rect;
+    HTMLCanvasElement.prototype.getContext = context;
+  });
+  const clickAt = (x: number, y: number) =>
+    act(async () => void document.querySelector("svg.pv-page")!.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
+  const select = () => document.querySelector<HTMLSelectElement>(".pv-bar select")!;
+
+  it("opens from the hash; a link goes to its page, as a new history entry, and a heading does nothing", async () => {
+    const a = project(doc(SITE));
+    history.replaceState(null, "", `/?p=${a}#preview`);
+    await openKeepingHash(a);
+    expect(select().value).toBe("page");
+    await clickAt(300, 240);
+    expect(location.hash).toBe("#preview");
+    const before = history.length;
+    await clickAt(950, 40);
+    expect(location.hash).toBe("#preview=services");
+    expect(select().value).toBe("services");
+    expect(history.length).toBe(before + 1);
+  });
+
+  it("Edit this page goes back to the board on that page, and the pill returns to the preview there", async () => {
+    const a = project(doc(SITE));
+    history.replaceState(null, "", `/?p=${a}#preview=services`);
+    await openKeepingHash(a);
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".pv-bar button")].find((b) => b.textContent?.includes("Edit this page"))!.click());
+    expect(document.querySelector(".pv")).toBeNull();
+    expect(location.hash).toBe("");
+    expect(document.querySelector(".lp-tree button.on")?.textContent).toContain("Services");
+    const pill = document.querySelector<HTMLButtonElement>(".pg-back")!;
+    expect(pill.textContent).toContain("on Services");
+    await act(async () => pill.click());
+    expect(location.hash).toBe("#preview=services");
+    expect(select().value).toBe("services");
+    expect(document.querySelector(".pg-back")).toBeNull();
+  });
+});
+
+/** open(), but the URL's hash (the preview) is kept. */
+async function openKeepingHash(id: string) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<Root />));
+  await until(() => app()?.board.project === id);
+  await until(() => document.querySelector(".pv"));
+}

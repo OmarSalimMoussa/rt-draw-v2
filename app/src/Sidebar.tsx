@@ -1,7 +1,7 @@
 // The left sidebar: the project (rename it), its pages (each nested under the
 // page whose link leads to it) and its history, where you can look back and
-// restore an old board without losing anything. (v1's page/Sidebar.tsx, with its
-// hover fix, on v2's pages; no preview.)
+// restore an old board without losing anything, and the Preview button. (v1's
+// page/Sidebar.tsx, with its hover fix, on v2's pages.)
 import { useState, useSyncExternalStore } from "react";
 import type { Board } from "./board/board.ts";
 import { pageRows } from "./board/pages.ts";
@@ -13,13 +13,17 @@ type Props = {
   board: Board;
   /** A send is running or queued: the board can't be restored under it. */
   busy: boolean;
+  /** The page picked (undefined: all pages). */
+  picked?: string;
   /** Glide to a page. */
   onPage(id: string): void;
   /** Fit every page in view. */
   onAll(): void;
+  /** Open the preview on the home page. */
+  onPreview(): void;
 };
 
-export function Sidebar({ board, busy, onPage, onAll }: Props) {
+export function Sidebar({ board, busy, picked, onPage, onAll, onPreview }: Props) {
   useSyncExternalStore(board.subscribe, board.getVersion);
   const h = board.history;
   // A hovered version shows on the canvas only: above the history the sidebar keeps the latest pages, and the
@@ -27,7 +31,6 @@ export function Sidebar({ board, busy, onPage, onAll }: Props) {
   // another version would land under it and change them back, and the rows would flicker.
   const looked = h.pinned ? h.looking : undefined;
   const pages = pageRows(looked === undefined ? board.scene : board.shown());
-  const [picked, setPicked] = useState<string>();
   const history = h.newestFirst();
   const latest = h.latest();
   const [renaming, setRenaming] = useState(false);
@@ -59,16 +62,19 @@ export function Sidebar({ board, busy, onPage, onAll }: Props) {
       </div>
       <div className="lp-head">
         <span>Pages</span>
+        <button type="button" onClick={onPreview} disabled={!pages.length} title="Click through the site as a visitor would">
+          Preview
+        </button>
       </div>
       <ul className="lp-tree">
         <li>
-          <button type="button" className={picked ? "" : "on"} onClick={() => (setPicked(undefined), onAll())}>
+          <button type="button" className={picked ? "" : "on"} onClick={onAll}>
             All pages
           </button>
         </li>
         {pages.map((p) => (
           <li key={p.id} style={{ paddingLeft: p.depth * 14 }}>
-            <button type="button" className={p.id === picked ? "on" : ""} onClick={() => (setPicked(p.id), onPage(p.id))}>
+            <button type="button" className={p.id === picked ? "on" : ""} onClick={() => onPage(p.id)}>
               <span className="lp-glyph" aria-hidden>{p.home ? <Icon name="home" /> : <Icon name="branch" />}</span>
               <span className="lp-label">{p.name}</span>
             </button>

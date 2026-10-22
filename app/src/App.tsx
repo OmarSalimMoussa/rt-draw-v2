@@ -3,10 +3,11 @@
 // bar at the bottom takes what you say; the mic stays on until you turn it off.
 // A send is exactly the eval bridge's call (evals/bridge/main.ts): v2's send() on
 // the live board, with the camera the person sees, redraws once per frame, and
-// camera(...) ops gliding the view. (v1's App.tsx, on v2's engine.)
+// camera(...) ops gliding the view. The preview shows the site over the editor, in
+// this tab, with its page in the URL's hash. (v1's App.tsx, on v2's engine.)
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type Clock, watch } from "../../evals/bridge/timing.ts";
-import { SCREEN, fitView, homeOf, pageTop, pagesOf, union } from "../../src/core/board.ts";
+import { SCREEN, fitView, homeOf, pageName, pageTop, pagesOf, union } from "../../src/core/board.ts";
 import { groupStrokes } from "../../src/core/marks.ts";
 import { CALLS_EVENT, calls, forgetCallsBefore, modelOf, warmModel } from "../../src/core/model.ts";
 import { promptOf, thinkingOf } from "../../src/core/prompts.ts";
@@ -24,6 +25,8 @@ import { Canvas, type Tool } from "./canvas/Canvas.tsx";
 import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScene, toScreen, viewShowing } from "./canvas/view.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
+import { type Building, Preview } from "./preview/Preview.tsx";
+import { previewHash, previewOfHash } from "./preview/preview.ts";
 import { createProject } from "./projects/storage.ts";
 import { navigate } from "./router.ts";
 import { onSettings, getModel, showsLatency } from "./settings.ts";
@@ -42,6 +45,11 @@ const HINT_KEY = "rt-draw.hint.gestures";
 const GLIDE_MS = 450;
 
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/** A whole page with its name above it, and a little room around: what Edit this page fits in view. */
+const wholePage = (b: Box): Box => {
+  const m = Math.max(b.w, b.h) * 0.03;
+  return { x: b.x - m, y: b.y - 60 - m, w: b.w + 2 * m, h: b.h + 60 + 2 * m };
+};
 
 /** `hidden`: another page is showing over it (Root.tsx); it keeps working but ignores the keyboard. */
 export function App({ hidden = false }: { hidden?: boolean }) {
@@ -110,6 +118,46 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   const fitAll = () => {
     const box = pagesBox();
     if (box) void glideTo(fitView(box, 0.03));
+  };
+
+  // The preview: its page is in the hash (#preview=<page>), so a reload reopens it and Back goes to the page before.
+  const [pv, setPv] = useState<string | null | undefined>(() => previewOfHash(location.hash));
+  const previewing = pv !== undefined;
+  useEffect(() => {
+    const read = () => setPv(previewOfHash(location.hash));
+    addEventListener("popstate", read);
+    addEventListener("hashchange", read);
+    return () => {
+      removeEventListener("popstate", read);
+      removeEventListener("hashchange", read);
+    };
+  }, []);
+  // Coming back from the projects page (its Preview buttons) to this editor.
+  useEffect(() => {
+    if (!hidden) setPv(previewOfHash(location.hash));
+  }, [hidden]);
+  const editorUrl = () => location.pathname + location.search;
+  const showPreview = (page: string | null) => {
+    if (page === pv) return;
+    history.pushState(null, "", editorUrl() + previewHash(page));
+    setPv(page);
+  };
+  const exitPreview = () => {
+    history.pushState(null, "", editorUrl());
+    setPv(undefined);
+  };
+  /** The page picked in the sidebar's Pages (undefined: all of them). */
+  const [picked, setPicked] = useState<string>();
+  /** The page Edit this page came from: the pill back to the preview on it. */
+  const [backTo, setBackTo] = useState<string>();
+  const [building, setBuilding] = useState<Building>();
+  /** Edit this page: back to the board, the whole page in view and picked in the sidebar. */
+  const editPage = (id: string) => {
+    exitPreview();
+    setPicked(id);
+    setBackTo(id);
+    const page = board.scene.get(id);
+    if (page) void glideTo(wholePage(page.box), GLIDE_MS);
   };
 
   // First sight of a project: the camera on its home page, as the eval starts.
@@ -258,7 +306,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   // Esc leaves the hand, or else takes back the last stroke; so does cmd/ctrl+Z while there are strokes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (hidden) return;
+      if (hidden || previewing) return;
       const t = e.target;
       if (t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
       if (e.key === "Escape") {
@@ -271,7 +319,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [tool, hidden]);
+  }, [tool, hidden, previewing]);
 
   // How to draw and move around, until the person has done both once.
   const [hint, setHint] = useState(() => {
@@ -303,7 +351,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         onView={setView}
         tool={tool}
         onTool={setTool}
-        active={!hidden}
+        active={!hidden && !previewing}
         onStroke={addStroke}
         onGesture={retireHint}
         onFit={fitAll}
@@ -335,7 +383,22 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           <button type="button" onClick={() => retireHint()} aria-label="Got it"><Icon name="close" /></button>
         </div>
       )}
-      <StatusBadge status={status} />
+      {/* Top centre: what the app is doing, and the way back to the preview after Edit this page. */}
+      <div className="pg-topline">
+        <StatusBadge status={status} />
+        {backTo && board.scene.get(backTo) && (
+          <button
+            type="button"
+            className="pg-back"
+            onClick={() => {
+              setBackTo(undefined);
+              showPreview(backTo);
+            }}
+          >
+            <Icon name="back" /> Back to preview <span>on {pageName(board.scene.get(backTo)!)}</span>
+          </button>
+        )}
+      </div>
       {latency && <LatencyOverlay log={log} />}
       {lost && (
         <div className="pg-lost">
@@ -359,11 +422,17 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         <Sidebar
           board={board}
           busy={busy}
+          picked={picked}
           onPage={(id) => {
+            setPicked(id);
             const page = board.scene.get(id);
             if (page) void glideTo(pageTop(page), GLIDE_MS);
           }}
-          onAll={fitAll}
+          onAll={() => {
+            setPicked(undefined);
+            fitAll();
+          }}
+          onPreview={() => showPreview(null)}
         />
       </aside>
 
@@ -426,6 +495,20 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           </div>
         )}
       </form>
+
+      {previewing && (
+        <Preview
+          board={board}
+          page={pv}
+          building={building}
+          onGo={showPreview}
+          onBuild={() => {}}
+          onLinked={() => !busy && void board.settle({ glideMs: 0 })}
+          onEdit={editPage}
+          onExit={exitPreview}
+          onDismiss={() => setBuilding(undefined)}
+        />
+      )}
     </div>
   );
 }

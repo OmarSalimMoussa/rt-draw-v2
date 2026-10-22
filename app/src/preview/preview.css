@@ -1,0 +1,32 @@
+/* The preview: the site as a visitor sees it (v1's page.css, .pv-*), over the editor. */
+.pv { position: fixed; inset: 0; z-index: 20; overflow: auto; background: #f1f3f5; }
+.pv-bar {
+  position: sticky; top: 0; z-index: 2; box-sizing: border-box; height: 52px; display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  background: #fff; border-bottom: 1px solid #dee2e6; font: 15px var(--hand);
+}
+.pv-bar select { padding: 4px 6px; max-width: 220px; }
+.pv-bar button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.pv-hint { flex: 1; min-width: 0; color: #868e96; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: #1971c2; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.pv-edit:disabled { opacity: 0.45; }
+.pv-exit { font-weight: 700; color: #fff; background: #1e1e1e; border: 2px solid #1e1e1e; border-radius: var(--wobble-s); }
+.pv-main { display: flex; justify-content: center; align-items: flex-start; padding: 24px 16px 64px; }
+.pv-stage { position: relative; flex: none; width: min(1100px, 100%); background: #fff; box-shadow: 0 6px 24px rgb(0 0 0 / 0.08); }
+.pv-page { display: block; width: 100%; height: 100%; }
+.pv-over { cursor: var(--cur-pointer, pointer); }
+/* A click with no page yet: says so once the pointer rests. */
+.pv-tip {
+  position: absolute; z-index: 1; display: flex; gap: 6px; padding: 5px 10px; font-size: 13px; white-space: nowrap; pointer-events: none;
+  background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.15);
+}
+.pv-tip span { color: #1971c2; }
+.pv-failed {
+  position: sticky; top: 52px; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 16px;
+  background: #fff4e6; color: #d9480f; font: 15px var(--hand);
+}
+/* The page being built: a soft pulse until it's done. */
+.pv-building .pv-stage { animation: pv-pulse 1.6s ease-in-out infinite; }
+@keyframes pv-pulse { 50% { box-shadow: 0 0 0 4px rgb(116 192 252 / 0.45), 0 6px 24px rgb(0 0 0 / 0.08); } }
+.pv-spinner { flex: none; width: 16px; height: 16px; border: 2px solid #dee2e6; border-top-color: #1971c2; border-radius: 50%; animation: pv-spin 0.8s linear infinite; }
+@keyframes pv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pv-building .pv-stage, .pv-spinner { animation: none; } }

@@ -1,6 +1,6 @@
 // All your projects (/projects): each board with a picture of its pages, to
-// open, rename or delete. (v1's ProjectsPage.tsx: the thumbnail is v2's
-// renderer; there is no preview, and no session log.)
+// open, preview, rename or delete. (v1's ProjectsPage.tsx: the thumbnail is v2's
+// renderer, and there is no session log.)
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { boardBounds, fitView, pagesOf, union } from "../../../src/core/board.ts";
 import { render } from "../../../src/core/render.ts";
@@ -59,6 +59,7 @@ function ProjectCard({ p, onChange }: { p: ProjectMeta; onChange: () => void }) 
       </div>
       <div className="px-actions">
         <a className="px-open" href={open}>Open</a>
+        <a href={`${open}#preview`} title="Click through the site as a visitor would">Preview</a>
         {confirming ? (
           <>
             <button type="button" className="px-danger" onClick={() => (deleteProject(p.id), onChange())}>Delete it</button>
