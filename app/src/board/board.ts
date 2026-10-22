@@ -13,7 +13,7 @@ import type { Tuning } from "../../../src/core/tuning.ts";
 import { tuningFor } from "../models.ts";
 import { SAVED_EVENT, blankBoard, currentProjectId, listProjects, loadVersions, renameProject, saveVersions, savedFor } from "../projects/storage.ts";
 import { getModel, onSettings } from "../settings.ts";
-import { adoptArrows } from "./adopt.ts";
+import { adoptArrows, adoptLinks } from "./adopt.ts";
 import { History } from "./history.ts";
 import { type Placement, placeBoard, shiftsOf } from "./place.ts";
 
@@ -139,6 +139,7 @@ export class Board {
   private async place(glideMs: number) {
     const scene = this.scene;
     adoptArrows(scene, this.tuning);
+    adoptLinks(scene);
     scene.home ??= homeOf(scene)?.id;
     const p = await placeBoard(scene);
     if (scene !== this.scene) return;

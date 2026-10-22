@@ -29,3 +29,20 @@ shape(within, arrow, 300 125 400 0, ${D})`);
     expect(scene.get("btn")!.link).toBeUndefined();
   });
 });
+
+describe("links that name a page by its name", () => {
+  it("become links to that page's id; real ids and forward links to new pages stay", async () => {
+    const { adoptLinks } = await import("./adopt.ts");
+    const { scene } = runScript(`shape(page, frame, 0 0 1280 800, ${D})
+text(page, "Home")
+shape(svc, frame, 1400 0 1280 800, ${D})
+text(svc, "Our Services")
+shape(logo, rect, 40 20 200 40, ${D}, link:home)
+shape(more, pill, 80 300 200 50, ${D}, link:our-services)
+shape(nav-home, pill, 800 28 80 30, ${D}, link:page)
+shape(nav-contact, pill, 1030 28 110 30, ${D}, link:contact)
+shape(to-logo, pill, 80 400 200 50, ${D}, link:logo)`);
+    expect(adoptLinks(scene)).toBe(2);
+    expect(["logo", "more", "nav-home", "nav-contact", "to-logo"].map((id) => scene.get(id)!.link)).toEqual(["page", "svc", "page", "contact", "logo"]);
+  });
+});

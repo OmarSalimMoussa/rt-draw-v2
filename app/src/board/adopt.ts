@@ -2,8 +2,10 @@
 // ends sat on two pages. Each such arrow becomes a link on the element under its
 // tail, and the arrow goes (the board draws its own arrows now, place.ts). An
 // arrow with nothing under its tail stays a drawing. Run when a project opens,
-// and after every send in case the model draws one anyway.
-import { centerOf, norm, pageOf, pagesOf } from "../../../src/core/board.ts";
+// and after every send in case the model draws one anyway. So is the other guess a
+// model makes: a link naming a page by its name (link:home for the page "Home",
+// whose id is page) is a link to that page.
+import { centerOf, norm, pageName, pageOf, pagesOf } from "../../../src/core/board.ts";
 import type { Box, Scene, Shape } from "../../../src/core/scene.ts";
 import { DEFAULTS, type Tuning } from "../../../src/core/tuning.ts";
 
@@ -34,3 +36,20 @@ export function adoptArrows(scene: Scene, t: Tuning = DEFAULTS): number {
 }
 
 const distance = (s: Shape, p: [number, number]) => Math.hypot(centerOf(norm(s.box))[0] - p[0], centerOf(norm(s.box))[1] - p[1]);
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/** Links to no shape that name a page by its name instead of its id, pointed at its id; returns how many. */
+export function adoptLinks(scene: Scene): number {
+  const byName = new Map<string, Shape>();
+  for (const p of pagesOf(scene)) if (!byName.has(slug(pageName(p)))) byName.set(slug(pageName(p)), p);
+  let n = 0;
+  for (const s of scene.stacked()) {
+    if (!s.link || scene.get(s.link)) continue;
+    const page = byName.get(slug(s.link));
+    if (!page) continue;
+    s.link = page.id;
+    n++;
+  }
+  return n;
+}
