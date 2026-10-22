@@ -44,6 +44,75 @@ describe("sender", () => {
     expect(runs[1].input.words).toBe("B");
   });
 
+  it("the next send waits for the one before to settle (its layout), and the wait is its layout stage", async () => {
+    let settled!: () => void;
+    const { sender, runs, job, log } = rig({ onEnd: vi.fn(() => new Promise<void>((r) => (settled = r))) });
+    sender.enqueue(job("A"));
+    sender.enqueue(job("B"));
+    await tick();
+    runs[0].done();
+    await tick();
+    await tick();
+    expect(runs).toHaveLength(1);
+    expect(log.sends[0].layout).toBeUndefined();
+    settled();
+    await tick();
+    expect(runs).toHaveLength(2);
+    expect(log.sends[0].layout).toBeGreaterThanOrEqual(log.sends[0].end!);
+  });
+
+  it("a send waits until the board is ready (not placing its pages)", async () => {
+    let ready!: () => void;
+    const { sender, runs, job } = rig({ ready: () => new Promise<void>((r) => (ready = r)) });
+    sender.enqueue(job("A"));
+    await tick();
+    expect(runs).toHaveLength(0);
+    ready();
+    await tick();
+    expect(runs).toHaveLength(1);
+  });
+
+  it("a job's before runs before its send, and done hears how it went", async () => {
+    const { sender, runs, job } = rig();
+    const order: string[] = [];
+    const done = vi.fn();
+    sender.enqueue({ ...job("build"), before: async () => void order.push("before"), done });
+    await tick();
+    order.push(`runs ${runs.length}`);
+    runs[0].hooks.onOp?.(op(true));
+    runs[0].done();
+    await sender.idle();
+    expect(order).toEqual(["before", "runs 1"]);
+    expect(done).toHaveBeenCalledWith("done", 1, undefined);
+  });
+
+  it("a job stopped while it waits never runs its before, and done says stopped", async () => {
+    const { sender, runs, job } = rig();
+    const before = vi.fn(async () => {});
+    const done = vi.fn();
+    sender.enqueue(job("A"));
+    sender.enqueue({ ...job("build"), before, done });
+    await tick();
+    sender.stop();
+    runs[0].done();
+    await sender.idle();
+    expect(before).not.toHaveBeenCalled();
+    expect(done).toHaveBeenCalledWith("stopped", 0, undefined);
+  });
+
+  it("a failing before fails its job, and the queue goes on", async () => {
+    const { sender, runs, job } = rig();
+    const done = vi.fn();
+    sender.enqueue({ ...job("build"), before: async () => { throw new Error("no room"); }, done });
+    sender.enqueue(job("B"));
+    await tick();
+    await tick();
+    expect(done).toHaveBeenCalledWith("error", 0, "no room");
+    expect(runs.map((r) => r.input.words)).toEqual(["B"]);
+    runs[0].done();
+    await sender.idle();
+  });
+
   it("waits for the words before starting", async () => {
     const { sender, runs, job } = rig();
     let say!: (w: string) => void;

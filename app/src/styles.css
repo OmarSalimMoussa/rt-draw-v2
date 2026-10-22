@@ -364,3 +364,8 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 /* The app: v2's board, drawn in screen coordinates under the pen; a tap is a red dot. */
 .bd { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .pg-marks circle.mk-dot { fill: var(--bad); stroke: none; }
+/* The arrows between pages (board/BoardArrows.tsx): over the pages, under the marks; each fades in once its pages are in place (v1's .wf-arrows). */
+.bd-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.bd-arrows g { animation: bd-fade-in 0.3s ease 0.3s both; }
+@keyframes bd-fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .bd-arrows g { animation: none; } }

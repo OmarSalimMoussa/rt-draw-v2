@@ -1,12 +1,14 @@
 // The editor in a tab, end to end: Root and App on a fake projects server, with
 // v2's send() and the mic stood in for (no model calls, no microphone). For what
 // only shows across a project switch, and on the board's own clock.
+import ELK from "elkjs/lib/elk.bundled.js";
 import { act } from "react";
 import { type Root as ReactRoot, createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runScript } from "../../src/core/ops.ts";
 import { Scene, type SceneJSON } from "../../src/core/scene.ts";
 import type { Board } from "./board/board.ts";
+import { setElk } from "./board/layout.ts";
 import type { LatencyLog } from "./board/latency.ts";
 import type { Sender } from "./board/sender.ts";
 import { blankBoard, createProject, loadVersions, ready, saveVersions } from "./projects/storage.ts";
@@ -74,6 +76,7 @@ async function open(id: string) {
 }
 
 beforeAll(async () => {
+  setElk(new ELK());
   // The projects API, answered in memory: saves are echoed back, so this tab's numbering stands.
   vi.stubGlobal(
     "fetch",

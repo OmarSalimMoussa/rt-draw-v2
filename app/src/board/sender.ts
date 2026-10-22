@@ -4,7 +4,10 @@
 // alone. Stop ends the running send and drops the queued ones. Each send is timed
 // step by step (latency.ts) and by the eval's own clock on the board. A failure
 // stays on show until the sends queued with it are over, and the next Enter after
-// that starts clean.
+// that starts clean. A send's end may settle the board (place its pages): the next
+// send waits for that too, so the layout never runs during a send, and the wait is
+// the send's layout stage. A job may also do something first (the preview's build
+// makes its page) and hear how it went.
 import type { Clock } from "../../../evals/bridge/timing.ts";
 import type { OpResult } from "../../../src/core/draw.ts";
 import type { Stroke } from "../../../src/core/ink.ts";
@@ -12,7 +15,19 @@ import type { Word } from "../../../src/core/link.ts";
 import type { SendHooks, SendInput, Sent } from "../../../src/core/send.ts";
 import type { LatencyLog, SendTimes } from "./latency.ts";
 
-export type Job = { label: string; spoken: boolean; strokes: Stroke[]; words: Promise<Word[] | string>; enter: number };
+export type JobStatus = "done" | "error" | "stopped";
+
+export type Job = {
+  label: string;
+  spoken: boolean;
+  strokes: Stroke[];
+  words: Promise<Word[] | string>;
+  enter: number;
+  /** Its turn has come, before the send starts (not run if it was stopped while it waited). */
+  before?: () => Promise<void>;
+  /** After it ended, the board settled and committed: how it went, and how many ops changed the board. */
+  done?: (status: JobStatus, landed: number, error?: string) => void;
+};
 
 export type SenderDeps = {
   /** One send: v2's send() on the board, with these hooks added to the app's own. */
@@ -27,10 +42,12 @@ export type SenderDeps = {
   failedCalls?: (from: number, to: number) => string[];
   /** Until the last change is on screen: two animation frames. */
   frame?: () => Promise<void>;
+  /** Resolves once the board isn't busy placing its pages (a send never starts mid-layout). */
+  ready?: () => Promise<void>;
   /** A send is starting. */
   onStart?: (job: Job) => void;
-  /** A send ended; `landed` ops changed the board. */
-  onEnd: (job: Job, landed: number, error?: string) => void;
+  /** A send ended; `landed` ops changed the board. A promise: the board is settling, and the next send waits for it. */
+  onEnd: (job: Job, landed: number, error?: string) => void | Promise<void>;
   log: LatencyLog;
 };
 
@@ -48,6 +65,8 @@ export class Sender {
   private current?: { times: SendTimes; abort: AbortController };
   private status: SendStatus = { running: false, queued: 0, ops: 0, settling: false, done: false, failed: 0, callErrors: [], rejected: 0 };
   private listeners = new Set<() => void>();
+  /** Jobs whose done() has been called: once each, crash or not. */
+  private told = new WeakSet<Job>();
 
   constructor(private deps: SenderDeps) {}
 
@@ -75,7 +94,7 @@ export class Sender {
     this.waiting++;
     this.set({ queued: this.waiting, ...(fresh && { error: undefined, failed: 0, callErrors: [] }) });
     // A throw in a hook mustn't stop the sends queued after it.
-    this.chain = this.chain.then(() => this.run(job, times, epoch)).catch((e) => this.crashed(times, e));
+    this.chain = this.chain.then(() => this.run(job, times, epoch)).catch((e) => this.crashed(job, times, e));
   }
 
   stop() {
@@ -91,13 +110,20 @@ export class Sender {
     this.deps.log.touch();
   }
 
-  private crashed(times: SendTimes, e: unknown) {
+  private crashed(job: Job, times: SendTimes, e: unknown) {
     this.current = undefined;
     times.status = "error";
     times.error = message(e);
     times.end ??= performance.now();
     this.set({ running: false, settling: false, queued: this.waiting, done: false, error: message(e), failed: this.status.failed + 1 });
     this.deps.log.touch();
+    this.tell(job, "error", 0, message(e));
+  }
+
+  private tell(job: Job, status: JobStatus, landed: number, error?: string) {
+    if (this.told.has(job)) return;
+    this.told.add(job);
+    job.done?.(status, landed, error);
   }
 
   private set(change: Partial<SendStatus>) {
@@ -109,11 +135,14 @@ export class Sender {
     const { deps } = this;
     const { log } = deps;
     this.waiting--;
+    await deps.ready?.();
+    if (epoch === this.epoch) await job.before?.();
     const words = await job.words.catch(() => "");
     if (epoch !== this.epoch) {
       times.status = "stopped";
       this.set({ queued: this.waiting, running: false });
       log.touch();
+      this.tell(job, "stopped", 0);
       return;
     }
     const abort = new AbortController();
@@ -171,7 +200,8 @@ export class Sender {
     times.callsTo = deps.lastCall();
     if (stopped) error = undefined;
     times.error = error;
-    times.status = stopped ? "stopped" : error ? "error" : "done";
+    const status: JobStatus = stopped ? "stopped" : error ? "error" : "done";
+    times.status = status;
     this.current = undefined;
     const more = this.waiting > 0;
     const failed = this.status.failed + (error ? 1 : 0);
@@ -185,6 +215,12 @@ export class Sender {
       callErrors: [...this.status.callErrors, ...callErrors],
     });
     log.touch();
-    deps.onEnd(job, landed, error);
+    const settling = deps.onEnd(job, landed, error);
+    if (settling) {
+      await settling;
+      times.layout = performance.now();
+      log.touch();
+    }
+    this.tell(job, status, landed, error);
   }
 }

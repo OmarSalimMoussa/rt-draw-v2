@@ -5,12 +5,35 @@
 // coalesces them, and the React parts subscribe for everything else. One Board per
 // project opened in the tab: opening another one (New project included) mounts a new
 // editor (Root.tsx), so a send still finishing commits to the project it began on.
+// The board places its own pages (place.ts): after every send, on opening and after
+// Restore, the pages glide to where the layout puts them and the arrows follow.
+import { homeOf, pagesOf } from "../../../src/core/board.ts";
 import { Scene } from "../../../src/core/scene.ts";
 import type { Tuning } from "../../../src/core/tuning.ts";
 import { tuningFor } from "../models.ts";
 import { SAVED_EVENT, blankBoard, currentProjectId, listProjects, loadVersions, renameProject, saveVersions, savedFor } from "../projects/storage.ts";
 import { getModel, onSettings } from "../settings.ts";
+import { adoptArrows } from "./adopt.ts";
 import { History } from "./history.ts";
+import { type Placement, placeBoard, shiftsOf } from "./place.ts";
+
+/** How long pages glide to their places. */
+export const SETTLE_MS = 400;
+
+/** Calls `frame` with 0-1 (eased) once per animation frame for `ms`, ending on 1. */
+function ease(ms: number, frame: (e: number) => void): Promise<void> {
+  if (ms <= 0) return Promise.resolve(frame(1));
+  return new Promise((done) => {
+    const t0 = performance.now();
+    const step = () => {
+      const u = Math.min(1, (performance.now() - t0) / ms);
+      frame(u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+      if (u < 1) requestAnimationFrame(step);
+      else done();
+    };
+    step();
+  });
+}
 
 export class Board {
   /** The project this tab works on (also in the URL as ?p=). */
@@ -23,13 +46,21 @@ export class Board {
   busy = false;
   /** Opened and not looked at yet: the editor puts the camera on its first page once. */
   fresh = true;
+  /** Where the layout put the live board's pages, and their arrows. */
+  placement?: Placement;
+  /** Pages are gliding to their places: no arrows until they're there. */
+  gliding = false;
+  /** Where the camera looks now, and how to move it by the same offset as a page (the editor sets it). */
+  follow?: () => { centre: { x: number; y: number }; move: (dx: number, dy: number) => void };
 
   private version = 0;
   private frame = 0;
   private listeners = new Set<() => void>();
   private painters = new Set<() => void>();
-  /** Versions looked at, parsed once each. */
+  /** Versions looked at, parsed once each, and their layouts. */
   private parsed = new Map<number, Scene>();
+  private placements = new Map<number, Promise<Placement>>();
+  private settling: Promise<void> = Promise.resolve();
 
   constructor() {
     this.project = currentProjectId();
@@ -70,10 +101,69 @@ export class Board {
   /** What the canvas shows: a version from the history while looking at one, else the live board. */
   shown(): Scene {
     const n = this.history.looking;
-    if (n === undefined) return this.scene;
+    return n === undefined ? this.scene : this.versionScene(n);
+  }
+
+  /** Version n's board, parsed once. */
+  versionScene(n: number): Scene {
     let s = this.parsed.get(n);
     if (!s) this.parsed.set(n, (s = Scene.fromJSON(this.history.doc(n)!)));
     return s;
+  }
+
+  /** The layout for version n's board, for its own arrows (none fit where its pages weren't placed). */
+  placementFor(n: number): Promise<Placement> {
+    let p = this.placements.get(n);
+    if (!p) this.placements.set(n, (p = placeBoard(this.versionScene(n)).catch(() => ({ at: new Map(), arrows: [] }))));
+    return p;
+  }
+
+  /** Resolves once a settle under way is over. */
+  settled = () => this.settling;
+
+  /**
+   * Puts the pages where the layout says (place.ts): the model's old page arrows become links first, then
+   * the pages glide there over glideMs with their content (and the camera with the page it's on), and the
+   * arrows come once they've arrived. In memory: the next version saves it. Never throws.
+   */
+  settle({ glideMs }: { glideMs: number }): Promise<void> {
+    this.settling = this.settling
+      .then(() => this.place(glideMs))
+      .catch((e) => {
+        this.gliding = false;
+        console.error("placing the pages failed", e);
+      });
+    return this.settling;
+  }
+
+  private async place(glideMs: number) {
+    const scene = this.scene;
+    adoptArrows(scene, this.tuning);
+    scene.home ??= homeOf(scene)?.id;
+    const p = await placeBoard(scene);
+    if (scene !== this.scene) return;
+    const shifts = shiftsOf(scene, p.at);
+    if (shifts.size) {
+      const cam = this.follow?.();
+      const c = cam?.centre;
+      const under = c && pagesOf(scene).filter((f) => c.x >= f.box.x && c.x <= f.box.x + f.box.w && c.y >= f.box.y && c.y <= f.box.y + f.box.h).sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h)[0];
+      const d = under && shifts.get(under.id);
+      const from = new Map([...shifts.keys()].map((id) => [id, { ...scene.get(id)!.box }]));
+      this.gliding = true;
+      this.draw();
+      await ease(glideMs, (e) => {
+        for (const [id, sh] of shifts) {
+          const shape = scene.get(id);
+          const b = from.get(id)!;
+          if (shape) shape.box = { ...shape.box, x: b.x + sh.dx * e, y: b.y + sh.dy * e };
+        }
+        if (d) cam!.move(d.dx * e, d.dy * e);
+        this.draw();
+      });
+      this.gliding = false;
+    }
+    this.placement = p;
+    this.draw();
   }
 
   /** Redraws at the next animation frame, however many times it's asked before then. */
@@ -132,7 +222,9 @@ export class Board {
   restore(n: number) {
     const v = this.history.restore(n);
     this.scene = Scene.fromJSON(v.doc);
+    this.placement = undefined;
     this.save();
+    void this.settle({ glideMs: SETTLE_MS });
   }
 
   private latestScene() {
@@ -162,8 +254,11 @@ export class Board {
     if (!theirs || (ours && theirs.n === ours.n && theirs.at === ours.at)) return;
     const looking = this.history.looking;
     this.history = new History(saved);
+    this.parsed.clear();
+    this.placements.clear();
     if (looking !== undefined && saved.some((v) => v.n === looking)) this.history.look(looking, true);
     this.scene = Scene.fromJSON(theirs.doc);
-    this.draw();
+    this.placement = undefined;
+    void this.settle({ glideMs: 0 });
   }
 }

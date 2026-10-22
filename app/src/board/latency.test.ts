@@ -5,13 +5,18 @@ import { PHASES, type SendTimes, callRows, segments } from "./latency.ts";
 const base = (over: Partial<SendTimes> = {}): SendTimes => ({
   n: 1, label: "a bakery", spoken: false, model: "sonnet", enter: 1000, changes: 3, rejected: 0, status: "done", callsFrom: 0, callsTo: 0, ...over,
 });
-const finished = base({ words: 1040, start: 1050, prompt: 1400, firstText: 2100, firstOp: 2300, reply: 3000, pictures: 4200, end: 4500 });
+const finished = base({ words: 1040, start: 1050, prompt: 1400, firstText: 2100, firstOp: 2300, reply: 3000, pictures: 4200, end: 4500, layout: 4900 });
 
 describe("latency stages", () => {
   it("a finished send's segments run in order and add up", () => {
     const s = segments(finished, 9999);
     expect(s.map((x) => x.key)).toEqual(PHASES.map((p) => p.key));
-    expect(s.reduce((a, x) => a + x.ms, 0)).toBe(finished.end! - finished.enter);
+    expect(s.reduce((a, x) => a + x.ms, 0)).toBe(finished.layout! - finished.enter);
+  });
+
+  it("the layout comes last, after the camera settles, and a send that moved nothing has none", () => {
+    expect(segments(finished, 9999).at(-1)).toEqual({ key: "layout", from: 3500, ms: 400 });
+    expect(segments({ ...finished, layout: undefined }, 9999).map((x) => x.key)).not.toContain("layout");
   });
 
   it("a live send grows its first missing step", () => {

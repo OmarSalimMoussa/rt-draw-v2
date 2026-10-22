@@ -29,6 +29,8 @@ export type SendTimes = {
   pictures?: number;
   /** send() returned: the last glide had settled. */
   end?: number;
+  /** The board placed its pages and routed its arrows (after the eval's clocks stop; only when the send changed the board). */
+  layout?: number;
   /** The eval's clock, from start: the first changed shape in its final state, and the last. */
   ttfcMs?: number;
   ttdMs?: number;
@@ -52,6 +54,7 @@ export const PHASES = [
   { key: "changes", label: "changes", hint: "the rest of the reply streaming in" },
   { key: "pictures", label: "pictures", hint: "pictures drawn into their shapes" },
   { key: "camera", label: "camera", hint: "the last glide settling" },
+  { key: "layout", label: "layout", hint: "pages placed and arrows routed, after the clocks stop" },
 ] as const;
 
 export type PhaseKey = (typeof PHASES)[number]["key"];
@@ -65,7 +68,7 @@ export const isLive = (t: SendTimes) => t.status === "queued" || t.status === "r
 /** The end of each step, as far as the send got. A reply without changes has its first change at its end. */
 function stepEnds(t: SendTimes): (number | undefined)[] {
   const firstOp = t.firstOp ?? (t.changes ? undefined : t.reply);
-  return [t.words, t.start, t.prompt, t.firstText, firstOp, t.reply, t.pictures, t.end];
+  return [t.words, t.start, t.prompt, t.firstText, firstOp, t.reply, t.pictures, t.end, t.layout];
 }
 
 /** The steps as bars, in ms from Enter; while the send is live, the step under way runs to `now`. */

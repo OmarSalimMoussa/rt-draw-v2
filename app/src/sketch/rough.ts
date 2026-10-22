@@ -79,9 +79,12 @@ export function sketchMark(points: Pt[], s: { seed: number; closed: boolean; zoo
   return { outline: of("path"), fill: of("fillSketch") };
 }
 
-/** An arrow along the path `d` through `points`, with a two-stroke head at its end (`head` px long). */
-export function sketchArrow(d: string, points: Pt[], s: { seed: number; stroke: string; strokeWidth?: number; head?: number }): Stroke[] {
-  const opts: Options = { ...HAND, seed: s.seed, stroke: s.stroke, strokeWidth: s.strokeWidth ?? 2, preserveVertices: true };
+/**
+ * An arrow along the path `d` through `points`, with a two-stroke head at its end (`head` px long).
+ * `scale`: drawing units per screen pixel, so a zoomed-out arrow still wobbles by a couple of screen pixels.
+ */
+export function sketchArrow(d: string, points: Pt[], s: { seed: number; stroke: string; strokeWidth?: number; head?: number; scale?: number }): Stroke[] {
+  const opts: Options = { ...HAND, seed: s.seed, stroke: s.stroke, strokeWidth: s.strokeWidth ?? 2, preserveVertices: true, maxRandomnessOffset: 2 * (s.scale ?? 1) };
   const [from, tip] = [points.at(-2), points.at(-1)];
   if (!from || !tip) return [];
   const angle = Math.atan2(tip.y - from.y, tip.x - from.x);

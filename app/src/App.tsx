@@ -6,7 +6,7 @@
 // camera(...) ops gliding the view. (v1's App.tsx, on v2's engine.)
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type Clock, watch } from "../../evals/bridge/timing.ts";
-import { SCREEN, fitView, pageTop, pagesOf, union } from "../../src/core/board.ts";
+import { SCREEN, fitView, homeOf, pageTop, pagesOf, union } from "../../src/core/board.ts";
 import { groupStrokes } from "../../src/core/marks.ts";
 import { CALLS_EVENT, calls, forgetCallsBefore, modelOf, warmModel } from "../../src/core/model.ts";
 import { promptOf, thinkingOf } from "../../src/core/prompts.ts";
@@ -15,13 +15,14 @@ import { send } from "../../src/core/send.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { forgetSpansBefore, span } from "../../src/core/trace.ts";
 import type { Pt, Stroke } from "../../src/core/ink.ts";
-import { Board } from "./board/board.ts";
+import { Board, SETTLE_MS } from "./board/board.ts";
+import { BoardArrows } from "./board/BoardArrows.tsx";
 import { BoardView } from "./board/BoardView.tsx";
 import { LatencyLog } from "./board/latency.ts";
 import { Sender } from "./board/sender.ts";
 import { Canvas, type Tool } from "./canvas/Canvas.tsx";
 import { toStroke } from "./canvas/strokes.ts";
-import { type Rect, type View, boardRect, glideAt, sendView, toScreen, viewShowing } from "./canvas/view.ts";
+import { type Rect, type View, boardRect, glideAt, sendView, toScene, toScreen, viewShowing } from "./canvas/view.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
 import { createProject } from "./projects/storage.ts";
 import { navigate } from "./router.ts";
@@ -111,14 +112,20 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     if (box) void glideTo(fitView(box, 0.03));
   };
 
-  // First sight of a project: the camera on its first page, as the eval starts.
+  // First sight of a project: the camera on its home page, as the eval starts.
   useLayoutEffect(() => {
     if (!board.fresh) return;
-    const first = pagesOf(board.scene).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x)[0];
+    const first = homeOf(board.scene);
     if (!first) return;
     board.fresh = false;
     setView(viewShowing(pageTop(first), visibleRect()));
   });
+  // When the board places its pages, the camera goes with the page it's looking at.
+  board.follow = () => {
+    const v0 = viewRef.current;
+    const r = visibleRect();
+    return { centre: toScene(v0, (r.left + r.right) / 2, (r.top + r.bottom) / 2), move: (dx, dy) => setView({ ...v0, scrollX: v0.scrollX - dx, scrollY: v0.scrollY - dy }) };
+  };
 
   // Sends: one at a time, timed, and the board saved after each one that changed it.
   const log = useMemo(() => new LatencyLog(), []);
@@ -133,6 +140,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         model: () => getModel().label,
         clock: () => clock.current,
         lastCall: () => calls.at(-1)?.n ?? 0,
+        ready: board.settled,
         failedCalls: (from, to) => calls.filter((c) => c.n > from && c.n <= to && c.error).map((c) => `${c.req.model.startsWith("jev") ? "Jev" : (c.req.from ?? c.req.model)}: ${c.error}`),
         onStart: () => {
           board.busy = true;
@@ -141,14 +149,19 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           board.flush();
         },
         onEnd: (job, landed) => {
-          board.busy = false;
-          if (landed) board.commit(job.label);
-          // What the overlay still shows is all that's kept of the calls and spans: the page stays open.
-          const oldest = log.sends[0];
-          if (oldest) {
-            forgetCallsBefore(oldest.callsFrom + 1);
-            forgetSpansBefore(oldest.enter);
-          }
+          const finish = () => {
+            board.busy = false;
+            if (landed) board.commit(job.label);
+            // What the overlay still shows is all that's kept of the calls and spans: the page stays open.
+            const oldest = log.sends[0];
+            if (oldest) {
+              forgetCallsBefore(oldest.callsFrom + 1);
+              forgetSpansBefore(oldest.enter);
+            }
+          };
+          if (!landed) return finish();
+          // The board places its pages before the version is saved, so the move belongs to this send.
+          return board.settle({ glideMs: SETTLE_MS }).then(finish);
         },
         log,
       }),
@@ -200,6 +213,8 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   // project's versions), the mic is let go, and its board stops following saves and settings.
   useEffect(() => {
     const off = board.listen();
+    // Opened: the pages go where the layout puts them (saved with the next version).
+    void board.settle({ glideMs: SETTLE_MS });
     return () => {
       off();
       sender.stop();
@@ -292,7 +307,12 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         onStroke={addStroke}
         onGesture={retireHint}
         onFit={fitAll}
-        backdrop={<BoardView board={board} view={view} size={canvasSize} onSvg={(svg) => (clock.current = watch(svg))} />}
+        backdrop={
+          <>
+            <BoardView board={board} view={view} size={canvasSize} onSvg={(svg) => (clock.current = watch(svg))} />
+            <BoardArrows board={board} view={view} size={canvasSize} />
+          </>
+        }
         overlay={
           strokes.length > 0 && (
             <svg className="pg-marks" aria-hidden>
