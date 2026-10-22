@@ -19,12 +19,12 @@ const holds = (s: Shape, p: { x: number; y: number }) => {
   return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
 };
 
-/** What a click at `p` (board pixels) on `page` hits: the topmost thing a visitor can click there. */
-export function hitClickable(scene: Scene, page: Shape, p: { x: number; y: number }): Shape | undefined {
+/** What a click at `p` (board pixels) hits: the topmost thing a visitor can click there, on `page` (or on any page). */
+export function hitClickable(scene: Scene, page: Shape | undefined, p: { x: number; y: number }): Shape | undefined {
   return scene
     .stacked()
     .reverse()
-    .find((s) => clickable(s) && holds(s, p) && pageOf(scene, s) === page);
+    .find((s) => clickable(s) && holds(s, p) && (page ? pageOf(scene, s) === page : !!pageOf(scene, s)));
 }
 
 const tidy = (s: string) => s.trim().replace(/\s+/g, " ");

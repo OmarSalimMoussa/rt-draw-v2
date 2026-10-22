@@ -33,8 +33,8 @@ type Props = {
   active: boolean;
   /** A finished stroke: scene coordinates (to 0.1 px) and performance.now() times, from pen down to pen up. */
   onStroke?(raw: Pt[], downAt: number, upAt: number): void;
-  /** The pointer moved over the canvas. */
-  onPointer?(p: Point): void;
+  /** The pointer moved over the canvas, or left it (null). */
+  onPointer?(p: Point | null): void;
   /** Fit everything in view. */
   onFit?(): void;
   /** The pointer went down on the canvas to draw or move around, or came back up (null). */
@@ -228,6 +228,7 @@ export function Canvas(p: Props) {
       onPointerMove={onPointerMove}
       onPointerUp={(e) => onPointerUp(e)}
       onPointerCancel={(e) => onPointerUp(e, true)}
+      onPointerLeave={() => p.onPointer?.(null)}
     >
       {p.backdrop}
       <div className="cv-world" style={{ transform: `scale(${view.zoom}) translate(${view.scrollX}px, ${view.scrollY}px)` }}>

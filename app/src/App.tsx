@@ -27,7 +27,8 @@ import { type Rect, type View, boardRect, glideAt, sendView, toScene, toScreen, 
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
 import { type Building, Preview } from "./preview/Preview.tsx";
 import { buildJob } from "./preview/build.ts";
-import { previewHash, previewOfHash } from "./preview/preview.ts";
+import { hitClickable, previewHash, previewOfHash } from "./preview/preview.ts";
+import { boilCss, shapeSelector } from "./board/boil.ts";
 import { createProject } from "./projects/storage.ts";
 import { navigate } from "./router.ts";
 import { onSettings, getModel, showsLatency } from "./settings.ts";
@@ -363,6 +364,10 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     } catch {}
   }
 
+  // What a visitor could click boils under the pointer on the board too, as in v1; the pen still draws.
+  const [hovered, setHovered] = useState<string>();
+  const holding = useRef(false);
+
   // Lost on the canvas: none of the pages is in view.
   const box = pagesBox();
   const lost = !!box && !overlaps(box, boardRect(view, canvasSize));
@@ -377,6 +382,11 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         active={!hidden && !previewing}
         onStroke={addStroke}
         onGesture={retireHint}
+        onPointer={(p) => setHovered(p && !holding.current ? hitClickable(board.shown(), undefined, p)?.id : undefined)}
+        onHold={(kind) => {
+          holding.current = kind !== null;
+          if (kind) setHovered(undefined);
+        }}
         onFit={fitAll}
         backdrop={
           <>
@@ -400,6 +410,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         }
       />
 
+      {hovered && !previewing && <style>{boilCss("bd", shapeSelector(".bd", hovered), 0.5 / view.zoom)}</style>}
       {hint && (
         <div className="pg-hint" role="note">
           <span>Press and drag to draw · two fingers to move around · pinch to zoom</span>
