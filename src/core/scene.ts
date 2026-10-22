@@ -43,6 +43,10 @@ export type Shape = {
   drawing?: string;
   /** The doodle the picture model drew for a `drawing`, in its own w × h space (shown scaled to fit). Stale once `drawing` changes. */
   picture?: { subject: string; w: number; h: number; els: El[]; done: boolean };
+  /** The id of the page (frame) a visitor gets to by clicking this; it may not exist yet. */
+  link?: string;
+  /** A visitor can click it (a shape with a link can be clicked anyway). */
+  button?: boolean;
 };
 
 export class Scene {
@@ -52,6 +56,8 @@ export class Scene {
   /** Back to front. */
   order: string[] = [];
   groups = new Map<string, string[]>();
+  /** The id of the site's first page: the first frame made, until it's removed. */
+  home?: string;
 
   constructor(width = 1280, height = 800) {
     this.width = width;
@@ -78,6 +84,7 @@ export class Scene {
     this.shapes.delete(id);
     this.order = this.order.filter((o) => o !== id);
     for (const [g, members] of this.groups) this.groups.set(g, members.filter((m) => m !== id));
+    if (this.home === id) this.home = this.order.find((o) => this.shapes.get(o)?.kind === "frame");
   }
 
   /** Front, back, or right above / below another shape. */
@@ -121,7 +128,7 @@ export class Scene {
 
   /** v: the format, so a saved scene (the eval's banked before-scenes) is never read by a scene.ts that means something else by it. */
   toJSON(): SceneJSON {
-    return { v: 1, width: this.width, height: this.height, shapes: this.stacked(), groups: Object.fromEntries(this.groups) };
+    return { v: 1, width: this.width, height: this.height, shapes: this.stacked(), groups: Object.fromEntries(this.groups), ...(this.home && { home: this.home }) };
   }
 
   /** The scene toJSON() saved, doodles and groups included. */
@@ -130,8 +137,9 @@ export class Scene {
     const scene = new Scene(j.width, j.height);
     for (const s of structuredClone(j.shapes)) scene.add(s);
     for (const [g, members] of Object.entries(j.groups)) scene.groups.set(g, [...members]);
+    scene.home = j.home;
     return scene;
   }
 }
 
-export type SceneJSON = { v: 1; width: number; height: number; shapes: Shape[]; groups: Record<string, string[]> };
+export type SceneJSON = { v: 1; width: number; height: number; shapes: Shape[]; groups: Record<string, string[]>; home?: string };

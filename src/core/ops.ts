@@ -1,7 +1,9 @@
 // The model's language: one op per line, each a visible change.
 //   shape(id, kind?, box?, "description", style...)
 //                                      add, or change only what's given; a new shape
-//                                      needs a full description (what it is, what it's for)
+//                                      needs a full description (what it is, what it's for);
+//                                      link:<page id> | link:none and button:yes | button:no
+//                                      say what a visitor can click and where it goes
 //   text(id, "words", style...)        the text inside a shape
 //   drawing(id, "what it shows")       a picture inside a shape
 //   layer(id, front | back | above:other | below:other)
@@ -11,7 +13,7 @@
 //   camera(x y w h) | camera(id, ...)  moves the screen on a board (the caller does it, not the scene)
 // A box is pixels "x y w h" or grid cells "C2-J7" (columns A, B, ... rows 1, 2, ...).
 // Style args are key:value (fill:#fde, stroke:none, opacity:0.6, size:xl, color:white).
-import { type Box, KINDS, type Kind, Scene, type Style, type TextStyle } from "./scene.ts";
+import { type Box, KINDS, type Kind, Scene, type Shape, type Style, type TextStyle } from "./scene.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 export type Arg = { key?: string; value: string; quoted: boolean; list?: string[] };
@@ -158,6 +160,25 @@ function textFrom(args: Arg[], into: TextStyle) {
   }
 }
 
+/** link: and button:, checked before anything changes; undefined where the line doesn't say. */
+function clickFrom(args: Arg[]): { link?: string | null; button?: boolean } {
+  const out: { link?: string | null; button?: boolean } = {};
+  for (const a of args) {
+    if (a.key === "link") out.link = a.value === "none" ? null : a.value;
+    else if (a.key === "button") {
+      if (a.value !== "yes" && a.value !== "no") throw new Error(`button takes yes or no, not "${a.value}"`);
+      out.button = a.value === "yes";
+    }
+  }
+  return out;
+}
+
+function setClick(s: Shape, c: { link?: string | null; button?: boolean }) {
+  if (c.link === null) delete s.link;
+  else if (c.link !== undefined) s.link = c.link;
+  if (c.button !== undefined) s.button = c.button;
+}
+
 const need = (scene: Scene, id: string) => {
   const s = scene.get(id);
   if (!s) throw new Error(`no shape "${id}"`);
@@ -179,11 +200,15 @@ export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
       const kindArg = rest.find((a) => !a.quoted && KINDS.includes(a.value as Kind));
       const boxArg = rest.find((a) => a !== kindArg && a !== descArg && (!a.quoted || looksLikeBox(a.value)));
       const existing = scene.get(id);
+      // Read before the style: styleFrom ignores keys it doesn't know.
+      const click = clickFrom(op.args);
       if (!existing) {
         if (!boxArg) throw new Error(`new shape "${id}" needs a box`);
         if (!descArg) throw new Error(`new shape "${id}" needs a "description" of what it is and what it's for`);
-        const shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: checkDescription(descArg.value, t), style: {} };
+        const shape: Shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: checkDescription(descArg.value, t), style: {} };
         styleFrom(op.args, shape.style);
+        setClick(shape, click);
+        if (shape.kind === "frame" && !scene.stacked().some((s) => s.kind === "frame")) scene.home = id;
         scene.add(shape);
       } else {
         // Check everything before changing anything, so a rejected line leaves the shape as it was.
@@ -193,6 +218,7 @@ export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
         if (box) existing.box = box;
         if (description) existing.description = description;
         styleFrom(op.args, existing.style);
+        setClick(existing, click);
       }
       return;
     }
