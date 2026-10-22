@@ -66,16 +66,64 @@ function pageAt(scene: Scene, p: [number, number], pad = 0): Shape | undefined {
 export const pageOf = (scene: Scene, s: Shape) => (s.kind === "frame" ? undefined : pageAt(scene, centerOf(norm(s.box))));
 
 export type Link = { from: Shape; to: Shape; via: Shape };
-/** Arrows from one page to another: each end on a page, or within board.linkSnapPx of its edge. */
-export function linksOf(scene: Scene, t: Tuning = DEFAULTS): Link[] {
+/** What a visitor can click: a shape with a link, or one marked as a button (never a page itself). */
+export const clickable = (s: Shape) => s.kind !== "frame" && (!!s.link || !!s.button);
+/** Top to bottom, then left to right. */
+const reading = (a: Shape, b: Shape) => norm(a.box).y - norm(b.box).y || norm(a.box).x - norm(b.box).x;
+
+/** Links from one page to another: each shape whose link names another page. A link to a missing page (or to a shape that isn't one) leads nowhere yet. */
+export function linksOf(scene: Scene): Link[] {
   const out: Link[] = [];
   for (const s of scene.stacked()) {
-    if (s.kind !== "arrow") continue;
-    const { x, y, w, h } = s.box;
-    const from = pageAt(scene, [x, y], t["board.linkSnapPx"]);
-    const to = pageAt(scene, [x + w, y + h], t["board.linkSnapPx"]);
-    if (from && to && from !== to) out.push({ from, to, via: s });
+    if (!s.link || s.kind === "frame") continue;
+    const to = scene.get(s.link);
+    const from = pageOf(scene, s);
+    if (to?.kind === "frame" && from && from !== to) out.push({ from, to, via: s });
   }
+  return out;
+}
+
+/** The site's first page: scene.home; once that's gone, the oldest page; on a board from before home was kept, the first page in reading order. */
+export function homeOf(scene: Scene): Shape | undefined {
+  const pages = pagesOf(scene);
+  const set = scene.home ? scene.get(scene.home) : undefined;
+  if (set?.kind === "frame") return set;
+  return scene.home ? pages[0] : [...pages].sort(reading)[0];
+}
+
+/** A page in the site's tree: how deep, and the link that leads to it (none for home and for pages no link reaches). */
+export type TreePage = { page: Shape; depth: number; via?: Link };
+
+/**
+ * The site as a tree, as v1 nested pages: breadth first from home, each page's
+ * elements in reading order, the first link to a page not in the tree yet
+ * claims it (nav copied onto every page claims nothing). Home first, each page
+ * under the page that claimed it, then the pages no link reaches, in the order
+ * they were made.
+ */
+export function siteTree(scene: Scene): TreePage[] {
+  const home = homeOf(scene);
+  if (!home) return [];
+  const from = new Map<Shape, Link[]>();
+  for (const l of linksOf(scene)) from.set(l.from, [...(from.get(l.from) ?? []), l]);
+  const kids = new Map<Shape, Link[]>();
+  const seen = new Set([home]);
+  for (const queue = [home]; queue.length; ) {
+    const p = queue.shift()!;
+    for (const l of (from.get(p) ?? []).sort((a, b) => reading(a.via, b.via))) {
+      if (seen.has(l.to)) continue;
+      seen.add(l.to);
+      kids.set(p, [...(kids.get(p) ?? []), l]);
+      queue.push(l.to);
+    }
+  }
+  const out: TreePage[] = [];
+  const walk = (page: Shape, depth: number, via?: Link) => {
+    out.push({ page, depth, via });
+    for (const l of kids.get(page) ?? []) walk(l.to, depth + 1, l);
+  };
+  walk(home, 0);
+  for (const p of pagesOf(scene)) if (!seen.has(p)) out.push({ page: p, depth: 0 });
   return out;
 }
 
@@ -91,15 +139,15 @@ const words = (s: string, n: number) => {
 export type MapDetail = { depth: number; words: number; boxes: boolean };
 
 /**
- * The site map as text: every page in reading order (top to bottom, left to
- * right) with its links, then its content as a tree (a shape sits under the
- * smallest shape around it), board.mapDepth levels deep, descriptions cut to
- * board.mapWords words (or as `detail` says).
+ * The site map as text: every page in the site's tree order (home first) with
+ * its links, then its content as a tree (a shape sits under the smallest shape
+ * around it), board.mapDepth levels deep, descriptions cut to board.mapWords
+ * words (or as `detail` says). What a visitor can click is marked with where it
+ * goes: "→ contact", "→ contact (no page yet)", or "[button]".
  */
 export function siteMap(scene: Scene, t: Tuning = DEFAULTS, detail: MapDetail = { depth: t["board.mapDepth"], words: t["board.mapWords"], boxes: false }): string {
-  const pages = pagesOf(scene).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
-  const links = linksOf(scene, t);
-  const linkIds = new Set(links.map((l) => l.via.id));
+  const pages = siteTree(scene).map((p) => p.page);
+  const links = linksOf(scene);
   const { depth, words: nWords } = detail;
   const r = (n: number) => Math.round(n);
   const line = (s: Shape) => {
@@ -107,10 +155,12 @@ export function siteMap(scene: Scene, t: Tuning = DEFAULTS, detail: MapDetail = 
     if (nWords > 0) bits.push(`: ${words(s.description, nWords)}`);
     if (s.text?.words) bits.push(` text "${words(s.text.words.replace(/\s+/g, " "), Math.max(8, nWords))}"`);
     if (s.drawing) bits.push(` picture "${s.drawing}"`);
+    if (s.link) bits.push(scene.get(s.link)?.kind === "frame" ? ` → ${s.link}` : ` → ${s.link} (no page yet)`);
+    else if (s.button) bits.push(" [button]");
     return bits.join("");
   };
   // Content by page; a shape's parent is the smallest other shape on its page around it.
-  const content = scene.stacked().filter((s) => s.kind !== "frame" && !linkIds.has(s.id));
+  const content = scene.stacked().filter((s) => s.kind !== "frame");
   const parentOf = new Map<Shape, Shape | undefined>();
   for (const s of content) {
     const page = pageOf(scene, s);
@@ -126,7 +176,14 @@ export function siteMap(scene: Scene, t: Tuning = DEFAULTS, detail: MapDetail = 
 
   const out = [`Board: ${pages.length} pages, ${links.length} links between them, ${scene.shapes.size} shapes. Positions are board pixels; pages are frames.`];
   pages.forEach((p, i) => {
-    const to = links.filter((l) => l.from === p).map((l) => `${pageName(l.to)} (${l.via.id})`);
+    // Each page it leads to once, by the first element (in reading order) that does.
+    const to: string[] = [];
+    const named = new Set<Shape>();
+    for (const l of links.filter((l) => l.from === p).sort((a, b) => reading(a.via, b.via))) {
+      if (named.has(l.to)) continue;
+      named.add(l.to);
+      to.push(`${pageName(l.to)} (${l.via.id})`);
+    }
     out.push(`${i + 1}. ${pageName(p)} [${p.id}] at ${r(p.box.x)},${r(p.box.y)}, ${r(p.box.w)}×${r(p.box.h)}${to.length ? `. Links to: ${to.join(", ")}` : ""}`);
     if (depth > 0) out.push(...tree(p, undefined, 1, "   "));
   });

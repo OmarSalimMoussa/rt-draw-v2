@@ -65,3 +65,103 @@ remove(home)`);
     expect(scene.home).toBeUndefined();
   });
 });
+
+// A site whose layout put Services above Home (as v1's layout does): reading order would start with Services.
+const site = () =>
+  runScript(`shape(page, frame, 0 0 1280 800, ${D})
+text(page, "Home")
+shape(nav-home, pill, 800 28 80 30, ${D}, link:page)
+shape(nav-services, pill, 900 28 110 30, ${D}, link:services)
+shape(nav-contact, pill, 1030 28 110 30, ${D}, link:contact)
+shape(hero-title, rect, 80 200 600 80, ${D})
+shape(book, pill, 80 320 200 50, ${D}, button:yes)
+shape(services, frame, 1500 -1070 1280 800, ${D})
+text(services, "Services")
+shape(s-nav-home, pill, 2300 -1042 80 30, ${D}, link:page)
+shape(s-nav-contact, pill, 2530 -1042 110 30, ${D}, link:contact)
+shape(s-card, rect, 1580 -800 300 200, ${D}, link:pricing)
+shape(about, frame, 1500 1000 1280 800, ${D})
+text(about, "About")
+shape(old-arrow, arrow, 1280 400 220 0, ${D})`).scene;
+
+describe("links from the fields", () => {
+  it("linksOf reads shape.link, skipping its own page, missing pages and arrows", async () => {
+    const { linksOf } = await import("../../src/core/board.ts");
+    expect(linksOf(site()).map((l) => [l.from.id, l.via.id, l.to.id])).toEqual([["page", "nav-services", "services"], ["services", "s-nav-home", "page"]]);
+  });
+
+  it("links to a non-frame shape are forward links", async () => {
+    const { linksOf, siteMap, siteTree } = await import("../../src/core/board.ts");
+    const scene = site();
+    runScript("shape(book, link:hero-title)", scene);
+    expect(linksOf(scene).some((l) => l.via.id === "book")).toBe(false);
+    expect(siteTree(scene).map((p) => p.page.id)).toEqual(["page", "services", "about"]);
+    expect(siteMap(scene)).toContain("book: a part of the page used by these tests → hero-title (no page yet)");
+  });
+
+  it("clickable: a link or a button, never a page", async () => {
+    const { clickable } = await import("../../src/core/board.ts");
+    const scene = site();
+    expect(["nav-contact", "book", "hero-title", "page"].map((id) => clickable(scene.get(id)!))).toEqual([true, true, false, false]);
+  });
+});
+
+describe("the link tree", () => {
+  it("starts at home, nests each page under the first element that leads to it, and puts unreached pages last", async () => {
+    const { siteTree } = await import("../../src/core/board.ts");
+    expect(siteTree(site()).map((p) => [p.page.id, p.depth, p.via?.via.id])).toEqual([
+      ["page", 0, undefined],
+      ["services", 1, "nav-services"],
+      ["about", 0, undefined],
+    ]);
+  });
+
+  it("the first element in reading order claims the page; nav copies claim nothing", async () => {
+    const { siteTree } = await import("../../src/core/board.ts");
+    const scene = site();
+    runScript(`shape(contact, frame, 3000 0 1280 800, ${D})\nshape(cta, pill, 80 500 200 50, ${D}, link:contact)`, scene);
+    const tree = siteTree(scene);
+    expect(tree.find((p) => p.page.id === "contact")?.via?.via.id).toBe("nav-contact");
+    expect(tree.filter((p) => p.via).map((p) => p.via!.via.id)).toEqual(["nav-services", "nav-contact"]);
+  });
+
+  it("home is scene.home; without one, the first page in reading order", async () => {
+    const { homeOf } = await import("../../src/core/board.ts");
+    const scene = site();
+    expect(homeOf(scene)?.id).toBe("page");
+    scene.home = undefined;
+    expect(homeOf(scene)?.id).toBe("services");
+  });
+});
+
+describe("the site map", () => {
+  it("marks what a visitor can click and where it goes", async () => {
+    const { siteMap } = await import("../../src/core/board.ts");
+    const scene = site();
+    runScript(`shape(contact, frame, 3000 0 1280 800, ${D})`, scene);
+    const map = siteMap(scene);
+    expect(map).toContain("nav-contact: a part of the page used by these tests → contact\n");
+    expect(map).toContain("s-card: a part of the page used by these tests → pricing (no page yet)");
+    expect(map).toContain("book: a part of the page used by these tests [button]");
+    expect(map).not.toMatch(/hero-title[^\n]*(→|\[button\])/);
+  });
+
+  it("lists pages in tree order, home first", async () => {
+    const { siteMap } = await import("../../src/core/board.ts");
+    const pages = [...siteMap(site()).matchAll(/^\d+\. \S+ \[(\S+)\]/gm)].map((m) => m[1]);
+    expect(pages).toEqual(["page", "services", "about"]);
+  });
+});
+
+describe("the op manual", () => {
+  it("on a board, says how to make things clickable and that the board draws the arrows", async () => {
+    const { promptOf } = await import("../../src/core/prompts.ts");
+    const { DEFAULTS } = await import("../../src/core/tuning.ts");
+    const board = promptOf("draw", DEFAULTS).system(true, 1280, 800, 0, 1280);
+    const canvas = promptOf("draw", DEFAULTS).system(false, 1280, 800, 40, 1280);
+    expect(board).toMatch(/link:<page id>/);
+    expect(board).toMatch(/button:yes/);
+    expect(board).toMatch(/never draw arrows between pages/i);
+    expect(canvas).not.toMatch(/link:</);
+  });
+});

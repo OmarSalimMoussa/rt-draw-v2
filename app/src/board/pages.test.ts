@@ -13,13 +13,13 @@ shape(shop, frame, 1400 0 1280 800, "the shop page listing the bakery's breads")
 text(shop, "Shop")
 shape(cart, frame, 2800 0 1280 800, "the cart page with the chosen breads")
 text(cart, "Cart")
-shape(a1, arrow, 1280 400 120 0, "a link from home to the shop page")
-shape(a2, arrow, 2680 400 120 0, "a link from the shop to the cart page")
+shape(to-shop, pill, 40 400 200 50, "the button on home that opens the shop page", link:shop)
+shape(to-cart, pill, 1440 400 200 50, "the button on the shop that opens the cart page", link:cart)
 shape(about, frame, 0 1000 1280 800, "the about page telling the bakery's story")
 text(about, "About")`).scene;
 
 describe("pages", () => {
-  it("pages come in reading order with their link depth", () => {
+  it("pages come in tree order with their link depth", () => {
     expect(pageRows(bakery)).toMatchObject([
       { id: "home", name: "Home", depth: 0, home: true },
       { id: "shop", name: "Shop", depth: 1, home: false },
@@ -32,8 +32,12 @@ describe("pages", () => {
     expect(pageRows(new Scene())).toEqual([]);
   });
 
-  it("siteName is the topmost text on the first page", () => {
+  it("siteName is the topmost text on the home page", () => {
     expect(siteName(bakery)).toBe("Crumb & Co bakery");
+    // Home placed below another page still names the site.
+    const moved = Scene.fromJSON(bakery.toJSON());
+    moved.move("shop", { x: 1400, y: -2000 });
+    expect(siteName(moved)).toBe("Crumb & Co bakery");
     expect(siteName(runScript(asPage("", "page", "Home")).scene)).toBe("Untitled");
   });
 });

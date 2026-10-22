@@ -31,10 +31,11 @@ layer(id, front | back | above:other | below:other)
 move(id, box)      remove(id)      group(id, [a, b, ...])${board ? `
 camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look ("zoom out", "show me the cart"), or, as your last line, onto what you made if it's off screen` : ""}
 
-kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page: a new page goes beside the others without overlapping them, ${pageW} wide for a website)` : ""}.
+kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page, ${pageW} wide for a website: put a new one anywhere beside the others; the board moves pages into place after you finish)` : ""}.
 box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
 Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
-style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).
+style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).${board ? `
+Clicks: give link:<page id> to anything that opens another page (nav items, buttons, cards, a logo that goes home), and button:yes to anything else a visitor would click; link:none and button:no undo them. Never draw arrows between pages: the board draws them from the links. Aim the camera at a page by its id: camera(contact).` : ""}
 Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
 A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
 Order: a shape() always comes before any text(), drawing() or move() on its id, and a text() only targets a shape that already exists (a new id never gets a bare text(): shape it first). Put each drawing() on the line right after its shape(), before the page's text and chrome, so pictures can start drawing while you are still writing.
