@@ -27,6 +27,13 @@ export type Build = { job: Job; to: string; label: string; w: number; h: number 
 /** Where a page is made before the layout places it: right of the others, in the row the board keeps for new pages. */
 const BESIDE = 140;
 
+/** How a build ended, for the preview's bar: undefined when its page is built, else why it failed (v1's strip). */
+export function buildEnded(status: JobStatus, landed: number, error?: string): { failed: string } | undefined {
+  if (status === "done") return landed ? undefined : { failed: "Nothing was drawn." };
+  if (status === "stopped") return { failed: landed ? "It was stopped before it was finished." : "It was stopped before anything was drawn." };
+  return { failed: error ?? "Something went wrong." };
+}
+
 export function buildJob(deps: BuildDeps, click: { shape: Shape; from: Shape }, onDone: (status: JobStatus, landed: number, error?: string) => void): Build {
   const scene = deps.scene();
   const label = clickedWords(scene, click.shape);

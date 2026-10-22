@@ -2,6 +2,7 @@
 // the layout puts them, and the arrows come with them. On a fake projects server.
 import ELK from "elkjs/lib/elk.bundled.js";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { runScript } from "../../../src/core/ops.ts";
 import type { SceneJSON } from "../../../src/core/scene.ts";
 import { createProject, ready, saveVersions } from "../projects/storage.ts";
 import { Board } from "./board.ts";
@@ -61,5 +62,17 @@ describe("settling the board", () => {
     // V1 has the model's arrows and no links: nothing of the layout's fits it.
     expect(shownArrows(board.versionScene(1), await board.placementFor(1))).toEqual([]);
     expect(shownArrows(board.versionScene(2), await board.placementFor(2))).toHaveLength(2);
+  });
+
+  it("the send's version is saved with the pages placed before they glide, so a Restore meanwhile loses nothing", async () => {
+    const board = opened(demo as SceneJSON);
+    runScript('shape(promo, rect, 100 600 400 80, "a promo banner the send just drew on Home")', board.scene);
+    const settled = board.settle({ glideMs: 300, placed: () => board.commit("the send") });
+    await new Promise((r) => setTimeout(r, 120));
+    board.restore(1);
+    await settled;
+    const v = board.history.versions.find((x) => x.label === "the send");
+    expect(v?.doc.shapes.some((s) => s.id === "promo")).toBe(true);
+    expect(v?.doc.shapes.find((s) => s.id === "services")!.box).toMatchObject({ x: 1500, y: -1070 });
   });
 });

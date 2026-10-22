@@ -8,7 +8,7 @@ import type { Scene } from "../../../src/core/scene.ts";
 import type { Sent } from "../../../src/core/send.ts";
 import { LatencyLog } from "../board/latency.ts";
 import { Sender } from "../board/sender.ts";
-import { type BuildDeps, buildJob } from "./build.ts";
+import { type BuildDeps, buildEnded, buildJob } from "./build.ts";
 
 const D = '"a part of the page used by these tests"';
 const site = () =>
@@ -23,7 +23,7 @@ const sent = (): Sent => ({ prompt: {} as Prompt, result: { ops: [], ms: 1, repl
 
 /** A build on `scene`, through a real sender whose sends the test finishes by hand. */
 function rig(scene: Scene) {
-  const sends: { words: unknown; land: (n: number) => void; fail: (e: Error) => void }[] = [];
+  const sends: { words: unknown; land: (n: number) => void; op: () => void; fail: (e: Error) => void }[] = [];
   const sender = new Sender({
     run: (input, hooks) =>
       new Promise((ok, no) =>
@@ -33,6 +33,7 @@ function rig(scene: Scene) {
             for (let i = 0; i < n; i++) hooks.onOp?.({ line: "x", ok: true, ms: 1 });
             ok(sent());
           },
+          op: () => hooks.onOp?.({ line: "x", ok: true, ms: 1 }),
           fail: no,
         }),
       ),
@@ -113,5 +114,28 @@ describe("building a page from a click", () => {
     await sender.idle();
     expect(scene.get("contact")).toBeUndefined();
     expect(done).toHaveBeenCalledWith("stopped", 0, undefined);
+  });
+
+  it("a build that fails after drawing something keeps the page, and still says it failed", async () => {
+    const scene = site();
+    const { sender, sends, deps } = rig(scene);
+    const done = vi.fn();
+    sender.enqueue(buildJob(deps, { shape: scene.get("nav-contact")!, from: scene.get("page")! }, done).job);
+    await tick();
+    await tick();
+    const s = sends[0];
+    // Two ops land, then the stream breaks.
+    s.op();
+    s.op();
+    s.fail(new Error("Claude is down"));
+    await sender.idle();
+    expect(done).toHaveBeenCalledWith("error", 2, "Claude is down");
+    expect(scene.get("contact")).toBeDefined();
+    expect(scene.get("nav-contact")!.link).toBe("contact");
+    expect(buildEnded("error", 2, "Claude is down")).toEqual({ failed: "Claude is down" });
+    expect(buildEnded("stopped", 3)).toEqual({ failed: "It was stopped before it was finished." });
+    expect(buildEnded("done", 3)).toBeUndefined();
+    expect(buildEnded("done", 0)).toEqual({ failed: "Nothing was drawn." });
+    expect(buildEnded("stopped", 0)).toEqual({ failed: "It was stopped before anything was drawn." });
   });
 });

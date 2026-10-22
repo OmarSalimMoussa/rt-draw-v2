@@ -162,6 +162,7 @@ describe("the op manual", () => {
     expect(board).toMatch(/link:<page id>/);
     expect(board).toMatch(/button:yes/);
     expect(board).toMatch(/never draw arrows between pages/i);
+    expect(board).toMatch(/beside the others without overlapping them/);
     expect(canvas).not.toMatch(/link:</);
   });
 });

@@ -31,7 +31,7 @@ layer(id, front | back | above:other | below:other)
 move(id, box)      remove(id)      group(id, [a, b, ...])${board ? `
 camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look ("zoom out", "show me the cart"), or, as your last line, onto what you made if it's off screen` : ""}
 
-kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page, ${pageW} wide for a website: put a new one anywhere beside the others; the board moves pages into place after you finish)` : ""}.
+kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page, ${pageW} wide for a website: put a new one anywhere beside the others without overlapping them; the board moves pages into place after you finish)` : ""}.
 box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
 Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
 style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).${board ? `

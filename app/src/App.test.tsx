@@ -213,6 +213,17 @@ describe("the preview", () => {
     expect(history.length).toBe(before + 1);
   });
 
+  it("opening the preview lets go of a version pinned in History: it shows the board as it is now", async () => {
+    const a = project(doc(SITE), doc(SITE, BOX_A));
+    history.replaceState(null, "", `/?p=${a}`);
+    await open(a);
+    const { board } = app()!;
+    await act(async () => board.look(1, true));
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".lp-head button")].find((b) => b.textContent?.includes("Preview"))!.click());
+    expect(document.querySelector(".pv")).not.toBeNull();
+    expect(board.history.looking).toBeUndefined();
+  });
+
   it("Edit this page goes back to the board on that page, and the pill returns to the preview there", async () => {
     const a = project(doc(SITE));
     history.replaceState(null, "", `/?p=${a}#preview=services`);

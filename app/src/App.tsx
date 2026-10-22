@@ -26,7 +26,7 @@ import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScene, toScreen, viewShowing } from "./canvas/view.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
 import { type Building, Preview } from "./preview/Preview.tsx";
-import { buildJob } from "./preview/build.ts";
+import { buildEnded, buildJob } from "./preview/build.ts";
 import { hitClickable, previewHash, previewOfHash } from "./preview/preview.ts";
 import { boilCss, shapeSelector } from "./board/boil.ts";
 import { createProject } from "./projects/storage.ts";
@@ -134,6 +134,10 @@ export function App({ hidden = false }: { hidden?: boolean }) {
       removeEventListener("hashchange", read);
     };
   }, []);
+  // The preview shows the board as it is now: a version pinned in History is let go.
+  useEffect(() => {
+    if (previewing) board.stopLooking();
+  }, [previewing]);
   // Coming back from the projects page (its Preview buttons) to this editor.
   useEffect(() => {
     if (!hidden) setPv(previewOfHash(location.hash));
@@ -210,8 +214,8 @@ export function App({ hidden = false }: { hidden?: boolean }) {
             }
           };
           if (!landed) return finish();
-          // The board places its pages before the version is saved, so the move belongs to this send.
-          return board.settle({ glideMs: SETTLE_MS }).then(finish);
+          // The board places its pages before the version is saved (and before they glide), so the move belongs to this send.
+          return board.settle({ glideMs: SETTLE_MS, placed: finish });
         },
         log,
       }),
@@ -299,8 +303,11 @@ export function App({ hidden = false }: { hidden?: boolean }) {
       },
       { shape, from },
       (status, landed, error) =>
-        // Built (something landed, so it stays): done. Nothing drawn: v1's strip says why.
-        setBuilding((w) => (!w || landed ? undefined : { ...w, running: false, failed: status === "stopped" ? "It was stopped before anything was drawn." : (error ?? "Nothing was drawn.") })),
+        // Built: done. Failed or stopped (the page stays if something landed): v1's strip says why.
+        setBuilding((w) => {
+          const end = buildEnded(status, landed, error);
+          return w && end ? { ...w, running: false, failed: end.failed } : undefined;
+        }),
     );
     setBuilding({ to: b.to, label: b.label, w: b.w, h: b.h, running: true });
     sender.enqueue(b.job);
@@ -455,7 +462,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
       <aside className="pg-panel" ref={panelRef}>
         <Sidebar
           board={board}
-          busy={busy}
+          busy={busy || board.busy}
           picked={picked}
           onPage={(id) => {
             setPicked(id);

@@ -15,7 +15,7 @@ import { SAVED_EVENT, blankBoard, currentProjectId, listProjects, loadVersions, 
 import { getModel, onSettings } from "../settings.ts";
 import { adoptArrows, adoptLinks } from "./adopt.ts";
 import { History } from "./history.ts";
-import { type Placement, placeBoard, shiftsOf } from "./place.ts";
+import { type Placement, moveBy, placeBoard, shiftsOf } from "./place.ts";
 
 /** How long pages glide to their places. */
 export const SETTLE_MS = 400;
@@ -124,19 +124,28 @@ export class Board {
   /**
    * Puts the pages where the layout says (place.ts): the model's old page arrows become links first, then
    * the pages glide there over glideMs with their content (and the camera with the page it's on), and the
-   * arrows come once they've arrived. In memory: the next version saves it. Never throws.
+   * arrows come once they've arrived. `placed` is called once the board holds the pages' final places,
+   * before the glide (a send's version is saved then, so nothing waits on the animation), or once the
+   * layout gave up. In memory otherwise: the next version saves it. Never throws.
    */
-  settle({ glideMs }: { glideMs: number }): Promise<void> {
+  settle({ glideMs, placed }: { glideMs: number; placed?: () => void }): Promise<void> {
+    let told = false;
+    const tell = () => {
+      if (told) return;
+      told = true;
+      placed?.();
+    };
     this.settling = this.settling
-      .then(() => this.place(glideMs))
+      .then(() => this.place(glideMs, tell))
       .catch((e) => {
         this.gliding = false;
         console.error("placing the pages failed", e);
-      });
+      })
+      .then(tell);
     return this.settling;
   }
 
-  private async place(glideMs: number) {
+  private async place(glideMs: number, placed: () => void) {
     const scene = this.scene;
     adoptArrows(scene, this.tuning);
     adoptLinks(scene);
@@ -150,6 +159,10 @@ export class Board {
       const under = c && pagesOf(scene).filter((f) => c.x >= f.box.x && c.x <= f.box.x + f.box.w && c.y >= f.box.y && c.y <= f.box.y + f.box.h).sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h)[0];
       const d = under && shifts.get(under.id);
       const from = new Map([...shifts.keys()].map((id) => [id, { ...scene.get(id)!.box }]));
+      // At their places first, for whoever saves the board now; the glide then shows them getting there.
+      moveBy(scene, p.at);
+      this.placement = p;
+      placed();
       this.gliding = true;
       this.draw();
       await ease(glideMs, (e) => {
@@ -221,6 +234,8 @@ export class Board {
 
   /** Version n as the live board again, a new version: nothing is lost. */
   restore(n: number) {
+    // A send's board is still settling: its version isn't saved yet.
+    if (this.busy) return;
     const v = this.history.restore(n);
     this.scene = Scene.fromJSON(v.doc);
     this.placement = undefined;
