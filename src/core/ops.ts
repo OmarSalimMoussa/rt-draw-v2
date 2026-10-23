@@ -184,12 +184,24 @@ const need = (scene: Scene, id: string) => {
   return s;
 };
 
+/**
+ * The model sometimes writes a page's name where its id goes ("Home" for the page with id page):
+ * an id that is no shape or group but is a page's name, in any case, means that page. Not for a
+ * shape() of another kind, which makes a new shape of that id.
+ */
+function idOf(scene: Scene, op: Op, id: string) {
+  if (scene.get(id) || scene.groups.has(id)) return id;
+  if (op.name === "shape" && op.args.some((a) => !a.key && !a.quoted && KINDS.includes(a.value as Kind) && a.value !== "frame")) return id;
+  const name = id.toLowerCase();
+  return scene.stacked().find((s) => s.kind === "frame" && s.text?.words.trim().toLowerCase() === name)?.id ?? id;
+}
+
 /** Applies one op. Throws with a short reason when it can't. */
 export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
   const cell = t["ops.cellPx"];
   if (op.name === "camera") throw new Error("camera(...) moves the screen: only a send on a board can");
   const pos = op.args.filter((a) => !a.key);
-  const id = pos[0]?.value;
+  const id = pos[0]?.value && idOf(scene, op, pos[0].value);
   if (!id) throw new Error("missing id");
   switch (op.name) {
     case "shape": {
