@@ -17,6 +17,13 @@ type Session = { mic: MicLike; engine: EngineLike; words: Word[]; closed: boolea
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** A voice error as a tester reads it: what to do, without naming the speech service. */
+export function plainVoiceError(e: string): string {
+  if (/permission|notallowed|denied|dismissed/i.test(e)) return "imagine can't hear you: allow the microphone for this site, or type instead.";
+  if (/not ?found|no (microphone|device)/i.test(e)) return "No microphone found. Plug one in, or type instead.";
+  return "Listening stopped. Press the mic to try again, or type instead.";
+}
+
 export class Voice {
   listening = false;
   /** What Scribe is hearing now, not final yet. */

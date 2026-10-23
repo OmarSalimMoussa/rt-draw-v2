@@ -16,6 +16,8 @@ export async function whoAmI(): Promise<Me | null | undefined> {
   return me;
 }
 export const currentMe = () => me;
+/** Whether the screen may show the inside (models, Jev, Scribe, latency): to the admin, and on the dev server. */
+export const seesInternals = () => me === undefined || !!me?.admin;
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
   const r = await fetch(path, body === undefined ? undefined : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

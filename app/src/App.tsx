@@ -16,6 +16,7 @@ import { send } from "../../src/core/send.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { forgetSpansBefore, span } from "../../src/core/trace.ts";
 import type { Pt, Stroke } from "../../src/core/ink.ts";
+import { seesInternals } from "./access/api.ts";
 import { Board, SETTLE_MS } from "./board/board.ts";
 import { BoardArrows } from "./board/BoardArrows.tsx";
 import { BoardView } from "./board/BoardView.tsx";
@@ -38,7 +39,7 @@ import { Sidebar } from "./Sidebar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { Icon } from "./sketch/Icon.tsx";
 import { MarkSketch } from "./sketch/MarkSketch.tsx";
-import { Voice, onInkClock, withTyped } from "./speech/voice.ts";
+import { Voice, onInkClock, plainVoiceError, withTyped } from "./speech/voice.ts";
 import { keepWarm } from "./warm.ts";
 
 /** Height kept clear at the top for the toolbar. */
@@ -439,7 +440,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           </button>
         )}
       </div>
-      {latency && <LatencyOverlay log={log} />}
+      {latency && seesInternals() && <LatencyOverlay log={log} />}
       {lost && (
         <div className="pg-lost">
           <button type="button" onClick={fitAll} title="Fit all your pages into view (shift+1)">
@@ -487,7 +488,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         {(spoken || voice.error) && (
           <div className="pg-captions" aria-live="polite">
             {spoken && <div className="pg-heard"><Icon name="mic" /> {spoken}…</div>}
-            {voice.error && <div className="bad">{voice.error}</div>}
+            {voice.error && <div className="bad">{seesInternals() ? voice.error : plainVoiceError(voice.error)}</div>}
           </div>
         )}
         <div className="pg-row">
