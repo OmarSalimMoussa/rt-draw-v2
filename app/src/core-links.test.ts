@@ -154,7 +154,7 @@ describe("the site map", () => {
 });
 
 describe("the op manual", () => {
-  it("on a board, says how to make things clickable and that the board draws the arrows", async () => {
+  it("on a board, says how to make things clickable, that the board draws the arrows, and that a frame is a whole page", async () => {
     const { promptOf } = await import("../../src/core/prompts.ts");
     const { DEFAULTS } = await import("../../src/core/tuning.ts");
     const board = promptOf("draw", DEFAULTS).system(true, 1280, 800, 0, 1280);
@@ -163,6 +163,7 @@ describe("the op manual", () => {
     expect(board).toMatch(/button:yes/);
     expect(board).toMatch(/never draw arrows between pages/i);
     expect(board).toMatch(/beside the others without overlapping them/);
+    expect(board).toMatch(/only ever a whole page: a strip, panel or card on a page is a rect/);
     expect(canvas).not.toMatch(/link:</);
   });
 });
