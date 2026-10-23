@@ -77,7 +77,7 @@ export const KNOBS: Knob[] = [
   K("hit.linePx", 8, 2, 30, 1, "ink this close to a line or arrow shape touches it", "px"),
 
   // Ops: what the model must write.
-  K("ops.minDescriptionWords", 6, 1, 30, 1, "a new shape's description needs at least this many words"),
+  K("ops.minDescriptionWords", 6, 1, 30, 1, "an edit's description shorter than this keeps the one the shape had (a new shape keeps it anyway)"),
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
 
   // Speech: turning the mic into timed words (ElevenLabs Scribe).
@@ -223,6 +223,8 @@ export const KNOBS: Knob[] = [
   K("render.fadeOpacity", 0.7, 0, 1, 0.05, "at fade 1, a picture loses this much opacity"),
   K("render.textPadPx", 16, 0, 40, 1, "text keeps at least this far from a shape's edge", "px"),
   K("render.lineHeight", 1.25, 1, 2, 0.05, "line height as a multiple of text size"),
+  K("render.captionMaxShare", 0.4, 0.1, 0.8, 0.05, "words on a shape with a picture go under it, as a caption at most this share of its height"),
+  K("render.minTextScale", 0.4, 0.1, 1, 0.05, "text too big for its box shrinks to fit, down to this share of its size (and never below 8px)"),
 
   // One switch per patched model: 0 (default) uses the model as it comes, 1 applies our patches on it.
   B("patches.scribe", 0, "scribe patches", "on: apply our patches (⚙) on Scribe's output; off: Scribe as it comes"),

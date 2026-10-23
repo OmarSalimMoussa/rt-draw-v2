@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { runScript } from "../../src/core/ops.ts";
 import { Scene } from "../../src/core/scene.ts";
 
-// Descriptions have 6+ words, or v2's ops throw the shape away (ops.minDescriptionWords).
+// Descriptions have 6+ words, as v2's ops want them (ops.minDescriptionWords).
 const D = '"a part of the page used by these tests"';
 
 describe("links and buttons on shapes", () => {

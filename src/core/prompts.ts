@@ -154,7 +154,7 @@ export const DRAW_ADD = {
   question: "Do they ask for something new to be added or built?",
   yes: "They want a new page, section, card, button, list, label or any other shape that is not on the canvas yet, drawn or built for them.",
   no: "They only change, move, remove, recolor, resize, rename or look at shapes that already exist.",
-  line: 'Every shape() description is at least 6 words (count them); a shorter one is thrown away together with the text() or drawing() that follows it. For a name, price, label or button write e.g. "starter plan price line near top of card".',
+  line: 'Every shape() description is at least 6 words (count them): it is how the shape is found when they point at it later. For a name, price, label or button write e.g. "starter plan price line near top of card".',
 };
 
 export type Role = keyof typeof PROMPTS;

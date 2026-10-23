@@ -23,13 +23,11 @@ export type Parsed = { ok: true; op: Op } | { ok: false; line: string; error: st
 export const NAMES = ["shape", "text", "drawing", "layer", "move", "group", "remove", "camera"];
 export const DEFAULT_CELL = DEFAULTS["ops.cellPx"];
 
-/** A description shorter than ops.minDescriptionWords says too little to find the shape by later. */
-function checkDescription(d: string, t: Tuning) {
-  const words = d.trim().split(/\s+/).filter(Boolean).length;
-  const min = t["ops.minDescriptionWords"];
-  if (words < min) throw new Error(`description too short (${words} words, need ${min}+): say what it is and what it's for`);
-  return d.trim();
-}
+/**
+ * A description shorter than ops.minDescriptionWords says too little to find the shape by later.
+ * It never costs the shape: a new shape keeps it (better than none), an edit keeps the one it had.
+ */
+const isShort = (d: string, t: Tuning) => d.trim().split(/\s+/).filter(Boolean).length < t["ops.minDescriptionWords"];
 
 /** Splits "a, \"b, c\", [d, e], key:val" at top-level commas. */
 function splitArgs(s: string): Arg[] {
@@ -206,14 +204,14 @@ export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
       if (!existing) {
         if (!boxArg) throw new Error(`new shape "${id}" needs a box`);
         if (!descArg) throw new Error(`new shape "${id}" needs a "description" of what it is and what it's for`);
-        const shape: Shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: checkDescription(descArg.value, t), style: {} };
+        const shape: Shape = { id, kind: (kindArg?.value as Kind) ?? "rect", box: parseBox(boxArg.value, cell), description: descArg.value.trim(), style: {} };
         styleFrom(op.args, shape.style);
         setClick(shape, click);
         if (shape.kind === "frame" && !scene.stacked().some((s) => s.kind === "frame")) scene.home = id;
         scene.add(shape);
       } else {
         // Check everything before changing anything, so a rejected line leaves the shape as it was.
-        const description = descArg ? checkDescription(descArg.value, t) : undefined;
+        const description = descArg && !isShort(descArg.value, t) ? descArg.value.trim() : undefined;
         const box = boxArg ? parseBox(boxArg.value, cell) : undefined;
         if (kindArg) existing.kind = kindArg.value as Kind;
         if (box) existing.box = box;

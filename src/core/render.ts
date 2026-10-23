@@ -38,7 +38,8 @@ const el = <K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string,
 const seedOf = (id: string) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 2 ** 31 || 1;
 
 let measureCtx: CanvasRenderingContext2D | null = null;
-function wrap(words: string, size: number, weight: string, width: number): string[] {
+/** The words in lines no wider than `width` where it can (a word wider than that gets a line of its own), and the widest line. */
+function wrap(words: string, size: number, weight: string, width: number): { lines: string[]; widest: number } {
   measureCtx ??= document.createElement("canvas").getContext("2d")!;
   measureCtx.font = `${weight} ${size}px ${FONT}`;
   const lines: string[] = [];
@@ -53,7 +54,19 @@ function wrap(words: string, size: number, weight: string, width: number): strin
     }
     lines.push(line);
   }
-  return lines;
+  return { lines, widest: Math.max(...lines.map((l) => measureCtx!.measureText(l).width)) };
+}
+
+/**
+ * The text's size and lines in a width × height box: its own size if it fits, else a pixel smaller
+ * at a time until it does, since the shape cuts off whatever sticks out. Never below the floor.
+ */
+function fitText(words: string, size: number, weight: string, width: number, height: number, knobs: Tuning) {
+  const floor = Math.min(size, Math.max(8, size * knobs["render.minTextScale"]));
+  for (let s = size; ; s = Math.max(floor, s - 1)) {
+    const { lines, widest } = wrap(words, s, weight, width);
+    if (s <= floor || (lines.length * s * knobs["render.lineHeight"] <= height && widest <= width)) return { size: s, lines };
+  }
 }
 
 function roundedPath(x: number, y: number, w: number, h: number, r: number) {
@@ -109,13 +122,22 @@ function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shap
   clip.append(el("path", { d: outline(s) }));
   svg.querySelector("defs")!.append(clip);
 
+  // Words on a shape with a picture are its caption, in a band along the bottom, with the picture
+  // fitted above: one drawn over the other, neither could be read.
+  const t = s.text?.words ? s.text : undefined;
+  const weight = t?.weight === "bold" ? "700" : "400";
+  const pad = Math.min(knobs["render.textPadPx"], w * 0.06);
+  const fitted = t && fitText(t.words, t.size ?? 20, weight, w - pad * 2, s.drawing ? h * knobs["render.captionMaxShare"] : h, knobs);
+  const band = fitted && s.drawing ? fitted.lines.length * fitted.size * knobs["render.lineHeight"] + pad : 0;
+  const ph = h - band;
+
   const drawn = s.drawing && s.picture?.subject === s.drawing && s.picture.els.length ? s.picture : undefined;
   if (drawn) {
     // The doodle, scaled to fit the shape as it is now (it may have moved or been resized since). Fade dims it, not the box.
     const pic = el("g", { "clip-path": `url(#${clipId})` });
     if (st.fade) pic.setAttribute("style", `opacity:${1 - st.fade * knobs["render.fadeOpacity"]};filter:saturate(${1 - st.fade})`);
-    const k = Math.min((w * knobs["picture.fill"]) / drawn.w, (h * knobs["picture.fill"]) / drawn.h);
-    const fit = el("g", { transform: `translate(${x + (w - drawn.w * k) / 2} ${y + (h - drawn.h * k) / 2}) scale(${k})` });
+    const k = Math.min((w * knobs["picture.fill"]) / drawn.w, (ph * knobs["picture.fill"]) / drawn.h);
+    const fit = el("g", { transform: `translate(${x + (w - drawn.w * k) / 2} ${y + (ph - drawn.h * k) / 2}) scale(${k})` });
     renderPicture(fit, drawn.els, { x: 0, y: 0, w: drawn.w, h: drawn.h }, knobs, svg);
     pic.append(fit);
     g.append(pic);
@@ -123,23 +145,20 @@ function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shap
     // Placeholder picture: hatched, with what it will show. Fade dims it, not the box.
     const pic = el("g", { "clip-path": `url(#${clipId})` });
     if (st.fade) pic.setAttribute("style", `opacity:${1 - st.fade * knobs["render.fadeOpacity"]};filter:saturate(${1 - st.fade})`);
-    const ph = rc.rectangle(x + w * 0.1, y + h * 0.1, w * 0.8, h * 0.8, { seed: seedOf(s.id) + 1, roughness: 2, stroke: "#868e96", strokeWidth: 1, fill: "#adb5bd", fillStyle: "cross-hatch", hachureGap: 10 });
-    const label = el("text", { x: x + w / 2, y: y + h - Math.max(14, h * 0.12), "text-anchor": "middle", "font-family": FONT, "font-size": Math.max(11, Math.min(16, w / 14)), fill: "#495057" });
+    const hatch = rc.rectangle(x + w * 0.1, y + ph * 0.1, w * 0.8, ph * 0.8, { seed: seedOf(s.id) + 1, roughness: 2, stroke: "#868e96", strokeWidth: 1, fill: "#adb5bd", fillStyle: "cross-hatch", hachureGap: 10 });
+    const label = el("text", { x: x + w / 2, y: y + ph - Math.max(14, ph * 0.12), "text-anchor": "middle", "font-family": FONT, "font-size": Math.max(11, Math.min(16, w / 14)), fill: "#495057" });
     label.textContent = `🖼 ${s.drawing}`;
-    pic.append(ph);
+    pic.append(hatch);
     // Small shapes get the hatch only; the subject is in the shape's tag and data.
-    if (w >= 90 && h >= 60) pic.append(label);
+    if (w >= 90 && ph >= 60) pic.append(label);
     g.append(pic);
   }
 
-  if (s.text?.words) {
-    const t = s.text;
-    const size = t.size ?? 20;
-    const weight = t.weight === "bold" ? "700" : "400";
-    const pad = Math.min(knobs["render.textPadPx"], w * 0.06);
-    const lines = wrap(t.words, size, weight, w - pad * 2);
+  if (t && fitted) {
+    const { size, lines } = fitted;
     const lh = size * knobs["render.lineHeight"];
-    const top = y + h / 2 - (lines.length * lh) / 2 + size * 0.9;
+    // In the middle of the shape, or of the caption band.
+    const top = (band ? y + ph + band / 2 : y + h / 2) - (lines.length * lh) / 2 + size * 0.9;
     const anchor = t.align === "left" ? "start" : t.align === "right" ? "end" : "middle";
     const tx = t.align === "left" ? x + pad : t.align === "right" ? x + w - pad : x + w / 2;
     const text = el("text", { "font-family": FONT, "font-size": size, "font-weight": weight, fill: t.color ?? INK, "text-anchor": anchor, "clip-path": `url(#${clipId})`, style: "white-space:pre" });

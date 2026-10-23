@@ -4,7 +4,7 @@ import { runScript } from "../../../src/core/ops.ts";
 import { Scene } from "../../../src/core/scene.ts";
 import { pageRows, siteName } from "./pages.ts";
 
-// Descriptions have 6+ words, or v2's ops throw the shape away (ops.minDescriptionWords).
+// Descriptions have 6+ words, as v2's ops want them (ops.minDescriptionWords).
 const bakery = runScript(`shape(home, frame, 0 0 1280 800, "the Home page of the bakery site")
 text(home, "Home")
 shape(logo, rect, 40 20 200 40, "the bakery's name at the top left of the header")
