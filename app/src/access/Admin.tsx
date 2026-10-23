@@ -1,10 +1,11 @@
 // The admin's page (/admin): invite people, the waitlist, everyone invited and how far they got, and
-// each person's work: their projects, every version they made, and their model calls with any errors.
+// each person's work: their feedback (each opens the drawing it was sent on), their projects, every
+// version they made, and their model calls with any errors.
 import { type FormEvent, useEffect, useState } from "react";
 import type { SceneJSON } from "../../../src/core/scene.ts";
 import { Thumb } from "../projects/ProjectsPage.tsx";
 import { ago } from "../projects/storage.ts";
-import { type Call, type Invited, type Me, type Person, type Waiting, invite, overview, revoke, theirCalls, theirProject, theirProjects } from "./api.ts";
+import { type Call, type Feedback, type Invited, type Me, type Person, type Waiting, invite, overview, revoke, theirCalls, theirFeedback, theirProject, theirProjects } from "./api.ts";
 import { Wordmark } from "./Welcome.tsx";
 import "./access.css";
 
@@ -135,6 +136,7 @@ function PersonRow({ p, open, onOpen, onLink, onRevoked }: { p: Person; open: bo
         <span>{status}</span>
         <span className="muted">{p.lastSeen ? `active ${when(p.lastSeen)}` : ""}</span>
         <span>{plural(p.projects, "project")} · {plural(p.versions, "send")}</span>
+        {p.feedback > 0 && <span className="ad-fb">{p.feedback} feedback</span>}
         <span className="ad-actions">
           <button type="button" className="ad-open" onClick={onOpen} aria-expanded={open}>{open ? "Close" : "Their work"}</button>
           <button type="button" className="ad-relink" onClick={onLink}>New link</button>
@@ -167,23 +169,45 @@ function PersonRow({ p, open, onOpen, onLink, onRevoked }: { p: Person; open: bo
 type Project = Awaited<ReturnType<typeof theirProjects>>["projects"][number];
 type Version = Awaited<ReturnType<typeof theirProject>>["versions"][number];
 
-/** One person's projects and model calls; a project opens on its versions, newest first. */
+/** One person's feedback, projects and model calls; a project opens on its versions, newest first, or on the one a piece of feedback was sent on. */
 function Work({ person }: { person: string }) {
   const [projects, setProjects] = useState<Project[]>();
   const [calls, setCalls] = useState<Call[]>();
+  const [feedback, setFeedback] = useState<Feedback[]>();
   const [picked, setPicked] = useState<{ id: string; versions: Version[]; at: number }>();
   useEffect(() => {
     theirProjects(person).then((r) => setProjects(r.projects), () => setProjects([]));
     theirCalls(person).then((r) => setCalls(r.calls), () => setCalls([]));
+    theirFeedback(person).then((r) => setFeedback(r.feedback), () => setFeedback([]));
   }, [person]);
-  const pick = async (id: string) => {
+  const pick = async (id: string, n?: number) => {
     const { versions } = await theirProject(person, id);
-    setPicked({ id, versions, at: versions.length - 1 });
+    const at = versions.findIndex((v) => v.n === n);
+    setPicked({ id, versions, at: at >= 0 ? at : versions.length - 1 });
   };
   const shown = picked?.versions[picked.at];
 
   return (
     <div className="ad-work">
+      {!!feedback?.length && (
+        <>
+          <h3>Feedback</h3>
+          <ul className="ad-feedback">
+            {feedback.map((f, i) => (
+              <li key={i}>
+                <p>{f.text}</p>
+                <span className="muted">{when(f.at)}</span>
+                {f.project && (
+                  <button type="button" onClick={() => pick(f.project!.id, f.project!.version)}>
+                    {f.project.name}
+                    {f.project.version ? ` · V${f.project.version}` : ""}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <h3>Projects</h3>
       {projects && !projects.length && <p className="muted">No projects yet.</p>}
       <ul className="ad-projects">

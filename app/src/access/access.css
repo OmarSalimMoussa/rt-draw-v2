@@ -61,3 +61,35 @@
 .ad-err { color: var(--bad); }
 .ad-call summary { cursor: var(--cur-pointer, pointer); color: var(--muted); }
 .ad-call pre { max-height: 240px; overflow: auto; }
+
+/* The Feedback button (Feedback.tsx), first of the editor's top-right buttons: labeled and in highlighter
+   yellow, so it stands out from the icons. Until drawing starts, a pen arrow under it points up at it. */
+.fb { position: relative; }
+.fb-go { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 38px; padding: 0 12px 0 8px; font-weight: 700; color: #1e1e1e; background: #ffe066; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12); }
+.fb-go:hover, .fb-go.on { background: #ffd43b; }
+.fb-go .ic { width: 24px; height: 24px; stroke-width: 1.8; }
+.fb-beg { position: absolute; top: 100%; right: 50%; display: flex; flex-direction: column; align-items: flex-end; pointer-events: none; font: 700 21px/1.2 var(--hand); color: #e8590c; white-space: nowrap; animation: fb-nudge 1.6s ease-in-out infinite; }
+.fb-beg svg { display: block; margin-right: -20px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.fb-beg span { margin-right: 70px; margin-top: -4px; }
+@keyframes fb-nudge { 50% { transform: translate(5px, -5px); } }
+@media (prefers-reduced-motion: reduce) { .fb-beg { animation: none; } }
+.fb-menu form { display: flex; flex-direction: column; gap: 8px; }
+.fb-menu textarea { font: inherit; font-size: 15px; padding: 6px 8px; border: 2px solid var(--line); border-radius: var(--wobble-s); background: var(--panel); resize: vertical; }
+.fb-menu .ac-go { margin-top: 0; }
+.fb-thanks { margin: 4px 0; font-size: 17px; }
+@media (max-width: 640px) { .fb-go span { display: none; } .fb-go { padding: 0 6px; } }
+
+/* Feedback on the admin's page: a tag on the person, and the notes themselves first in their work. */
+.ad-fb { padding: 0 8px; font-size: 13px; font-weight: 700; background: #ffe066; border: 1.5px solid var(--line); border-radius: 999px; }
+.ad-feedback { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ad-feedback li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 8px 10px; background: #fff9db; border: 1.5px solid var(--line); border-radius: var(--wobble-s); }
+.ad-feedback p { flex-basis: 100%; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ad-feedback button { font-size: 13px; padding: 1px 8px; }
+
+/* The doodles behind the pages before the app (Doodles.tsx): fixed to the screen, under the page, never in the way. */
+.ac-doodles { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.ac-doodle { position: absolute; opacity: 0.6; }
+.ac-doodle.faint { opacity: 0.13; }
+.ac-doodle-logo path { fill: #fff; stroke: #1e1e1e; stroke-width: 4.6; stroke-linecap: round; stroke-linejoin: round; }
+.ac-scribble path { fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.ac { position: relative; z-index: 1; }

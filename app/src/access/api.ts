@@ -1,10 +1,12 @@
 // Who this browser is signed in as on the hosted app (app/server/access.ts), and the calls the
-// access pages make: joining with an invite, the waitlist, signing out, and the admin's views.
+// access pages make: joining with an invite, the waitlist, signing out, feedback, and the admin's views.
 
 export type Me = { email: string; admin: boolean };
-export type Person = { id: string; email: string; admin?: boolean; invitedAt: number; linkAt: number; joinedAt?: number; lastSeen?: number; revokedAt?: number; projects: number; versions: number };
+export type Person = { id: string; email: string; admin?: boolean; invitedAt: number; linkAt: number; joinedAt?: number; lastSeen?: number; revokedAt?: number; projects: number; versions: number; feedback: number };
 export type Waiting = { email: string; note: string; at: number; invitedAt?: number };
 export type Invited = { link: string; mailed: boolean; mailError?: string };
+/** What someone wrote, and the project and version they were on. */
+export type Feedback = { at: number; person: string; text: string; project?: { id: string; name: string; version?: number } };
 export type Call = { at: string; from?: string; model?: string; ms?: number; costUsd?: number; images?: number; error?: string; user?: string; reply?: string };
 
 let me: Me | null | undefined;
@@ -29,10 +31,12 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
 export const join = (token: string, email: string) => call<{ person: Me }>("/api/access/join", { token, email });
 export const joinWaitlist = (email: string, note: string, website: string) => call<{ ok: true }>("/api/access/waitlist", { email, note, website });
 export const signOut = () => call<{ ok: true }>("/api/access/signout", {});
+export const sendFeedback = (text: string, project: string, version: number) => call<{ ok: true }>("/api/access/feedback", { text, project, version });
 
 export const overview = () => call<{ people: Person[]; waitlist: Waiting[] }>("/api/admin/overview");
 export const invite = (email: string, send: boolean) => call<Invited>("/api/admin/invite", { email, send });
 export const revoke = (email: string) => call<{ ok: true }>("/api/admin/revoke", { email });
 export const theirProjects = (person: string) => call<{ projects: { id: string; name: string; pages: number; versions: number; updatedAt: number; latest?: unknown }[] }>(`/api/admin/projects?person=${person}`);
 export const theirProject = (person: string, id: string) => call<{ versions: { n: number; at: number; label: string; doc: unknown }[] }>(`/api/admin/project?person=${person}&id=${id}`);
+export const theirFeedback = (person: string) => call<{ feedback: Feedback[] }>(`/api/admin/feedback?person=${person}`);
 export const theirCalls = (person: string) => call<{ calls: Call[] }>(`/api/admin/calls?person=${person}`);

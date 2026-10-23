@@ -1,6 +1,8 @@
 // The editor's settings, kept in this browser: which model draws, and whether the
-// latency overlay shows. The menu that changes them is SettingsMenu.tsx. (v1's
-// src/settings.ts, with v2's models.)
+// latency overlay shows. The menu that changes them is SettingsMenu.tsx; a tester
+// always draws with Sonnet (the server holds them to it too). (v1's src/settings.ts,
+// with v2's models.)
+import { seesInternals } from "./access/api.ts";
 import { type DrawModel, drawModel } from "./models.ts";
 
 const MODEL_KEY = "rt-draw.model";
@@ -10,6 +12,7 @@ const listeners = new Set<() => void>();
 const changed = () => listeners.forEach((fn) => fn());
 
 export function getModel(): DrawModel {
+  if (!seesInternals()) return drawModel("sonnet");
   try {
     return drawModel(localStorage.getItem(MODEL_KEY));
   } catch {

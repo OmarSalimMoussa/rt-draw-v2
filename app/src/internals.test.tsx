@@ -5,6 +5,7 @@ import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { whoAmI } from "./access/api.ts";
+import { getModel, setModel } from "./settings.ts";
 import { SettingsMenu } from "./SettingsMenu.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { plainVoiceError } from "./speech/voice.ts";
@@ -47,6 +48,11 @@ describe("a tester", () => {
     expect(readable()).not.toMatch(INSIDE);
   });
 
+  it("draws with Sonnet, even if this browser once picked another model", () => {
+    setModel("opus");
+    expect(getModel().name).toBe("sonnet");
+  });
+
   it("sees Done or Couldn't draw that, never which model call failed or why", async () => {
     await show(<StatusBadge status={status} />);
     expect(el.textContent).toBe("Done");
@@ -67,6 +73,12 @@ describe("the admin", () => {
     expect(menu.textContent).toContain("Claude Sonnet 5.5");
     expect(menu.textContent).toContain("Latency overlay");
     expect(menu.textContent).toContain("People and waitlist");
+  });
+
+  it("draws with the model they pick", () => {
+    setModel("opus");
+    expect(getModel().name).toBe("opus");
+    setModel("sonnet");
   });
 
   it("sees which model call failed and why", async () => {

@@ -80,7 +80,7 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
  * Starts `n` processes for this model and prompt now, so calls about to come don't wait for one. Not a model call.
  * A process fixes its effort and thinking when it starts: pass the ones the calls will use.
  */
-export function warmModel(model: ModelName, system: string, n = 1, opts: { effort?: Effort; thinking?: "auto" | "off" } = {}) {
+export function warmModel(model: ModelName, system: string, n = 1, opts: { effort?: Effort; thinking?: "auto" | "off"; from?: string } = {}) {
   void fetch("/api/model", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, system, warm: n, ...opts }) }).catch(() => {});
 }
 

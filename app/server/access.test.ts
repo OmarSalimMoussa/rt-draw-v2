@@ -24,11 +24,14 @@ const access = new Access(data, { mailer: async (m) => void mails.push(m), now: 
 
 /** The model route as the dev server mounts it: it says who the call was logged for. */
 const calls: (string | undefined)[] = [];
+/** The one drawing model each call was held to, if any. */
+const onlyModels: (string | undefined)[] = [];
 const model: Plugin = {
   name: "fake-model",
   configureServer(server) {
     server.middlewares.use("/api/model", (req, res) => {
       calls.push(req.headers["x-imagine-person"] as string | undefined);
+      onlyModels.push(req.headers["x-imagine-draw-model"] as string | undefined);
       res.end(JSON.stringify({ ok: true }));
     });
   },
@@ -159,6 +162,15 @@ describe("each person's work", () => {
     expect(calls.at(-1)).toBe(id);
   });
 
+  it("a tester draws with Sonnet, whatever a page asks for; the admin draws with the model they pick", async () => {
+    const hal = await joined("hal2@example.com");
+    await hal("/api/model", { model: "opus", from: "draw" }, { "x-imagine-draw-model": "opus" });
+    expect(onlyModels.at(-1)).toBe("sonnet");
+    const admin = await joined("omar3@example.com", { admin: true });
+    await admin("/api/model", { model: "opus", from: "draw" }, { "x-imagine-draw-model": "haiku" });
+    expect(onlyModels.at(-1)).toBeUndefined();
+  });
+
   it("the admin's own projects from before invites come along on their first sign-in", async () => {
     const old = "a".repeat(32);
     mkdirSync(join(data, "app", "owners", old), { recursive: true });
@@ -250,6 +262,56 @@ describe("the model call log", () => {
     const id = (await access.overview()).people.find((p) => p.email === "jo@example.com")!.id;
     expect(last).toMatchObject({ from: "test", who: id });
     expect((await access.calls(id)).map((c) => (c as { from: string }).from)).toEqual(["test"]);
+  });
+});
+
+describe("feedback", () => {
+  it("is kept with who sent it and the version of the project they were on, for the admin's page only", async () => {
+    const kim = await joined("kim@example.com");
+    await kim("/api/project/save", { id: "kimcafe1", versions: [version(1), version(2, "add a menu")], meta: { name: "Kim's cafe", pages: 1 } });
+    const sent = mails.length;
+    const r = await kim("/api/access/feedback", { text: "  The pen is great, but my menu page vanished.  ", project: "kimcafe1", version: 2 });
+    expect(r.status).toBe(200);
+    // Not mailed: it waits on the admin's page.
+    expect(mails.length).toBe(sent);
+    const admin = await joined("omar4@example.com", { admin: true });
+    const kims = (await admin("/api/admin/overview")).json.people.find((p: { email: string }) => p.email === "kim@example.com");
+    expect(kims.feedback).toBe(1);
+    expect((await kim(`/api/admin/feedback?person=${kims.id}`)).status).toBe(403);
+    const { feedback } = (await admin(`/api/admin/feedback?person=${kims.id}`)).json;
+    expect(feedback).toEqual([{ at: clock, person: kims.id, text: "The pen is great, but my menu page vanished.", project: { id: "kimcafe1", name: "Kim's cafe", version: 2 } }]);
+  });
+
+  it("needs words and someone signed in, and names only a project and version of theirs", async () => {
+    const lee = await joined("lee@example.com");
+    expect((await lee("/api/access/feedback", { text: "   " })).status).toBe(400);
+    expect((await browser()("/api/access/feedback", { text: "hello" })).status).toBe(401);
+    await lee("/api/project/save", { id: "leefarm1", versions: [version(1)], meta: { name: "Lee's farm", pages: 1 } });
+    await lee("/api/access/feedback", { text: "someone else's", project: "kimcafe1", version: 2 });
+    await lee("/api/access/feedback", { text: "no such version", project: "leefarm1", version: 7 });
+    await lee("/api/access/feedback", { text: "no project" });
+    const admin = await joined("omar5@example.com", { admin: true });
+    const id = (await admin("/api/admin/overview")).json.people.find((p: { email: string }) => p.email === "lee@example.com").id;
+    const { feedback } = (await admin(`/api/admin/feedback?person=${id}`)).json;
+    expect(feedback.map((f: { text: string; project?: unknown }) => [f.text, f.project])).toEqual([
+      ["no project", undefined],
+      ["no such version", { id: "leefarm1", name: "Lee's farm" }],
+      ["someone else's", undefined],
+    ]);
+  });
+});
+
+describe("the drawing model a call is held to", () => {
+  it("runs the drawing call and its warm-ups on that model, and every other call as asked", async () => {
+    const { heldTo } = await import("../../dev/model-plugin.ts");
+    expect(heldTo({ model: "opus", from: "draw" }, "sonnet")).toBe("sonnet");
+    expect(heldTo({ model: "haiku", from: "draw" }, "sonnet")).toBe("sonnet");
+    // A warm-up for the drawing call says so; one for pictures doesn't.
+    expect(heldTo({ model: "opus", from: "draw", user: undefined }, "sonnet")).toBe("sonnet");
+    expect(heldTo({ model: "haiku", from: "picture" }, "sonnet")).toBe("haiku");
+    expect(heldTo({ model: "haiku" }, "sonnet")).toBe("haiku");
+    expect(heldTo({ model: "opus", from: "draw" }, undefined)).toBe("opus");
+    expect(heldTo({ model: "opus", from: "draw" }, ["sonnet", "haiku"])).toBe("opus");
   });
 });
 

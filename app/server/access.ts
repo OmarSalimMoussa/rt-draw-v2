@@ -6,22 +6,27 @@
 // link replaces the old one; revoking someone ends all their sessions. Each person's
 // projects live under their own owner id (projects.ts), so testers never see each other's
 // work, while the admin sees everyone's, and every model call is logged for its person.
-// Visitors without a link can join the waitlist, which mails the admin (mailer.ts).
+// Visitors without a link can join the waitlist, which mails the admin (mailer.ts), and
+// anyone signed in can send feedback, kept with the version of the project they were on
+// for the admin's page (never mailed).
 //
 // Everything is one JSON file, <RT_DATA_DIR>/access/access.json, written whole and renamed
 // into place, one change at a time; a write by another process (invite.ts) is read back.
+// Feedback is appended to <RT_DATA_DIR>/access/feedback.jsonl.
 //   GET  /api/access/me                         -> { person: { email, admin } | null }
 //   POST /api/access/join      { token, email } -> signs this browser in
 //   POST /api/access/waitlist  { email, note }  -> { ok }
 //   POST /api/access/signout
+//   POST /api/access/feedback  { text, project?, version? } -> { ok } (signed in; a project of theirs)
 //   GET  /api/admin/overview                    -> { people (with their counts), waitlist }
 //   POST /api/admin/invite     { email, send }  -> { link, mailed, mailError? }
 //   POST /api/admin/revoke     { email }
 //   GET  /api/admin/projects?person=            -> { projects }
 //   GET  /api/admin/project?person=&id=         -> { versions }
 //   GET  /api/admin/calls?person=               -> { calls } their latest model calls
+//   GET  /api/admin/feedback?person=            -> { feedback } theirs, newest first
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { HttpError, json, readJson } from "./http.ts";
@@ -35,9 +40,12 @@ const EMAIL = /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/;
 const PROJECT = /^[a-z0-9]{6,16}$/;
 /** lastSeen is written at most this often per person. */
 const SEEN_EVERY_MS = 60_000;
-/** Per address and hour: waitlist sign-ups, and join attempts that fail. */
+/** The model a tester draws with, as if it were the only one in the settings; the admin picks. Every other call is as the app makes it. */
+const TESTER_DRAW_MODEL = "sonnet";
+/** Per address and hour: waitlist sign-ups, join attempts that fail, and feedback sent. */
 const WAITLIST_PER_HOUR = 5;
 const BAD_JOINS_PER_HOUR = 20;
+const FEEDBACK_PER_HOUR = 30;
 /** The admin's view of someone's model calls: their newest, at most. */
 const CALLS_SHOWN = 200;
 
@@ -58,6 +66,8 @@ export type Person = {
 type Session = { hash: string; person: string; at: number; expires: number };
 export type Waiting = { email: string; note: string; at: number; invitedAt?: number };
 type Store = { people: Person[]; sessions: Session[]; waitlist: Waiting[] };
+/** What someone wrote, and the project and version they were on when they did. */
+export type Feedback = { at: number; person: string; text: string; project?: { id: string; name: string; version?: number } };
 
 const hash = (t: string) => createHash("sha256").update(t).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
@@ -147,6 +157,22 @@ export class Access {
     });
   }
 
+  /** One piece of feedback, appended to the file. */
+  private async keep(f: Feedback) {
+    await mkdir(join(this.root, "access"), { recursive: true });
+    await appendFile(join(this.root, "access", "feedback.jsonl"), `${JSON.stringify(f)}\n`, { mode: 0o600 });
+  }
+
+  /** Everyone's feedback, newest first (the admin's page shows each person theirs). */
+  async feedback(): Promise<Feedback[]> {
+    const text = await readFile(join(this.root, "access", "feedback.jsonl"), "utf8").catch(() => "");
+    return text
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Feedback)
+      .reverse();
+  }
+
   /** Signs a browser in with an invite link's token and the email it was sent to. `oldOwner`: an admin's projects from before invites. */
   join(token: string, email: string, oldOwner?: string) {
     const session = secret();
@@ -194,10 +220,11 @@ export class Access {
 
   async overview() {
     const s = await this.load();
+    const feedback = await this.feedback();
     const people = await Promise.all(
       s.people.map(async (p) => {
         const index = await readIndex(p.owner);
-        return { ...shown(p), projects: index.length, versions: index.reduce((n, m) => n + m.versions, 0) };
+        return { ...shown(p), projects: index.length, versions: index.reduce((n, m) => n + m.versions, 0), feedback: feedback.filter((f) => f.person === p.id).length };
       }),
     );
     return { people, waitlist: s.waitlist };
@@ -242,10 +269,13 @@ export class Access {
   /**
    * In front of everything (host.ts): answers the access and admin routes, and refuses every other API
    * route to a browser that isn't signed in. True if it answered; otherwise the request goes on, marked
-   * with its person (ownerFrom, and X-Imagine-Person for the model call log).
+   * with its person (ownerFrom, and X-Imagine-Person for the model call log), and a tester's
+   * with the one model they draw with (X-Imagine-Draw-Model). Neither header is ever taken
+   * from the page.
    */
   async gate(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     delete req.headers["x-imagine-person"];
+    delete req.headers["x-imagine-draw-model"];
     const url = new URL(req.url ?? "/", "http://x");
     if (!url.pathname.startsWith("/api/")) return false;
     try {
@@ -259,6 +289,7 @@ export class Access {
         void this.touch(person);
         (req as Signed).imaginePerson = person;
         req.headers["x-imagine-person"] = person.id;
+        if (!person.admin) req.headers["x-imagine-draw-model"] = TESTER_DRAW_MODEL;
         return false;
       }
     } catch (err) {
@@ -295,6 +326,20 @@ export class Access {
       res.setHeader("Set-Cookie", this.cookie(req, "", 0));
       return json(res, 200, { ok: true });
     }
+    if (route === "feedback") {
+      if (!person) throw new HttpError(401, "Sign in with your invite link first.");
+      if (!this.allow(req, "feedback", FEEDBACK_PER_HOUR)) throw new HttpError(429, "That's a lot of feedback at once. Try again in a little while.");
+      const b = await readJson<{ text?: string; project?: string; version?: number }>(req, 20_000);
+      const text = String(b.text ?? "").trim().slice(0, 4000);
+      if (!text) throw new HttpError(400, "Write something first.");
+      // A project is named only if it's one of theirs, and a version only if the project has it.
+      const id = String(b.project ?? "");
+      const meta = PROJECT.test(id) ? (await readIndex(person.owner)).find((m) => m.id === id) : undefined;
+      const v = Number(b.version);
+      const project = meta && { id: meta.id, name: meta.name, ...(Number.isInteger(v) && v >= 1 && v <= meta.versions && { version: v }) };
+      await this.keep({ at: this.now(), person: person.id, text, ...(project && { project }) });
+      return json(res, 200, { ok: true });
+    }
     if (route === "waitlist") {
       if (!this.allow(req, "waitlist", WAITLIST_PER_HOUR)) throw new HttpError(429, "That's a lot of sign-ups from here. Try again in an hour.");
       const b = await readJson<{ email?: string; note?: string; website?: string }>(req, 20_000);
@@ -326,6 +371,7 @@ export class Access {
         return json(res, 200, { versions: await readVersions(owner, q("id")) });
       }
       if (route === "calls") return json(res, 200, { calls: await this.calls(q("person")) });
+      if (route === "feedback") return json(res, 200, { feedback: (await this.feedback()).filter((f) => f.person === q("person")) });
       return json(res, 404, { error: "no such route" });
     }
     if (req.method !== "POST") return json(res, 405, { error: "GET or POST" });

@@ -65,6 +65,15 @@ const g = globalThis as typeof globalThis & { __rtV2Pools?: Map<string, Promise<
 for (const old of g.__rtV2Pools?.values() ?? []) for (const p of old) void p.then((s) => s.q.close(), () => {});
 g.__rtV2Pools = undefined;
 
+/**
+ * The model a call runs on when the hosted app's gate holds drawing to one model (X-Imagine-Draw-Model,
+ * set for testers in app/server/access.ts): the drawing call and its warm-ups (from "draw") run on it,
+ * as if it were the one picked in the settings; every other call (Jev, pictures, ...) runs as asked.
+ */
+export function heldTo(body: Pick<ModelRequest, "model" | "from" | "user">, only: string | string[] | undefined): string {
+  return body.from === "draw" && typeof only === "string" && only in MODEL_IDS && body.model in MODEL_IDS ? only : body.model;
+}
+
 /** `mockApi`: checks only, points every process at evals/mock/fake-api.ts. */
 export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
   let token = "";
@@ -102,6 +111,7 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
         }
         const who = req.headers["x-imagine-person"];
         body.who = typeof who === "string" ? who : undefined;
+        body.model = heldTo(body, req.headers["x-imagine-draw-model"]);
         if (isJev(body.model)) return jev(body, res);
         if (!token) return fail(500, "CLAUDE_CODE_OAUTH_TOKEN is not set in .env");
         const model = MODEL_IDS[body.model];

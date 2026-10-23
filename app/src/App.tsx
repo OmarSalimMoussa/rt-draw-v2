@@ -16,7 +16,8 @@ import { send } from "../../src/core/send.ts";
 import { Mic, ScribeEngine } from "../../src/core/speech.ts";
 import { forgetSpansBefore, span } from "../../src/core/trace.ts";
 import type { Pt, Stroke } from "../../src/core/ink.ts";
-import { seesInternals } from "./access/api.ts";
+import { currentMe, seesInternals } from "./access/api.ts";
+import { FeedbackButton } from "./access/Feedback.tsx";
 import { Board, SETTLE_MS } from "./board/board.ts";
 import { BoardArrows } from "./board/BoardArrows.tsx";
 import { BoardView } from "./board/BoardView.tsx";
@@ -248,7 +249,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     const warm = keepWarm((spare) => {
       const t = board.tuning;
-      warmModel(modelOf(t["draw.model"]), promptOf("draw", t).system(true, board.scene.width, board.scene.height, 0, SCREEN.w), 2 + spare, thinkingOf("draw", t));
+      warmModel(modelOf(t["draw.model"]), promptOf("draw", t).system(true, board.scene.width, board.scene.height, 0, SCREEN.w), 2 + spare, { ...thinkingOf("draw", t), from: "draw" });
       warmModel(modelOf(t["picture.model"]), promptOf("picture", t).system(t), t["picture.parallel"] * t["picture.copies"] + spare, thinkingOf("picture", t));
     });
     addEventListener("focus", warm.now);
@@ -283,6 +284,9 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const strokesRef = useRef(strokes);
   strokesRef.current = strokes;
+  /** Whether drawing has started in this editor (a stroke, a send, or a project with versions): the Feedback arrow stops asking, for good. */
+  const begun = useRef(false);
+  if (!empty || strokes.length > 0 || busy || board.busy) begun.current = true;
   const epoch = useRef(performance.now());
   const nextStroke = useRef(1);
   const addStroke = (raw: Pt[], downAt: number, upAt: number) => setStrokes([...strokesRef.current, toStroke(nextStroke.current++, raw, downAt, upAt, epoch.current)]);
@@ -448,8 +452,9 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           </button>
         </div>
       )}
-      {/* Top right: start over, all projects, settings. */}
+      {/* Top right: feedback (for anyone signed in; it asks until drawing starts), start over, all projects, settings. */}
       <div className="pg-tools">
+        {currentMe() && <FeedbackButton beg={!begun.current} project={board.project} version={board.history.looking ?? board.history.latest()} />}
         <button type="button" className="pg-tool" onClick={startFromScratch} disabled={empty} title="New project: start from scratch (this one stays in your projects)" aria-label="New project">
           <Icon name="newProject" size={18} />
         </button>
