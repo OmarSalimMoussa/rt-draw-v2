@@ -31,7 +31,7 @@ export function Welcome() {
         <p className="ac-lede">
           We built imagine so an idea is on screen as fast as you can say it. Talk and draw, and it sketches whatever you have in mind: a website, a phone app, a desktop app, a whole macOS or Ubuntu desktop, a system diagram, or just a drawing. Say what you want, circle what should change, add screens and click through them. imagine is in early testing with a few people.
         </p>
-        <video className="ac-video" src="/tutorial.mp4" poster="/tutorial.jpg" controls playsInline preload="metadata" aria-label="A 44-second narrated tour: a bakery site drawn from a typed request, a card circled and changed, a Menu page added, then clicked through" />
+        <video className="ac-video" src="/tutorial.mp4" poster="/tutorial.jpg" controls playsInline preload="metadata" aria-label="A 58-second narrated tour: a bakery site drawn from a typed request, a card circled and changed, a Menu page added and clicked through, then a phone app, a sketch and a system diagram" />
         {state === "done" ? (
           <section className="ac-card" aria-live="polite">
             <h2>You're on the list.</h2>
