@@ -144,7 +144,7 @@ export class Access {
     return run;
   }
 
-  /** A link for `email`, replacing any earlier one (and letting a revoked person back in). `base`: the site's address. */
+  /** A link for `email`, replacing any earlier one (and letting a revoked person back in). `base`: the site's address. `waitlisted`: they asked to try it. */
   invite(email: string, o: { admin?: boolean; base: string }) {
     const e = normEmail(email);
     if (!validEmail(e)) throw new HttpError(400, "That doesn't look like an email address.");
@@ -157,8 +157,9 @@ export class Access {
       p.linkAt = now;
       delete p.revokedAt;
       if (o.admin) p.admin = true;
-      for (const w of s.waitlist) if (w.email === e) w.invitedAt = now;
-      return { person: shown(p), link: `${(this.o.publicUrl ?? o.base).replace(/\/$/, "")}/join/${token}` };
+      const waiting = s.waitlist.filter((w) => w.email === e);
+      for (const w of waiting) w.invitedAt = now;
+      return { person: shown(p), link: `${(this.o.publicUrl ?? o.base).replace(/\/$/, "")}/join/${token}`, waitlisted: waiting.length > 0 };
     });
   }
 
@@ -391,11 +392,11 @@ export class Access {
     if (req.method !== "POST") return json(res, 405, { error: "GET or POST" });
     const b = await readJson<{ email?: string; send?: boolean }>(req);
     if (route === "invite") {
-      const { link } = await this.invite(String(b.email ?? ""), { base: baseOf(req) });
+      const { link, waitlisted } = await this.invite(String(b.email ?? ""), { base: baseOf(req) });
       if (!b.send) return json(res, 200, { link, mailed: false });
       if (!this.o.mailer) return json(res, 200, { link, mailed: false, mailError: "Mail isn't set up yet: copy the link and send it yourself." });
       try {
-        await this.o.mailer({ action: "invite", email: normEmail(b.email), link });
+        await this.o.mailer({ action: "invite", email: normEmail(b.email), link, waitlisted });
         return json(res, 200, { link, mailed: true });
       } catch (err) {
         return json(res, 200, { link, mailed: false, mailError: err instanceof Error ? err.message : String(err) });

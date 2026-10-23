@@ -3,7 +3,8 @@
 // the person from the admin's own address, with no mail service or password in between.
 // Only this server calls it, with the secret both sides hold (MAILER_SECRET).
 
-export type Mail = { action: "waitlist"; email: string; note: string } | { action: "invite"; email: string; link: string };
+/** `waitlisted`: they signed up on the waitlist, so the invite can say they asked for it. */
+export type Mail = { action: "waitlist"; email: string; note: string } | { action: "invite"; email: string; link: string; waitlisted: boolean };
 /** Sends one mail; throws if it didn't go. */
 export type Mailer = (m: Mail) => Promise<void>;
 

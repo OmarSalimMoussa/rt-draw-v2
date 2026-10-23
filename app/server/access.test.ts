@@ -214,9 +214,12 @@ describe("the waitlist", () => {
     expect(waitlist.map((w: { email: string; note: string }) => [w.email, w.note])).toEqual([["hal@example.com", "I run a bakery"]]);
     const sent = await admin("/api/admin/invite", { email: "hal@example.com", send: true });
     expect(sent.json).toMatchObject({ mailed: true });
-    expect(mails.at(-1)).toEqual({ action: "invite", email: "hal@example.com", link: sent.json.link });
+    // The mail says they asked for it, so it isn't a stranger's invite.
+    expect(mails.at(-1)).toEqual({ action: "invite", email: "hal@example.com", link: sent.json.link, waitlisted: true });
     expect(sent.json.link).toMatch(/^https:\/\/127\.0\.0\.1:\d+\/join\//);
     expect((await admin("/api/admin/overview")).json.waitlist[0].invitedAt).toBe(clock);
+    const cold = await admin("/api/admin/invite", { email: "ivy@example.com", send: true });
+    expect(mails.at(-1)).toEqual({ action: "invite", email: "ivy@example.com", link: cold.json.link, waitlisted: false });
   });
 
   it("takes a few sign-ups an hour from one address, then asks it to wait", async () => {

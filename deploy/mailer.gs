@@ -5,7 +5,7 @@
  *
  * Two kinds of mail:
  *   waitlist  someone asked to try imagine: mailed to ADMIN (and a row in the sheet, if there is one)
- *   invite    the admin invited someone: mailed to them, with their link
+ *   invite    the admin invited someone: mailed to them, with their link (invite() says how it's written)
  *
  * Only the imagine server may call it: every request carries SECRET, which lives in Script
  * Properties here and in MAILER_SECRET on the server. Without it, anyone could mail anyone as you.
@@ -62,21 +62,9 @@ function doPost(e) {
       var link = String(f.link || '');
       if (link.indexOf(SITE) !== 0 || !/^[A-Za-z0-9_-]{43}$/.test(link.slice(SITE.length))) return json({ ok: false, error: 'not an imagine invite link' });
       row(['invite', email, '']);
-      GmailApp.sendEmail(email, "You're invited to try imagine", [
-        'Hi,',
-        '',
-        "You're invited to try imagine: you sketch a website by talking and drawing, and it draws the pages for you.",
-        '',
-        'Your invite link (it is just for you):',
-        link,
-        '',
-        'When it asks, type this email address: ' + email,
-        '',
-        'Only you and I can see your drawings. I look at them to learn what works and what doesn\'t.',
-        'Reply to this email with anything that goes wrong, or anything you liked.',
-        '',
-        'Omar',
-      ].join('\n'), { replyTo: ADMIN, name: 'Omar (imagine)' });
+      var mail = invite(link, f.waitlisted === true);
+      // No sender name or reply-to: it goes out under the account's own name, like mail typed in Gmail.
+      GmailApp.sendEmail(email, mail.subject, mail.lines.join('\n'), { htmlBody: gmailHtml(mail.lines) });
       return json({ ok: true });
     }
 
@@ -84,6 +72,43 @@ function doPost(e) {
   } catch (err) {
     return json({ ok: false, error: String(err) });
   }
+}
+
+/**
+ * The invite, written as a note from Omar. emberhub.dev is new and its mail goes to people who've never
+ * had any from it, so spam filters judge it by how it reads. A template that says "you're invited", gives
+ * a link and asks them to type their email reads like phishing. So: say why they're getting it, keep the
+ * link plain, and ask a question, because replies are what teach Gmail the address is trusted.
+ * `waitlisted`: they signed up for it.
+ */
+function invite(link, waitlisted) {
+  return {
+    subject: waitlisted ? 'Your turn to try imagine' : 'Want to try imagine?',
+    lines: [
+      'Hi,',
+      '',
+      waitlisted ? "Thanks for signing up to try imagine. There's room now, so here's your way in:" : "I'm building imagine, and I'd love you to try it. Here's your way in:",
+      '',
+      link,
+      '',
+      'imagine sketches what you describe while you talk and draw: a website, a phone app, a system diagram, or just a drawing. To change something, circle it and say what you want instead.',
+      '',
+      "It's early, so some things will break. When they do, or when something works well, just reply to this email. I read every reply, and only you and I can see what you draw.",
+      '',
+      'What would you like to make first?',
+      '',
+      'Omar',
+    ],
+  };
+}
+
+/** The same lines as Gmail's own HTML for typed mail: a div per line, and the link as itself. */
+function gmailHtml(lines) {
+  return '<div dir="ltr">' + lines.map(function (l) {
+    if (!l) return '<div><br></div>';
+    if (l.indexOf(SITE) === 0) return '<div><a href="' + l + '">' + l + '</a></div>';
+    return '<div>' + l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+  }).join('') + '</div>';
 }
 
 /** A row in the sheet, if one is set (Script Properties, SHEET_ID): a record that doesn't depend on mail. */
