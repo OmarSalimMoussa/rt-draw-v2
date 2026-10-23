@@ -68,6 +68,25 @@ export function groupStrokes(strokes: Stroke[], t: Tuning = DEFAULTS): Mark[] {
   return marks;
 }
 
+/**
+ * Where a mark's number goes, on the screen and in the model's pictures alike: just beyond
+ * an arrow's tail, on the side away from its tip; beside any other mark's ink, up and right
+ * of its top-right-most point. `gap` (from the ink) and the number's glyphs, `w` × `h`, are
+ * in the ink's units; returns the number's middle.
+ */
+export function numberAt(m: Mark, gap: number, w: number, h: number, t: Tuning = DEFAULTS): [number, number] {
+  const { tip, tail } = readArrow(m.strokes.map((s) => s.points), t);
+  const d = tip && tail ? Math.hypot(tail[0] - tip[0], tail[1] - tip[1]) : 0;
+  if (tip && tail && d) {
+    const [ux, uy] = [(tail[0] - tip[0]) / d, (tail[1] - tip[1]) / d];
+    // Far enough along the shaft's line that the number's box clears the tail by `gap`.
+    const out = gap + Math.abs(ux) * (w / 2) + Math.abs(uy) * (h / 2);
+    return [tail[0] + ux * out, tail[1] + uy * out];
+  }
+  const [ax, ay] = m.strokes.flatMap((s) => s.points).reduce((best, p) => (p[0] - p[1] > best[0] - best[1] ? p : best));
+  return [ax + gap + w / 2, ay - gap - h / 2];
+}
+
 export function readMark(mark: Mark, hits: HitIndex, t: Tuning = DEFAULTS): Reading {
   const arrow = readArrow(mark.strokes.map((s) => s.points), t);
   const main = [...mark.strokes].sort((a, b) => pathLength(b.points) - pathLength(a.points))[0].points;

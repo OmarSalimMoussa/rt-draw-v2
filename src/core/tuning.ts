@@ -94,7 +94,7 @@ export const KNOBS: Knob[] = [
   // Shot: the picture the model gets at Enter.
   K("shot.scale", 0.75, 0.25, 2, 0.05, "screenshot size as a share of canvas pixels"),
   K("shot.inkNumberPx", 22, 10, 48, 1, "size of the [n] number next to each mark", "px"),
-  K("shot.inkNumberGapPx", 6, 0, 40, 1, "the [n] sits this far up and right of the mark's top-right-most ink", "px"),
+  K("shot.inkNumberGapPx", 6, 0, 40, 1, "the [n] sits this far beyond an arrow's tail, or up and right of another mark's top-right-most ink", "px"),
   K("shot.tagPx", 11, 0, 24, 1, "size of the id tags on shapes (0 hides them)", "px"),
   K("shot.gridCellPx", 0, 0, 160, 10, "grid drawn on the screenshot (0 for none)", "px"),
   K("shot.jpegQuality", 0.8, 0.3, 1, 0.05, "JPEG quality (1 sends PNG)"),

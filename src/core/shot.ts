@@ -4,10 +4,10 @@
 // embedded in the SVG, since an SVG drawn as an image can't load page fonts.
 import fontUrl from "../fonts/Excalifont-Regular.woff2?url";
 import { type Stroke, strokePath } from "./ink.ts";
-import { groupStrokes } from "./marks.ts";
+import { type Mark, groupStrokes, numberAt } from "./marks.ts";
 import { colName } from "./ops.ts";
 import { FONT, render } from "./render.ts";
-import type { Scene } from "./scene.ts";
+import type { Box, Scene } from "./scene.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 export type Shot = {
@@ -79,6 +79,19 @@ function tags(svg: SVGSVGElement, scene: Scene, px: number) {
   }
 }
 
+/**
+ * Where a mark's [n] goes in a picture of `view` at `k` picture pixels per board pixel: numberAt's
+ * spot (beyond an arrow's tail, beside other ink), kept in the picture. x is the number's middle,
+ * y its baseline, in board pixels.
+ */
+export function inkNumberSpot(m: Mark, view: Box, k: number, t: Tuning = DEFAULTS): { x: number; y: number } {
+  const px = t["shot.inkNumberPx"] / k;
+  // The glyphs of [n]: about 0.6 em a character, digits 0.7 em tall.
+  const [w, h] = [`[${m.n}]`.length * 0.6 * px, 0.7 * px];
+  const [cx, cy] = numberAt(m, t["shot.inkNumberGapPx"] / k, w, h, t);
+  return { x: Math.max(view.x + w / 2, Math.min(view.x + view.w - w / 2, cx)), y: Math.max(view.y + h, Math.min(view.y + view.h - 2 / k, cy + h / 2)) };
+}
+
 export async function takeShot(scene: Scene, strokes: Stroke[], t: Tuning = DEFAULTS, opts: ShotOptions = {}): Promise<Shot> {
   const t0 = performance.now();
   const view = opts.view ?? { x: 0, y: 0, w: scene.width, h: scene.height };
@@ -108,14 +121,9 @@ export async function takeShot(scene: Scene, strokes: Stroke[], t: Tuning = DEFA
       // A mark outside this picture gets no number (it would be pinned to the edge, pointing at nothing).
       const b = m.box;
       if (b.x > view.x + view.w || b.x + b.w < view.x || b.y > view.y + view.h || b.y + b.h < view.y) continue;
-      // Beside the mark's own ink, not its box's corner (far from a loop or a diagonal): the ink
-      // point furthest up and right, nudged out by shot.inkNumberGapPx. Kept on the canvas; a white
-      // halo keeps it readable over anything.
-      const gap = t["shot.inkNumberGapPx"];
-      const [ax, ay] = m.strokes.flatMap((s) => s.points).reduce((best, p) => (p[0] - p[1] > best[0] - best[1] ? p : best));
-      const x = Math.max(view.x, Math.min(view.x + view.w - px * 2, ax + gap / k));
-      const y = Math.max(view.y + px, Math.min(view.y + view.h - 2, ay - gap / k));
-      const n = el("text", { x, y, "font-size": px, "font-family": FONT, fill: color, stroke: "#fff", "stroke-width": px / 6, "paint-order": "stroke", "font-weight": 700 });
+      // Where the screen puts it too (numberAt); a white halo keeps it readable over anything.
+      const { x, y } = inkNumberSpot(m, view, k, t);
+      const n = el("text", { x, y, "text-anchor": "middle", "font-size": px, "font-family": FONT, fill: color, stroke: "#fff", "stroke-width": px / 6, "paint-order": "stroke", "font-weight": 700 });
       n.textContent = `[${m.n}]`;
       svg.append(n);
     }

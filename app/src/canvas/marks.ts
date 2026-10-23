@@ -1,7 +1,11 @@
 // The pen's strokes, as v1 drew them: pure geometry for their sketchy redrawing
-// (sketch/MarkSketch.tsx) and where a stroke's number goes. What a stroke means
-// (a loop, an arrow, a tap) is v2's to read (src/core/marks.ts) at Enter.
+// (sketch/MarkSketch.tsx) and where a mark's number goes on screen. What a stroke
+// means (a loop, an arrow, a tap) is v2's to read (src/core/marks.ts) at Enter, and
+// the number goes where v2 puts it in the model's pictures (numberAt).
+import { type Mark, numberAt } from "../../../src/core/marks.ts";
 import type { Box } from "../../../src/core/scene.ts";
+import { DEFAULTS, type Tuning } from "../../../src/core/tuning.ts";
+import { type View, toScreen } from "./view.ts";
 
 export type Point = { x: number; y: number };
 
@@ -40,4 +44,19 @@ export function isLoop(points: Point[]): boolean {
   if (points.length < 4) return false;
   const b = polygonBox(points);
   return strokeLength(points) > 2.5 * Math.max(b.w, b.h) * 0.8 && dist(points[0], points.at(-1)!) < 0.3 * Math.max(b.w, b.h);
+}
+
+/** The numbers' size and distance from the ink on screen (.pg-marks text), in screen px. */
+const NUMBER_PX = 18;
+const NUMBER_GAP_PX = 6;
+
+/** Each mark's number on screen: x its middle, y its baseline, in screen px. */
+export function numberSpots(marks: Mark[], view: View, t: Tuning = DEFAULTS): { n: number; x: number; y: number }[] {
+  return marks.map((m) => {
+    // The digits' glyphs, as shot.ts sizes [n]'s: about 0.6 em each, 0.7 em tall.
+    const [w, h] = [String(m.n).length * 0.6 * NUMBER_PX, 0.7 * NUMBER_PX];
+    const [x, y] = numberAt(m, NUMBER_GAP_PX / view.zoom, w / view.zoom, h / view.zoom, t);
+    const at = toScreen(view, { x, y });
+    return { n: m.n, x: at.x, y: at.y + h / 2 };
+  });
 }

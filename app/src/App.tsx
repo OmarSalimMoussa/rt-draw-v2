@@ -22,8 +22,9 @@ import { BoardView } from "./board/BoardView.tsx";
 import { LatencyLog } from "./board/latency.ts";
 import { Sender } from "./board/sender.ts";
 import { Canvas, type Tool } from "./canvas/Canvas.tsx";
+import { numberSpots } from "./canvas/marks.ts";
 import { toStroke } from "./canvas/strokes.ts";
-import { type Rect, type View, boardRect, glideAt, sendView, toScene, toScreen, viewShowing } from "./canvas/view.ts";
+import { type Rect, type View, boardRect, glideAt, sendView, toScene, viewShowing } from "./canvas/view.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
 import { type Building, Preview } from "./preview/Preview.tsx";
 import { buildEnded, buildJob } from "./preview/build.ts";
@@ -408,10 +409,8 @@ export function App({ hidden = false }: { hidden?: boolean }) {
               <g transform={`scale(${view.zoom}) translate(${view.scrollX} ${view.scrollY})`}>
                 {strokes.map((s) => <MarkSketch key={s.id} stroke={s} zoom={view.zoom} />)}
               </g>
-              {marks.map((m) => {
-                const at = toScreen(view, { x: m.box.x, y: m.box.y });
-                return <text key={m.n} x={at.x - 6} y={at.y - 8}>{m.n}</text>;
-              })}
+              {/* Each number where the model's pictures put it: beyond an arrow's tail, beside other ink. */}
+              {numberSpots(marks, view, board.tuning).map((s) => <text key={s.n} x={s.x} y={s.y} textAnchor="middle">{s.n}</text>)}
             </svg>
           )
         }
