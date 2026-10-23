@@ -15,6 +15,7 @@
 .ac-error { margin: 0; color: var(--bad); }
 .ac-small { font-size: 13px; color: var(--muted); margin-top: 6px !important; }
 .ac-foot { margin: 0; color: var(--muted); font-size: 14px; }
+.ac-fine { margin: 0; color: var(--muted); font-size: 13px; }
 /* Kept off screen rather than hidden, so a bot still sees a field to fill. */
 .ac-trap { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }
 

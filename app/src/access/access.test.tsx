@@ -83,6 +83,11 @@ describe("the welcome page", () => {
     expect(el.textContent).toContain("You're on the list");
   });
 
+  it("says, by the form, what the email is for", async () => {
+    await show(<Welcome />);
+    expect($("form .ac-fine").textContent).toBe("We'll only use your email to send your invite.");
+  });
+
   it("shows the server's reason when it says no", async () => {
     routes = { "/api/access/waitlist": () => ({ status: 429, body: { error: "That's a lot of sign-ups from here. Try again in an hour." } }) };
     await show(<Welcome />);

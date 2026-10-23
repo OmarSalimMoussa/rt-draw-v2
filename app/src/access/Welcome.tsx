@@ -20,7 +20,7 @@ export function Welcome() {
   const [website, setWebsite] = useState("");
   const [state, setState] = useState<"idle" | "busy" | "done">("idle");
   const [error, setError] = useState("");
-  useEffect(() => void (document.title = "imagine"), []);
+  useEffect(() => void (document.title = "imagine: prototyping at the speed of thought"), []);
 
   return (
     <>
@@ -62,6 +62,7 @@ export function Welcome() {
             <input className="ac-trap" name="website" tabIndex={-1} autoComplete="off" aria-hidden value={website} onChange={(e) => setWebsite(e.target.value)} />
             {error && <p className="ac-error" role="alert">{error}</p>}
             <button type="submit" className="ac-go" disabled={state === "busy"}>{state === "busy" ? "Joining…" : "Join the waitlist"}</button>
+            <p className="ac-fine">We'll only use your email to send your invite.</p>
           </form>
         )}
         <p className="ac-foot">Already invited? Open the link in your invite email.</p>

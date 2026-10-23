@@ -6,7 +6,8 @@
 // link replaces the old one; revoking someone ends all their sessions. Each person's
 // projects live under their own owner id (projects.ts), so testers never see each other's
 // work, while the admin sees everyone's, and every model call is logged for its person.
-// Visitors without a link can join the waitlist, which mails the admin (mailer.ts), and
+// Visitors without a link can join the waitlist, which mails the admin (mailer.ts; the first
+// WAITLIST_MAILS_PER_DAY sign-ups a day, so invites keep the quota), and
 // anyone signed in can send feedback, kept with the version of the project they were on
 // for the admin's page (never mailed).
 //
@@ -46,6 +47,8 @@ const TESTER_DRAW_MODEL = "sonnet";
 const WAITLIST_PER_HOUR = 5;
 const BAD_JOINS_PER_HOUR = 20;
 const FEEDBACK_PER_HOUR = 30;
+/** Waitlist mails to the admin a day. Past it, sign-ups are only on the admin's page, and the mailer's daily quota is left for invites. */
+const WAITLIST_MAILS_PER_DAY = 25;
 /** The admin's view of someone's model calls: their newest, at most. */
 const CALLS_SHOWN = 200;
 
@@ -92,6 +95,8 @@ export class Access {
   private mtime = -1;
   private writing: Promise<unknown> = Promise.resolve();
   private hits = new Map<string, number[]>();
+  /** When the waitlist mails of the last day went. */
+  private waitlistMails: number[] = [];
   /** RT_DATA_DIR: the store goes in access/, and the model calls are read from model-calls.jsonl. */
   private root: string;
   private o: { mailer?: Mailer; publicUrl?: string; now?: () => number };
@@ -258,6 +263,15 @@ export class Access {
     return recent.length <= max;
   }
 
+  /** Whether another waitlist mail fits in WAITLIST_MAILS_PER_DAY; counts it if so. */
+  private mailsLeftToday() {
+    const now = this.now();
+    this.waitlistMails = this.waitlistMails.filter((t) => t > now - 86_400_000);
+    if (this.waitlistMails.length >= WAITLIST_MAILS_PER_DAY) return false;
+    this.waitlistMails.push(now);
+    return true;
+  }
+
   private async touch(p: Person) {
     if (this.now() - (p.lastSeen ?? 0) < SEEN_EVERY_MS) return;
     await this.change((s) => {
@@ -348,7 +362,7 @@ export class Access {
       const email = normEmail(b.email);
       if (!validEmail(email)) throw new HttpError(400, "That doesn't look like an email address.");
       const note = String(b.note ?? "").trim().slice(0, 1000);
-      if (await this.wait(email, note)) this.o.mailer?.({ action: "waitlist", email, note }).catch((err) => console.error("waitlist mail", err));
+      if ((await this.wait(email, note)) && this.mailsLeftToday()) this.o.mailer?.({ action: "waitlist", email, note }).catch((err) => console.error("waitlist mail", err));
       return json(res, 200, { ok: true });
     }
     json(res, 404, { error: "no such route" });

@@ -226,6 +226,23 @@ describe("the waitlist", () => {
     for (let i = 0; i < 7; i++) codes.push((await visitor("/api/access/waitlist", { email: `p${i}@example.com` }, at)).status);
     expect(codes).toEqual([200, 200, 200, 200, 200, 429, 429]);
   });
+
+  it("mails the admin about the first 25 sign-ups a day, so invites keep the mailer's quota, and keeps them all", async () => {
+    clock += 2 * 86_400_000;
+    mails.length = 0;
+    const visitor = browser();
+    for (let i = 0; i < 27; i++) expect((await visitor("/api/access/waitlist", { email: `crowd${i}@example.com` }, { "x-forwarded-for": `192.0.2.${i}` })).status).toBe(200);
+    expect(mails.map((m) => m.email)).toEqual(Array.from({ length: 25 }, (_, i) => `crowd${i}@example.com`));
+    const kept = (await access.overview()).waitlist.map((w) => w.email);
+    for (let i = 0; i < 27; i++) expect(kept).toContain(`crowd${i}@example.com`);
+
+    const admin = await joined("omar6@example.com", { admin: true });
+    expect((await admin("/api/admin/invite", { email: "crowd26@example.com", send: true })).json).toMatchObject({ mailed: true });
+
+    clock += 86_400_000;
+    await visitor("/api/access/waitlist", { email: "nextday@example.com" }, { "x-forwarded-for": "192.0.2.200" });
+    expect(mails.at(-1)).toEqual({ action: "waitlist", email: "nextday@example.com", note: "" });
+  });
 });
 
 describe("the store", () => {
