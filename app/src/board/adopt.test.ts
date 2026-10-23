@@ -46,3 +46,18 @@ shape(to-logo, pill, 80 400 200 50, ${D}, link:logo)`);
     expect(["logo", "more", "nav-home", "nav-contact", "to-logo"].map((id) => scene.get(id)!.link)).toEqual(["page", "svc", "page", "contact", "logo"]);
   });
 });
+
+describe("frames drawn inside a page", () => {
+  it("become rects on that page, white as they were; frames only overlapping a page, or as big as it, stay pages", async () => {
+    const { adoptFrames } = await import("./adopt.ts");
+    const { scene } = runScript(`shape(page, frame, 0 0 1280 800, ${D})
+shape(strip, frame, 0 0 1280 340, ${D}, fill:#cfe8ff)
+shape(card, frame, 100 400 300 200, ${D})
+shape(shop, frame, 900 0 1280 800, ${D})
+shape(twin, frame, 0 0 1280 800, ${D})`);
+    expect(adoptFrames(scene)).toBe(2);
+    expect(scene.get("strip")).toMatchObject({ kind: "rect", style: { fill: "#cfe8ff" } });
+    expect(scene.get("card")).toMatchObject({ kind: "rect", style: { fill: "#ffffff" } });
+    expect(["page", "shop", "twin"].map((id) => scene.get(id)!.kind)).toEqual(["frame", "frame", "frame"]);
+  });
+});

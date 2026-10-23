@@ -4,8 +4,10 @@
 // arrow with nothing under its tail stays a drawing. Run when a project opens,
 // and after every send in case the model draws one anyway. So is the other guess a
 // model makes: a link naming a page by its name (link:home for the page "Home",
-// whose id is page) is a link to that page.
-import { centerOf, norm, pageName, pageOf, pagesOf } from "../../../src/core/board.ts";
+// whose id is page) is a link to that page. And a frame it draws inside a page (a
+// photo strip, a card) is part of that page, not a page of its own the layout would
+// carry off with what's on it.
+import { centerOf, insideShare, norm, pageName, pageOf, pagesOf } from "../../../src/core/board.ts";
 import type { Box, Scene, Shape } from "../../../src/core/scene.ts";
 import { DEFAULTS, type Tuning } from "../../../src/core/tuning.ts";
 
@@ -52,4 +54,18 @@ export function adoptLinks(scene: Scene): number {
     n++;
   }
   return n;
+}
+
+/** How much of a frame lies in a bigger one for it to be drawn inside it (as the site map nests shapes). */
+const INSIDE = 0.98;
+
+/** Frames drawn inside a bigger page become rects on it, white as a frame is; returns how many. */
+export function adoptFrames(scene: Scene): number {
+  const pages = pagesOf(scene);
+  const inner = pages.filter((f) => pages.some((g) => area(g) > area(f) && insideShare(f.box, norm(g.box)) >= INSIDE));
+  for (const f of inner) {
+    f.kind = "rect";
+    f.style = { fill: "#ffffff", ...f.style };
+  }
+  return inner.length;
 }

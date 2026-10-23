@@ -2,6 +2,7 @@
 // the layout puts them, and the arrows come with them. On a fake projects server.
 import ELK from "elkjs/lib/elk.bundled.js";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { pagesOf } from "../../../src/core/board.ts";
 import { runScript } from "../../../src/core/ops.ts";
 import type { SceneJSON } from "../../../src/core/scene.ts";
 import { createProject, ready, saveVersions } from "../projects/storage.ts";
@@ -43,6 +44,27 @@ describe("settling the board", () => {
     expect(shownArrows(s, board.placement).map((a) => a.to).sort()).toEqual(["contact", "services"]);
     // In memory only: no version of its own.
     expect(board.history.latest()).toBe(1);
+  });
+
+  it("a frame drawn inside a page is part of it: it stays on its page with what's on it, and isn't a page", async () => {
+    // The chicken farm board: the model made the photo strip at the top of the farm's page a frame.
+    const D = '"a part of the page used by these tests"';
+    const { scene } = runScript(`shape(page, frame, 0 0 1280 800, ${D})
+text(page, "Home")
+shape(go, pill, 80 300 200 50, ${D}, link:farm)
+shape(farm, frame, 1500 -130 1280 800, ${D})
+text(farm, "Sunny Egg Farm")
+shape(strip, frame, 1500 -130 1280 340, ${D}, fill:#cfe8ff)
+shape(slide, round, 1590 -80 260 240, ${D})
+shape(back, pill, 1530 -110 100 40, ${D}, link:page)`);
+    const board = opened(scene.toJSON());
+    await board.settle({ glideMs: 0 });
+    const s = board.scene;
+    const farm = s.get("farm")!.box;
+    expect(s.get("strip")).toMatchObject({ kind: "rect", box: { x: farm.x, y: farm.y, w: 1280, h: 340 }, style: { fill: "#cfe8ff" } });
+    expect(s.get("slide")!.box).toMatchObject({ x: farm.x + 90, y: farm.y + 50 });
+    expect(s.get("back")!.box).toMatchObject({ x: farm.x + 30, y: farm.y + 20 });
+    expect(pagesOf(s).map((p) => p.id)).toEqual(["page", "farm"]);
   });
 
   it("the camera goes with the page it was on", async () => {
