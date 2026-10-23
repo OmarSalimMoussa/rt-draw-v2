@@ -43,6 +43,8 @@ const settings = (effort: Effort, thinking: Thinking) => ({
 
 export type ModelRequest = {
   model: string;
+  /** Who the call is logged for: the hosted app's person (its X-Imagine-Person header, app/server/access.ts), never a page's say. */
+  who?: string;
   system: string;
   user?: string;
   /** data: URLs (PNG or JPEG), sent before the text. */
@@ -98,6 +100,8 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
         } catch {
           return fail(400, "bad JSON");
         }
+        const who = req.headers["x-imagine-person"];
+        body.who = typeof who === "string" ? who : undefined;
         if (isJev(body.model)) return jev(body, res);
         if (!token) return fail(500, "CLAUDE_CODE_OAUTH_TOKEN is not set in .env");
         const model = MODEL_IDS[body.model];
@@ -148,12 +152,12 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
           });
           const out = { ...head, ms: since(), firstMs, waitMs, ...flat(stats) };
           line(out);
-          log({ ...out, settings: undefined, from: body.from, tag: body.tag, images: body.images?.length ?? 0, system: body.system.length, user: body.user, reply: text });
+          log({ ...out, settings: undefined, from: body.from, tag: body.tag, who: body.who, images: body.images?.length ?? 0, system: body.system.length, user: body.user, reply: text });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           const partial = err instanceof CallError ? flat(err.stats) : {};
           line({ ...head, ...partial, error, ms: since(), waitMs });
-          log({ ...head, ...partial, settings: undefined, from: body.from, tag: body.tag, error, ms: since(), waitMs });
+          log({ ...head, ...partial, settings: undefined, from: body.from, tag: body.tag, who: body.who, error, ms: since(), waitMs });
         } finally {
           clearTimeout(timer);
           proc.q.close();
@@ -176,11 +180,11 @@ export function modelApi(o: { mockApi?: MockApi } = {}): Plugin {
           res.write(`${JSON.stringify({ text })}\n`);
           const out = { ...head, ...stats, ms: Math.round(performance.now() - t0) };
           res.end(`${JSON.stringify(out)}\n`);
-          log({ ...out, settings: undefined, from: body.from, tag: body.tag, system: body.system?.length ?? 0, user: body.user, reply: text });
+          log({ ...out, settings: undefined, from: body.from, tag: body.tag, who: body.who, system: body.system?.length ?? 0, user: body.user, reply: text });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           res.end(`${JSON.stringify({ ...head, error, ms: Math.round(performance.now() - t0) })}\n`);
-          log({ ...head, settings: undefined, from: body.from, tag: body.tag, error });
+          log({ ...head, settings: undefined, from: body.from, tag: body.tag, who: body.who, error });
         }
       }
 

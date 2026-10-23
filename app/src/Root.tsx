@@ -60,7 +60,8 @@ export function Root() {
       const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a || (a.target && a.target !== "_self") || a.hasAttribute("download")) return;
       const url = new URL(a.href);
-      if (url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
+      // The API and the admin's page aren't the app's: they load as themselves.
+      if (url.origin !== location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/admin")) return;
       if (url.pathname === location.pathname && url.search === location.search) return;
       e.preventDefault();
       go(url.pathname + url.search + url.hash);
@@ -83,7 +84,7 @@ export function Root() {
   }, []);
 
   useEffect(() => {
-    if (at.route === "editor") document.title = "rt-draw";
+    if (at.route === "editor") document.title = "imagine";
   }, [at]);
 
   const away = at.route !== "editor";

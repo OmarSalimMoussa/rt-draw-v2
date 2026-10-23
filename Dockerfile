@@ -1,4 +1,4 @@
-# The hosted rt-draw app (imagine.emberhub.dev): the page built from app/ and its API
+# imagine, the hosted rt-draw app (imagine.emberhub.dev): the page built from app/ and its API
 # (app/server/host.ts) on one port. Built and shipped by scripts/deploy.sh.
 FROM node:22.21.1-slim AS build
 WORKDIR /repo

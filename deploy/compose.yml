@@ -9,10 +9,14 @@ services:
     image: rtdraw:${RTDRAW_TAG:?}
     container_name: rtdraw-app
     restart: unless-stopped
-    # rtdraw.env (v1's) holds CLAUDE_CODE_OAUTH_TOKEN and ELEVENLABS_API_KEY; rtdraw-v2.env holds TYPESAFE_API_KEY (Jev).
+    # rtdraw.env (v1's) holds CLAUDE_CODE_OAUTH_TOKEN and ELEVENLABS_API_KEY; rtdraw-v2.env holds TYPESAFE_API_KEY (Jev),
+    # MAILER_SECRET and MAILER_URL (deploy/README.md).
     env_file:
       - rtdraw.env
       - rtdraw-v2.env
+    environment:
+      # Invite links are made with this address.
+      PUBLIC_URL: https://imagine.emberhub.dev
     ports:
       - "127.0.0.1:8700:8200"
     volumes:

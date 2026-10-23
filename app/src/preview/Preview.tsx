@@ -78,7 +78,7 @@ export function Preview(p: Props) {
   useEffect(() => {
     document.title = `${title ?? "Preview"} · Preview`;
   }, [title]);
-  useEffect(() => () => void (document.title = "rt-draw"), []);
+  useEffect(() => () => void (document.title = "imagine"), []);
 
   const hovered = hover && scene.get(hover.id);
   const nowhere = !!hovered && !targetOf(scene, hovered);

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Deploys the rt-draw app (app/, on v2's engine) to the ember box as imagine.emberhub.dev, in v1's place
-# and, as v1 was, apart from Ember:
+# Deploys imagine (app/, on rt-draw v2's engine) to the ember box as imagine.emberhub.dev, in rt-draw v1's
+# place and, as v1 was, apart from Ember. Who gets in is the app's own business (invites, app/server/access.ts;
+# deploy/README.md), so the edge route has no login of its own.
 #   - everything of rt-draw's lives in /srv/rtdraw (compose project "rtdraw", host port 127.0.0.1:8700; the
 #     factory's own services hold 8000-8200 and 9000s). This app keeps its data in the volume rtdraw-v2-data;
 #     v1's rtdraw-data is left as it was, so v1's own deploy script can still put v1 back;
@@ -8,8 +9,8 @@
 #     /srv/factory/edge/sites/rtdraw.caddy, and validates the whole edge config before swapping it in,
 #     so a bad file can never break the next reload of Ember's deploy. The factory writes only
 #     ember-*.caddy and prunes only ember-* images, so Ember's deploys leave rt-draw alone.
-# The box needs, once: /srv/rtdraw owned by deploy, with rtdraw.env (CLAUDE_CODE_OAUTH_TOKEN, ELEVENLABS_API_KEY),
-# rtdraw-v2.env (TYPESAFE_API_KEY) and users (lines of "name bcrypt-hash").
+# The box needs, once: /srv/rtdraw owned by deploy, with rtdraw.env (CLAUDE_CODE_OAUTH_TOKEN, ELEVENLABS_API_KEY)
+# and rtdraw-v2.env (TYPESAFE_API_KEY, MAILER_SECRET, and MAILER_URL once the mailer is set up).
 set -euo pipefail
 
 # The box by address: the name prod.emberhub.dev no longer resolves.
@@ -24,8 +25,8 @@ TAG=v2-$(git rev-parse --short=12 HEAD)
 [ -z "$(git status --porcelain)" ] || TAG="$TAG-dirty-$(date +%s)"
 
 echo "== checking the box"
-ssh "$BOX" "test -w $DIR && test -f $DIR/rtdraw.env && test -f $DIR/rtdraw-v2.env && test -s $DIR/users" ||
-  { echo "the box needs $DIR (owned by deploy) with rtdraw.env, rtdraw-v2.env and users; see the header" >&2; exit 1; }
+ssh "$BOX" "test -w $DIR && test -f $DIR/rtdraw.env && test -f $DIR/rtdraw-v2.env" ||
+  { echo "the box needs $DIR (owned by deploy) with rtdraw.env and rtdraw-v2.env; see the header" >&2; exit 1; }
 
 echo "== building rtdraw:$TAG"
 docker build -t "rtdraw:$TAG" .
@@ -44,9 +45,6 @@ site=$(mktemp)
 {
   echo "# Written by rt-draw's scripts/deploy.sh; Ember's factory never touches this file."
   echo "$HOST {"
-  echo "	basic_auth {"
-  sed 's/^/		/' "$DIR/users"
-  echo "	}"
   echo "	reverse_proxy 127.0.0.1:8700 {"
   echo "		# Turns stream as NDJSON; pass each line on as it comes."
   echo "		flush_interval -1"

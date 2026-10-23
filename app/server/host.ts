@@ -1,7 +1,8 @@
 // The hosted app (main.ts, the Dockerfile): the built page and the dev server's API on
 // one port. The API is the dev server's own plugins (Claude on the subscription and
 // Jev, Scribe tokens, the projects), given a bare middleware stack in place of Vite's;
-// their keys come from the environment, which loadEnv reads as well as a .env.
+// their keys come from the environment, which loadEnv reads as well as a .env. With
+// `access` (access.ts), only people signed in with an invite get past the page.
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
@@ -9,6 +10,7 @@ import { extname, resolve, sep } from "node:path";
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import { modelApi } from "../../dev/model-plugin.ts";
 import { sttToken } from "../../playgrounds/speech/token-plugin.ts";
+import type { Access } from "./access.ts";
 import { json } from "./http.ts";
 import { projectsApi } from "./plugin.ts";
 
@@ -26,10 +28,11 @@ const TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
   ".ico": "image/x-icon",
   ".wasm": "application/wasm",
+  ".mp4": "video/mp4",
 };
 
 /** The app's server: `dist` is the built page, `root` where loadEnv looks for a .env. */
-export function host(dist: string, root: string, plugins: Plugin[] = [modelApi(), sttToken(), projectsApi()]): Server {
+export function host(dist: string, root: string, plugins: Plugin[] = [modelApi(), sttToken(), projectsApi()], access?: Access): Server {
   const stack: { path: string; fn: Middleware }[] = [];
   const middlewares = { use: (path: string | Middleware, fn?: Middleware) => stack.push(typeof path === "string" ? { path, fn: fn! } : { path: "", fn: path }) };
   for (const p of plugins) {
@@ -69,11 +72,31 @@ export function host(dist: string, root: string, plugins: Plugin[] = [modelApi()
     if (!found && extname(path)) return json(res, 404, { error: "not found" });
     const send = found ? file : resolve(dist, "index.html");
     res.setHeader("Content-Type", TYPES[extname(send)] ?? "application/octet-stream");
-    // Built files are named by their content, so they never change; the page names the current ones.
-    res.setHeader("Cache-Control", found && path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
+    // Built files are named by their content, so they never change; the page names the current ones. The
+    // page's other files (the tour video) change rarely.
+    res.setHeader("Cache-Control", !found || send.endsWith(".html") ? "no-cache" : path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "public, max-age=3600");
+    res.setHeader("Accept-Ranges", "bytes");
+    // A video plays from pieces of its file (Safari asks for nothing else): bytes=start-end, either end open.
+    const size = (await stat(send)).size;
+    if (!size) return res.end();
+    const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ""));
+    let [start, end] = [0, size - 1];
+    if (range && (range[1] || range[2])) {
+      [start, end] = range[1] ? [Number(range[1]), range[2] ? Math.min(Number(range[2]), size - 1) : size - 1] : [Math.max(0, size - Number(range[2])), size - 1];
+      if (start > end || start >= size) {
+        res.setHeader("Content-Range", `bytes */${size}`);
+        return json(res, 416, { error: "range not satisfiable" });
+      }
+      res.statusCode = 206;
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+    }
+    res.setHeader("Content-Length", end - start + 1);
     if (req.method === "HEAD") return res.end();
-    createReadStream(send).on("error", (err) => fail(res, err)).pipe(res);
+    createReadStream(send, { start, end }).on("error", (err) => fail(res, err)).pipe(res);
   };
 
-  return createServer((req, res) => void run(req, res, 0));
+  return createServer(async (req, res) => {
+    if (access && (await access.gate(req, res))) return;
+    run(req, res, 0);
+  });
 }

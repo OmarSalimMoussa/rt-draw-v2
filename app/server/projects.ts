@@ -1,6 +1,7 @@
 // Projects, kept on the server: nothing of a person's work stays in their browser.
-// Until there are accounts, each browser gets an anonymous owner id in an HttpOnly
-// cookie (page scripts can't read it), and its projects live in <RT_DATA_DIR>/app/owners/<owner>/:
+// Whose they are comes from the caller: on the hosted app, the person signed in
+// (access.ts); on the dev server, an anonymous owner id per browser in an HttpOnly
+// cookie (page scripts can't read it). Their projects live in <RT_DATA_DIR>/app/owners/<owner>/:
 // index.json (names, sizes, dates) and <project>.ndjson, one version per line,
 // only ever appended. Writes for one owner run one at a time. Copied from rt-draw v1
 // (server/projects.ts); only where the data lives changed. A version's doc is a v2
@@ -32,6 +33,9 @@ const VERSIONS_SENT = 200;
 type Version = { n: number; doc: unknown; at: number; label: string; undoOf?: number };
 type Meta = { id: string; name: string; named?: boolean; createdAt: number; updatedAt: number; pages: number; versions: number };
 
+/** Whose projects a request works on; undefined: nobody's (refused). */
+export type OwnerOf = (req: IncomingMessage, res: ServerResponse) => string | undefined;
+
 /** The browser's owner id, from its cookie; a new one, and the cookie, the first time. */
 export function ownerOf(req: IncomingMessage, res?: ServerResponse): string | undefined {
   const found = new RegExp(`(?:^|;\\s*)${COOKIE}=([a-f0-9]{32})`).exec(req.headers.cookie ?? "")?.[1];
@@ -55,7 +59,7 @@ function serial<T>(owner: string, job: () => Promise<T>): Promise<T> {
 const dir = (owner: string) => join(data(), owner);
 const file = (owner: string, id: string) => join(dir(owner), `${id}.ndjson`);
 
-async function readIndex(owner: string): Promise<Meta[]> {
+export async function readIndex(owner: string): Promise<Meta[]> {
   try {
     return JSON.parse(await readFile(join(dir(owner), "index.json"), "utf8")) as Meta[];
   } catch {
@@ -72,7 +76,7 @@ async function writeIndex(owner: string, metas: Meta[]) {
 }
 
 /** A project's versions in order; a line torn by a crash is skipped. */
-async function readVersions(owner: string, id: string): Promise<Version[]> {
+export async function readVersions(owner: string, id: string): Promise<Version[]> {
   let text = "";
   try {
     text = await readFile(file(owner, id), "utf8");
@@ -101,19 +105,32 @@ async function body<T>(req: IncomingMessage, res: ServerResponse): Promise<T | u
   }
 }
 
-export function registerProjects(router: Router) {
+/** An owner's projects, most recent first, each with its latest board for the thumbnails. */
+export async function listProjects(owner: string) {
+  const metas = await readIndex(owner);
+  const projects = await Promise.all(metas.map(async (m) => ({ ...m, latest: (await readVersions(owner, m.id)).at(-1)?.doc })));
+  return projects.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function registerProjects(router: Router, ownerFor: OwnerOf = ownerOf) {
+  /** Each route's owner; none answers 401 and the route stops. */
+  const whose = (req: IncomingMessage, res: ServerResponse) => {
+    const o = ownerFor(req, res);
+    if (!o) json(res, 401, { error: "Sign in with your invite link first." });
+    return o;
+  };
+
   router.use("/api/projects", async (req, res) => {
     if (req.method !== "GET") return json(res, 405, { error: "GET only" });
-    const owner = ownerOf(req, res)!;
-    const metas = await readIndex(owner);
-    // Each with its latest page, for the thumbnails.
-    const projects = await Promise.all(metas.map(async (m) => ({ ...m, latest: (await readVersions(owner, m.id)).at(-1)?.doc })));
-    json(res, 200, { projects: projects.sort((a, b) => b.updatedAt - a.updatedAt) });
+    const owner = whose(req, res);
+    if (!owner) return;
+    json(res, 200, { projects: await listProjects(owner) });
   });
 
   router.use("/api/project", async (req, res) => {
     if (req.method !== "GET") return json(res, 405, { error: "GET only" });
-    const owner = ownerOf(req, res)!;
+    const owner = whose(req, res);
+    if (!owner) return;
     const id = new URL(req.url ?? "", "http://x").searchParams.get("id") ?? "";
     if (!PROJECT.test(id) || !(await readIndex(owner)).some((m) => m.id === id)) return json(res, 404, { error: "no such project" });
     json(res, 200, { versions: (await readVersions(owner, id)).slice(-VERSIONS_SENT) });
@@ -121,7 +138,8 @@ export function registerProjects(router: Router) {
 
   router.use("/api/project/save", async (req, res) => {
     if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-    const owner = ownerOf(req, res)!;
+    const owner = whose(req, res);
+    if (!owner) return;
     const b = await body<{ id?: string; versions?: Version[]; meta?: { name?: string; named?: boolean; pages?: number } }>(req, res);
     if (!b) return;
     if (!PROJECT.test(b.id ?? "") || !Array.isArray(b.versions) || !b.versions.every(isVersion)) return json(res, 400, { error: "send id, versions and meta" });
@@ -154,7 +172,8 @@ export function registerProjects(router: Router) {
 
   router.use("/api/project/rename", async (req, res) => {
     if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-    const owner = ownerOf(req, res)!;
+    const owner = whose(req, res);
+    if (!owner) return;
     const b = await body<{ id?: string; name?: string }>(req, res);
     if (!b) return;
     const name = String(b.name ?? "").trim().slice(0, 120);
@@ -165,7 +184,8 @@ export function registerProjects(router: Router) {
 
   router.use("/api/project/delete", async (req, res) => {
     if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-    const owner = ownerOf(req, res)!;
+    const owner = whose(req, res);
+    if (!owner) return;
     const b = await body<{ id?: string }>(req, res);
     if (!b) return;
     if (!PROJECT.test(b.id ?? "")) return json(res, 400, { error: "send id" });
@@ -179,8 +199,8 @@ export function registerProjects(router: Router) {
   // For testing from scratch in development; never in a hosted build.
   router.use("/api/projects/reset", async (req, res) => {
     if (req.method !== "POST" || process.env.NODE_ENV === "production") return json(res, 404, { error: "not here" });
-    const owner = ownerOf(req);
-    if (owner) await serial(owner, () => rm(dir(owner), { recursive: true, force: true }));
+    const o = ownerFor(req, res);
+    if (o) await serial(o, () => rm(dir(o), { recursive: true, force: true }));
     json(res, 200, { ok: true });
   });
 }

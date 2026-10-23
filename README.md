@@ -33,9 +33,10 @@ npm run dev        # http://localhost:5180
 npm test
 ```
 
-It is hosted at imagine.emberhub.dev, in v1's place: `scripts/deploy.sh` builds
-the `Dockerfile` (the page and `app/server/host.ts` on one port) and starts it on
-the ember box; see the script's header for what the box needs.
+It is hosted as **imagine** at imagine.emberhub.dev, in v1's place, open to people
+with an invite: `scripts/deploy.sh` builds the `Dockerfile` (the page and
+`app/server/host.ts` on one port) and starts it on the ember box.
+`deploy/README.md` covers invites, the admin page and the mailer.
 
 Borrowed: rough.js (MIT) for the hand-drawn look, perfect-freehand (MIT) for
 strokes, rbush (MIT) for the spatial index, Excalifont (OFL, see `src/fonts`).

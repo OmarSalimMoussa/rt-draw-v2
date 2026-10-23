@@ -13,6 +13,7 @@ const dist = mkdtempSync(join(tmpdir(), "rt-app-dist-"));
 mkdirSync(join(dist, "assets"));
 writeFileSync(join(dist, "index.html"), "<!doctype html><title>rt-draw</title>");
 writeFileSync(join(dist, "assets", "index-abc123.js"), "console.log(1)");
+writeFileSync(join(dist, "tutorial.mp4"), "0123456789");
 
 /** A plugin the way the dev server's are written: its keys from configResolved, its routes from configureServer. */
 const seen: { mode?: string; root?: string } = {};
@@ -58,6 +59,21 @@ describe("the hosted app", () => {
     expect(r.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
     expect(await r.text()).toBe("console.log(1)");
     expect((await fetch(`${base}/assets/gone-123.js`)).status).toBe(404);
+  });
+
+  it("serves a video in pieces, as Safari asks for it, and caches the page's other files for an hour", async () => {
+    const whole = await fetch(`${base}/tutorial.mp4`);
+    expect(whole.headers.get("content-type")).toBe("video/mp4");
+    expect(whole.headers.get("accept-ranges")).toBe("bytes");
+    expect(whole.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(await whole.text()).toBe("0123456789");
+    const part = await fetch(`${base}/tutorial.mp4`, { headers: { range: "bytes=2-5" } });
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-range")).toBe("bytes 2-5/10");
+    expect(await part.text()).toBe("2345");
+    const tail = await fetch(`${base}/tutorial.mp4`, { headers: { range: "bytes=7-" } });
+    expect(await tail.text()).toBe("789");
+    expect((await fetch(`${base}/tutorial.mp4`, { headers: { range: "bytes=20-30" } })).status).toBe(416);
   });
 
   it("never serves anything outside the built page, however the path climbs out", async () => {

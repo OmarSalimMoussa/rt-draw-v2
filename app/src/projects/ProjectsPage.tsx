@@ -78,7 +78,7 @@ export function Projects() {
   const refresh = () => setTick((t) => t + 1);
 
   useEffect(() => {
-    document.title = "Projects · rt-draw";
+    document.title = "Projects · imagine";
     addEventListener(SAVED_EVENT, refresh); // this tab's editor, or another tab, saved
     void loadIndex().finally(refresh);
     return () => removeEventListener(SAVED_EVENT, refresh);

@@ -1,0 +1,63 @@
+/* The pages before the app (ac-*: the welcome and invite pages) and the admin's page (ad-*), in the sketchbook look. */
+.ac { max-width: 720px; margin: 0 auto; padding-block: 32px 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 18px; font: 16px/1.45 var(--hand); color: var(--text); }
+.ac-mark { display: flex; align-items: center; gap: 10px; font-size: 30px; font-weight: 700; }
+.ac h1 { margin: 0; font-size: clamp(28px, 5vw, 40px); line-height: 1.15; text-wrap: balance; }
+.ac-lede { margin: 0; max-width: 60ch; color: var(--muted); }
+.ac-video { display: block; width: 100%; max-width: 100%; aspect-ratio: 1440 / 996; height: auto; background: #1e1e1e; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
+.ac-card { display: flex; flex-direction: column; gap: 8px; padding: 18px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
+.ac-card h1, .ac-card h2 { margin: 0 0 4px; font-size: 24px; }
+.ac-card p { margin: 0; }
+.ac-card label { margin-top: 6px; }
+.ac-card input, .ac-card textarea { font-size: 16px; padding: 6px 8px; }
+.ac-card textarea { font: inherit; border: 2px solid var(--line); border-radius: var(--wobble-s); background: var(--panel); resize: vertical; }
+.ac-go { align-self: flex-start; margin-top: 8px; font-weight: 700; color: #fff; background: #1e1e1e; padding: 6px 16px; }
+.ac-go:disabled { opacity: 0.6; }
+.ac-error { margin: 0; color: var(--bad); }
+.ac-small { font-size: 13px; color: var(--muted); margin-top: 6px !important; }
+.ac-foot { margin: 0; color: var(--muted); font-size: 14px; }
+/* Kept off screen rather than hidden, so a bot still sees a field to fill. */
+.ac-trap { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }
+
+.ad { max-width: 1120px; margin: 0 auto; padding-block: 24px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 18px; font: 15px/1.4 var(--hand); color: var(--text); }
+.ad a { color: var(--text); }
+.ad-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.ad-invite { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); }
+.ad-invite label { font-weight: 700; }
+.ad-invite input { flex: 1 1 240px; min-width: 0; font-size: 15px; padding: 5px 8px; }
+.ad-invite .ac-go { margin-top: 0; }
+.ad-link { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ad-link input { flex: 1 1 360px; min-width: 0; font: 13px var(--mono); padding: 5px 8px; }
+.ad-link span { flex-basis: 100%; font-size: 13px; }
+.ad-section h2 { margin: 0 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; color: #868e96; }
+.ad-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ad-rows > li { padding: 10px 12px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble-s); }
+[data-waiting], .ad-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.ad-email { font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+.ad-note { flex: 1 1 200px; min-width: 0; }
+.ad-chip { margin-left: 6px; padding: 0 6px; font-style: normal; font-size: 12px; border: 1.5px solid var(--line); border-radius: 999px; }
+.ad-done { color: var(--ok); }
+.ad-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+.ad-actions button { font-size: 13px; padding: 2px 8px; }
+.ad-revoke { color: var(--bad); border-color: var(--bad); }
+.ad-danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+.ad-person.off { opacity: 0.6; }
+.ad-work { margin-top: 12px; padding-top: 10px; border-top: 1.5px dashed var(--line); display: flex; flex-direction: column; gap: 10px; }
+.ad-work h3 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: #868e96; }
+.ad-projects { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.ad-project { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 8px; border-radius: var(--wobble-s); }
+.ad-project.on { box-shadow: 0 0 0 2px var(--line); }
+.ad-project .px-thumb { height: 110px; }
+.ad-project .muted { font-size: 12px; }
+.ad-versions { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 720px) { .ad-versions { grid-template-columns: minmax(0, 1fr); } }
+.ad-big .px-thumb { height: 380px; }
+.ad-versions ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 380px; overflow-y: auto; }
+.ad-versions ol button { width: 100%; text-align: left; border-width: 1.5px; font-size: 13px; }
+.ad-versions ol button.on { background: #fff3bf; }
+.ad-versions ol button span:first-child { font-weight: 700; margin-right: 4px; }
+.ad-calls { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; font-size: 13px; }
+.ad-call { padding: 6px 8px; border: 1.5px solid var(--rule, #e6dfd1); border-radius: 6px; background: var(--bg); }
+.ad-call.bad { border-color: var(--bad); }
+.ad-err { color: var(--bad); }
+.ad-call summary { cursor: var(--cur-pointer, pointer); color: var(--muted); }
+.ad-call pre { max-height: 240px; overflow: auto; }

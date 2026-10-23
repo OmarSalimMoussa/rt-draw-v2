@@ -1,7 +1,8 @@
-// The gear at the top right of the editor, and its menu: which model draws, and
-// the latency overlay. (v1's SettingsMenu.tsx, with v2's models; Debug always
-// shows, since the app only runs locally.)
+// The gear at the top right of the editor, and its menu: which model draws, the
+// latency overlay, and who is signed in. (v1's SettingsMenu.tsx, with v2's models;
+// Debug always shows.)
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { currentMe, signOut } from "./access/api.ts";
 import { DEFAULT_MODEL, DRAW_MODELS } from "./models.ts";
 import { deleteAllProjects } from "./projects/storage.ts";
 import { getModel, onSettings, setModel, setShowsLatency, showsLatency } from "./settings.ts";
@@ -15,6 +16,7 @@ export function SettingsMenu() {
   const [wiping, setWiping] = useState<"ask" | "busy" | null>(null);
   const latency = useSyncExternalStore(onSettings, showsLatency);
   const root = useRef<HTMLDivElement>(null);
+  const me = currentMe();
 
   useEffect(() => {
     if (!open) return;
@@ -47,6 +49,16 @@ export function SettingsMenu() {
             ))}
           </div>
           <p className="st-note">Prices are USD per million tokens in / out. Pictures are drawn with Claude Sonnet 5.5, and Jev (TypeSafe AI) works out what you point at.</p>
+          {me && (
+            <>
+              <div className="st-title">Account</div>
+              <p className="st-note">Signed in as {me.email}</p>
+              <div className="st-account">
+                {me.admin && <a href="/admin">People and waitlist</a>}
+                <button type="button" onClick={() => signOut().finally(() => location.assign("/"))}>Sign out</button>
+              </div>
+            </>
+          )}
           <div className="st-title">Debug</div>
           <label className={latency ? "st-toggle on" : "st-toggle"}>
             <input type="checkbox" checked={latency} onChange={(e) => setShowsLatency(e.target.checked)} />

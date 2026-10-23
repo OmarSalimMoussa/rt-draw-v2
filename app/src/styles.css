@@ -127,6 +127,9 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 .st-toggle:hover { background: #f1f3f5; }
 .st-toggle input { margin: 0; accent-color: var(--accent); }
 .st-wipe-start { align-self: flex-start; font-size: 13px; }
+.st-account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.st-account a { color: var(--text); padding: 2px 8px; border: 2px solid var(--line); border-radius: var(--wobble-s); background: var(--panel); text-decoration: none; }
+.st-account button { font-size: 13px; }
 .st-wipe { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .st-wipe span { flex-basis: 100%; }
 .st-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
