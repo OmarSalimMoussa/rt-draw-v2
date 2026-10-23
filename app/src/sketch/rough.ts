@@ -73,6 +73,8 @@ export function sketchMark(points: Pt[], s: { seed: number; closed: boolean; zoo
     seed: s.seed,
     roughness: 1.1,
     maxRandomnessOffset: 2 * k,
+    // One pass: rough's second pass beside the first reads as a doubled stroke (the model's pictures draw one line).
+    disableMultiStroke: true,
     ...(s.closed && { fill: "#e03131", fillStyle: "hachure", hachureGap: 13 * k, hachureAngle: -41, fillWeight: k }),
   });
   const of = (type: string) => drawn.sets.filter((set) => set.type === type).map((set) => gen.opsToPath(set, 1));
