@@ -1,0 +1,30 @@
+# rt-draw on the ember box, apart from Ember: its own project, network, volume and loopback
+# port. The factory's edge reaches it through /srv/factory/edge/sites/rtdraw.caddy, which
+# scripts/deploy.sh writes; nothing here or there is Ember's. This is v2's app in v1's place:
+# same project, container and port, its own volume (v1's rtdraw-data stays as it was).
+name: rtdraw
+
+services:
+  app:
+    image: rtdraw:${RTDRAW_TAG:?}
+    container_name: rtdraw-app
+    restart: unless-stopped
+    # rtdraw.env (v1's) holds CLAUDE_CODE_OAUTH_TOKEN and ELEVENLABS_API_KEY; rtdraw-v2.env holds TYPESAFE_API_KEY (Jev).
+    env_file:
+      - rtdraw.env
+      - rtdraw-v2.env
+    ports:
+      - "127.0.0.1:8700:8200"
+    volumes:
+      - rtdraw-v2-data:/data
+    # Ember's agents share this machine; rt-draw must not starve them.
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8200/').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+volumes:
+  rtdraw-v2-data:
+    name: rtdraw-v2-data

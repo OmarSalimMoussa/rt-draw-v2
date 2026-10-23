@@ -21,5 +21,21 @@ npm run dev        # http://localhost:5173
 npm run typecheck
 ```
 
+## The app
+
+`app/` is the product: v1's UI on v2's engine (a board of pages you draw on and
+talk to, the projects, links and the preview). It runs on its own port, with the
+same model and Scribe routes as the playgrounds:
+
+```
+cd app && npm install
+npm run dev        # http://localhost:5180
+npm test
+```
+
+It is hosted at imagine.emberhub.dev, in v1's place: `scripts/deploy.sh` builds
+the `Dockerfile` (the page and `app/server/host.ts` on one port) and starts it on
+the ember box; see the script's header for what the box needs.
+
 Borrowed: rough.js (MIT) for the hand-drawn look, perfect-freehand (MIT) for
 strokes, rbush (MIT) for the spatial index, Excalifont (OFL, see `src/fonts`).
