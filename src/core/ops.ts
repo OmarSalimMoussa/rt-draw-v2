@@ -49,7 +49,8 @@ function splitArgs(s: string): Arg[] {
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (inQuote) {
-      if (c === "\\" && i + 1 < s.length) cur += s[++i];
+      // \n is a line break (the model writes one so); any other escaped character is itself (\" \\).
+      if (c === "\\" && i + 1 < s.length) cur += s[++i] === "n" ? "\n" : s[i];
       else if (c === '"') inQuote = false;
       else cur += c;
     } else if (c === '"') {

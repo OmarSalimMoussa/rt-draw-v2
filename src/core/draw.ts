@@ -41,7 +41,8 @@ export type Prompt = {
 
 /** The scene as op lines: its exact boxes and styles, for when the model should see numbers. */
 export function sceneToOps(scene: Scene): string {
-  const q = (s: string) => `"${s.replace(/"/g, "'")}"`;
+  // On one line, read back as written: a backslash and a line break escaped as the parser reads them.
+  const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, "'")}"`;
   const style = (s: Shape) => Object.entries(s.style).filter(([, v]) => v !== undefined).map(([k, v]) => `, ${k}:${v}`).join("");
   const lines: string[] = [];
   for (const s of scene.stacked()) {
