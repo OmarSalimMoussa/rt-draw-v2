@@ -24,9 +24,11 @@ export function Welcome() {
   return (
     <main className="ac">
       <Wordmark />
-      <h1>Sketch a website by talking and drawing.</h1>
-      <p className="ac-lede">Say what you want, circle what should change, add pages and click through them. imagine is in early testing with a few people.</p>
-      <video className="ac-video" src="/tutorial.mp4" poster="/tutorial.jpg" controls playsInline preload="metadata" aria-label="A 44-second tour: a bakery site drawn from a typed request, a card circled and changed, a Menu page added, then clicked through" />
+      <h1>Prototyping at the speed of thought.</h1>
+      <p className="ac-lede">
+        We built imagine so an idea for a website is on screen as fast as you can say it. Sketch it by talking and drawing: say what you want, circle what should change, add pages and click through them. imagine is in early testing with a few people.
+      </p>
+      <video className="ac-video" src="/tutorial.mp4" poster="/tutorial.jpg" controls playsInline preload="metadata" aria-label="A 44-second narrated tour: a bakery site drawn from a typed request, a card circled and changed, a Menu page added, then clicked through" />
       {state === "done" ? (
         <section className="ac-card" aria-live="polite">
           <h2>You're on the list.</h2>

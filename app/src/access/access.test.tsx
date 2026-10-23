@@ -49,6 +49,12 @@ function type(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
 const submit = (form: HTMLFormElement) => act(async () => void form.requestSubmit());
 
 describe("the welcome page", () => {
+  it("says why imagine exists: prototyping at the speed of thought", async () => {
+    await show(<Welcome />);
+    expect($("h1").textContent).toBe("Prototyping at the speed of thought.");
+    expect($(".ac-lede").textContent).toContain("as fast as you can say it");
+  });
+
   it("puts an email on the waitlist, with a note, and says what happens next", async () => {
     routes = { "/api/access/waitlist": () => ({ body: { ok: true } }) };
     await show(<Welcome />);
