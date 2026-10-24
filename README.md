@@ -40,3 +40,5 @@ with an invite: `scripts/deploy.sh` builds the `Dockerfile` (the page and
 
 Borrowed: rough.js (MIT) for the hand-drawn look, perfect-freehand (MIT) for
 strokes, rbush (MIT) for the spatial index, Excalifont (OFL, see `src/fonts`).
+
+License: MIT (`LICENSE`). The borrowed parts keep their own licenses.
