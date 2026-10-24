@@ -58,6 +58,16 @@ describe("the welcome page", () => {
     for (const kind of ["website", "phone app", "desktop app", "macOS or Ubuntu desktop", "system diagram", "drawing"]) expect($(".ac-lede").textContent).toContain(kind);
   });
 
+  it("links to imagine's code on GitHub beside the headline, in a new tab", async () => {
+    await show(<Welcome />);
+    const link = $<HTMLAnchorElement>(".ac-head a");
+    expect(link.href).toBe("https://github.com/OmarSalimMoussa/rt-draw-v2");
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toContain("noopener");
+    expect(link.getAttribute("aria-label")).toBe("imagine's code on GitHub");
+    expect(link.querySelector("svg")).not.toBeNull();
+  });
+
   it("has doodles all over its background: the pictures, the logo and scribbles, each turned its own way", async () => {
     await show(<Welcome />);
     const layer = $(".ac-doodles");

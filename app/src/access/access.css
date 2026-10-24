@@ -2,6 +2,15 @@
 .ac { max-width: 720px; margin: 0 auto; padding-block: 32px 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 18px; font: 16px/1.45 var(--hand); color: var(--text); }
 .ac-mark { display: flex; align-items: center; gap: 10px; font-size: 30px; font-weight: 700; }
 .ac h1 { margin: 0; font-size: clamp(28px, 5vw, 40px); line-height: 1.15; text-wrap: balance; }
+/* The headline, and the GitHub mark in the space its two balanced lines leave on the right. */
+.ac-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ac-head h1 { min-width: 0; }
+.ac-gh { flex: none; display: grid; place-items: center; width: 52px; height: 52px; color: #1e1e1e; border-radius: 50%; transition: transform 0.15s; }
+.ac-gh svg { width: 44px; height: 44px; fill: currentColor; }
+.ac-gh:hover { transform: rotate(-8deg) scale(1.06); }
+.ac-gh:focus-visible { outline: 2px solid var(--line); outline-offset: 3px; }
+@media (max-width: 480px) { .ac-gh { width: 40px; height: 40px; } .ac-gh svg { width: 34px; height: 34px; } }
+@media (prefers-reduced-motion: reduce) { .ac-gh { transition: none; } }
 .ac-lede { margin: 0; max-width: 60ch; color: var(--muted); }
 .ac-video { display: block; width: 100%; max-width: 100%; aspect-ratio: 1440 / 996; height: auto; background: #1e1e1e; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
 .ac-card { display: flex; flex-direction: column; gap: 8px; padding: 18px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
