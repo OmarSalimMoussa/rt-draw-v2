@@ -12,6 +12,10 @@
 @media (max-width: 480px) { .ac-gh { width: 40px; height: 40px; } .ac-gh svg { width: 34px; height: 34px; } }
 @media (prefers-reduced-motion: reduce) { .ac-gh { transition: none; } }
 .ac-lede { margin: 0; max-width: 60ch; color: var(--muted); }
+/* How it got fast, a line under the lede, its link out to the eval loop's case study. */
+.ac-story { margin: 0; max-width: 60ch; font-size: 15px; color: var(--muted); }
+.ac-story a { color: var(--text); font-weight: 700; white-space: nowrap; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.ac-story a::after { content: " →"; }
 .ac-video { display: block; width: 100%; max-width: 100%; aspect-ratio: 1440 / 996; height: auto; background: #1e1e1e; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
 .ac-card { display: flex; flex-direction: column; gap: 8px; padding: 18px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
 .ac-card h1, .ac-card h2 { margin: 0 0 4px; font-size: 24px; }

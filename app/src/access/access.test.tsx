@@ -68,6 +68,15 @@ describe("the welcome page", () => {
     expect(link.querySelector("svg")).not.toBeNull();
   });
 
+  it("says how it got fast, and links to the eval loop's case study", async () => {
+    await show(<Welcome />);
+    expect($(".ac-story").textContent).toContain("twice as fast without drawing any worse");
+    const link = $<HTMLAnchorElement>(".ac-story a");
+    expect(link.textContent).toBe("Read how we did it");
+    expect(link.href).toBe("https://github.com/OmarSalimMoussa/rt-draw-v2/blob/master/evals/README.md");
+    expect(link.target).toBe("_blank");
+  });
+
   it("has doodles all over its background: the pictures, the logo and scribbles, each turned its own way", async () => {
     await show(<Welcome />);
     const layer = $(".ac-doodles");

@@ -7,6 +7,8 @@ import "./access.css";
 
 /** imagine's code, open on GitHub. */
 const GITHUB = "https://github.com/OmarSalimMoussa/rt-draw-v2";
+/** The case study of the eval loop that made it fast (evals/README.md). */
+const EVALS = `${GITHUB}/blob/master/evals/README.md`;
 
 /** GitHub's mark (Octicons' mark-github, MIT), in the page's ink. */
 function GitHubMark() {
@@ -47,6 +49,10 @@ export function Welcome() {
         </div>
         <p className="ac-lede">
           We built imagine so an idea is on screen as fast as you can say it. Talk and draw, and it sketches whatever you have in mind: a website, a phone app, a desktop app, a whole macOS or Ubuntu desktop, a system diagram, or just a drawing. Say what you want, circle what should change, add screens and click through them. imagine is in early testing with a few people.
+        </p>
+        <p className="ac-story">
+          How did imagine get twice as fast without drawing any worse? It tested itself: a loop tried 112 changes, timed and judged each one, and kept the winners.{" "}
+          <a href={EVALS} target="_blank" rel="noopener">Read how we did it</a>
         </p>
         <video className="ac-video" src="/tutorial.mp4" poster="/tutorial.jpg" controls playsInline preload="metadata" aria-label="A 58-second narrated tour: a bakery site drawn from a typed request, a card circled and changed, a Menu page added and clicked through, then a phone app, a sketch and a system diagram" />
         {state === "done" ? (
