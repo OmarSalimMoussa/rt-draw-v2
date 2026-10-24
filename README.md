@@ -1,4 +1,4 @@
-# rt-draw
+# rt-draw (aka Imagine)
 
 Talk and doodle, and rt-draw sketches what you mean in a few seconds.
 
