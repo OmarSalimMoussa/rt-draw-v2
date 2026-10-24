@@ -6,11 +6,13 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY app/package.json app/package-lock.json app/
 RUN npm ci --prefix app
-# What the page is built from: the app, v2's engine, and what the app's Vite config and timing import.
+# What the page is built from: the app, v2's engine, what the app's Vite config and timing import, and the welcome
+# page's two charts of the eval loop.
 COPY src src
 COPY dev dev
 COPY playgrounds/speech/token-plugin.ts playgrounds/speech/
 COPY evals/bridge/timing.ts evals/bridge/
+COPY evals/case-study/latency-card.svg evals/case-study/quality-card.svg evals/case-study/
 COPY app app
 RUN cd app && npx vite build
 

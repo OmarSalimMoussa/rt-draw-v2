@@ -17,11 +17,9 @@ const SCRIBBLES: [string, string][] = [
 
 type Doodle = { kind: "picture" | "logo" | "scribble"; i: number; x: number; y: number; size: number; turn: number; faint: boolean };
 
-/** Half the page's column of words (.ac's max width), and a margin around it. */
-const WORDS_HALF = 360 + 30;
-
-/** Each doodle at a random spot in its own cell of a grid over a `width`-wide screen, so they spread out without piling up. */
-function scatter(width: number): Doodle[] {
+/** Each doodle at a random spot in its own cell of a grid over a `width`-wide screen, so they spread out without piling
+ *  up; faint within a margin of the page's `column` of words. */
+function scatter(width: number, column: number): Doodle[] {
   const wide = width >= 900;
   const all: Pick<Doodle, "kind" | "i">[] = [
     ...PICTURES.map((_, i) => ({ kind: "picture" as const, i })),
@@ -46,13 +44,14 @@ function scatter(width: number): Doodle[] {
       y: ((row + r(0.15, 0.85)) / rows) * 100,
       size,
       turn: Math.round(d.kind === "scribble" ? r(-180, 180) : r(-40, 40)),
-      faint: !wide || fromMiddle - size / 2 < WORDS_HALF,
+      faint: !wide || fromMiddle - size / 2 < column / 2 + 30,
     };
   });
 }
 
-export function Doodles() {
-  const items = useMemo(() => scatter(innerWidth), []);
+/** `column`: how wide the page's words are (.ac's max width). */
+export function Doodles({ column = 720 }: { column?: number }) {
+  const items = useMemo(() => scatter(innerWidth, column), [column]);
   return (
     <div className="ac-doodles" aria-hidden="true">
       {items.map((d, k) => {

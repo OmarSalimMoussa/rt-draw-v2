@@ -58,20 +58,28 @@ describe("the welcome page", () => {
     for (const kind of ["website", "phone app", "desktop app", "macOS or Ubuntu desktop", "system diagram", "drawing"]) expect($(".ac-lede").textContent).toContain(kind);
   });
 
-  it("links to imagine's code on GitHub beside the headline, in a new tab", async () => {
+  it("links to imagine's code on GitHub from the top row, in a new tab, with a pen note pointing at it", async () => {
     await show(<Welcome />);
-    const link = $<HTMLAnchorElement>(".ac-head a");
+    const link = $<HTMLAnchorElement>(".ac-top a.ac-gh");
     expect(link.href).toBe("https://github.com/OmarSalimMoussa/rt-draw-v2");
     expect(link.target).toBe("_blank");
     expect(link.rel).toContain("noopener");
     expect(link.getAttribute("aria-label")).toBe("imagine's code on GitHub");
-    expect(link.querySelector("svg")).not.toBeNull();
+    expect(link.querySelector(".ic")).not.toBeNull();
+    expect(link.querySelector(".ac-gh-note")?.textContent).toBe("Read the source code");
   });
 
-  it("says how it got fast, and links to the eval loop's case study", async () => {
+  it("says how it got fast, with the eval loop's two charts, and links to its case study", async () => {
     await show(<Welcome />);
-    expect($(".ac-story").textContent).toContain("twice as fast without drawing any worse");
-    const link = $<HTMLAnchorElement>(".ac-story a");
+    expect($(".ac-story h2").textContent).toBe("How imagine got twice as fast");
+    // Honest about whose ideas they were: a person wrote some of the changes the loop tried.
+    expect($(".ac-story p").textContent).toContain("112 changes to imagine, most of them its own ideas");
+    expect($(".ac-story p").textContent).toContain("faster without making its drawings worse");
+    const charts = [...el.querySelectorAll<HTMLImageElement>(".ac-charts img")];
+    // Latency, then quality (a small chart's URL is inlined by Vite, so they're told apart by what they say).
+    expect(charts.map((c) => c.alt.split(":")[0])).toEqual(["Seconds until the first change appears", "How often the judge picked the new version"]);
+    for (const c of charts) expect(c.getAttribute("src")).toBeTruthy();
+    const link = $<HTMLAnchorElement>(".ac-story > a");
     expect(link.textContent).toBe("Read how we did it");
     expect(link.href).toBe("https://github.com/OmarSalimMoussa/rt-draw-v2/blob/master/evals/README.md");
     expect(link.target).toBe("_blank");

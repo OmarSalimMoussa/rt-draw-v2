@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="230" viewBox="0 0 480 230" font-family='system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif' role="img" aria-label="Line chart: median seconds until the first change appears. The original stays between 5.1 and 5.8 seconds; the loop's best version falls from 5.4 to 2.4 seconds over 21 hours.">
+<rect x="0.5" y="0.5" width="479" height="229" rx="8" fill="#fcfcfb" stroke="rgba(11,11,11,0.10)"/>
+<text x="20" y="37.5" font-size="18.8" font-weight="600" fill="#0b0b0b">Seconds until the first change appears</text>
+<g transform="translate(20 67.5)" font-size="15" fill="#52514e"><line x1="0" x2="18" y1="-4" y2="-4" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/><text x="24" y="0">The loop's best version</text><line x1="245" x2="263" y1="-4" y2="-4" stroke="#898781" stroke-width="2" stroke-linecap="round"/><text x="269" y="0">The original</text></g>
+<line x1="55" x2="360" y1="195" y2="195" stroke="#c3c2b7" stroke-width="1"/>
+<text x="47" y="200" font-size="13.8" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">0 s</text>
+<line x1="55" x2="360" y1="165" y2="165" stroke="#e1e0d9" stroke-width="1"/>
+<text x="47" y="170" font-size="13.8" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">2 s</text>
+<line x1="55" x2="360" y1="135" y2="135" stroke="#e1e0d9" stroke-width="1"/>
+<text x="47" y="140" font-size="13.8" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">4 s</text>
+<line x1="55" x2="360" y1="105" y2="105" stroke="#e1e0d9" stroke-width="1"/>
+<text x="47" y="110" font-size="13.8" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">6 s</text>
+<text x="55" y="217.5" font-size="13.8" fill="#898781" text-anchor="middle">0 h</text>
+<text x="108" y="217.5" font-size="13.8" fill="#898781" text-anchor="middle">4 h</text>
+<text x="161.1" y="217.5" font-size="13.8" fill="#898781" text-anchor="middle">8 h</text>
+<text x="214.1" y="217.5" font-size="13.8" fill="#898781" text-anchor="middle">12 h</text>
+<text x="267.2" y="217.5" font-size="13.8" fill="#898781" text-anchor="middle">16 h</text>
+<text x="320.2" y="217.5" font-size="13.8" fill="#898781" text-anchor="middle">20 h</text>
+<polyline points="55,119 66.6,110.3 77.1,116.3 108.6,115.5 126.2,116.7 140.4,115.1 154.6,112.4 274.9,115 316.7,117.4 338.9,108.2" fill="none" stroke="#898781" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="55,114.7 66.6,130.6 77.1,137.6 108.6,135.5 126.2,136.1 140.4,159.9 154.6,152.5 274.9,159.4 316.7,155.4 338.9,158.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="55" cy="119" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="66.6" cy="110.3" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="77.1" cy="116.3" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="108.6" cy="115.5" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="126.2" cy="116.7" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="140.4" cy="115.1" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="154.6" cy="112.4" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="274.9" cy="115" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="316.7" cy="117.4" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/><circle cx="338.9" cy="108.2" r="4" fill="#898781" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="55" cy="114.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="66.6" cy="130.6" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="77.1" cy="137.6" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="108.6" cy="135.5" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="126.2" cy="136.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="140.4" cy="159.9" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="154.6" cy="152.5" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="274.9" cy="159.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="316.7" cy="155.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="338.9" cy="158.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="350.9" y="106.2" font-size="16.3" font-weight="600" fill="#0b0b0b">5.8 s</text><text x="350.9" y="124.5" font-size="13.8" fill="#52514e">the original</text>
+<text x="350.9" y="156.4" font-size="16.3" font-weight="600" fill="#0b0b0b">2.4 s</text><text x="350.9" y="174.7" font-size="13.8" fill="#52514e">the loop's best</text>
+</svg>
