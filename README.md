@@ -20,7 +20,7 @@ it. rt-draw makes that sketch for you while you talk.
 
 ## How it works
 
-An AI model (Claude) does the drawing. It doesn't paint a picture. It writes
+An AI model does the drawing. It doesn't paint a picture. It writes
 short drawing instructions, one line at a time, like "a box here" or "a label
 there". The screen draws each line as soon as it arrives, so the sketch starts
 appearing right away instead of all at once at the end.
