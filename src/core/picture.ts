@@ -68,7 +68,8 @@ export function sanitize(raw: string): { el?: El; refusedAttrs: number; why?: st
   if (!TAGS.includes(tag)) return { refusedAttrs: 0, why: `<${tag}> isn't allowed` };
   const attrs: Record<string, string> = {};
   let refusedAttrs = 0;
-  for (const a of m[2].matchAll(/([a-zA-Z:-]+)\s*=\s*"([^"]*)"/g)) {
+  // Names can have digits: a line's x1, y1, x2 and y2.
+  for (const a of m[2].matchAll(/([a-zA-Z][a-zA-Z0-9:-]*)\s*=\s*"([^"]*)"/g)) {
     const [name, value] = [a[1].toLowerCase(), a[2].trim()];
     const ok =
       (GEOMETRY[tag].includes(name) && (name === "d" ? PATH.test(value) : name === "points" ? POINTS.test(value) : NUM.test(value))) ||
