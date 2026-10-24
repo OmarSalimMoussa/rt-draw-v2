@@ -30,3 +30,13 @@
 .pv-spinner { flex: none; width: 16px; height: 16px; border: 2px solid #dee2e6; border-top-color: #1971c2; border-radius: 50%; animation: pv-spin 0.8s linear infinite; }
 @keyframes pv-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .pv-building .pv-stage, .pv-spinner { animation: none; } }
+/* Compact screens (compact.ts): the bar wraps, its buttons say just "Edit" and "Exit" (and Full screen goes), and the hint goes under them. */
+@media (max-width: 640px), (max-height: 500px) {
+  .pv-bar { flex-wrap: wrap; height: auto; padding: 6px 8px; gap: 6px; }
+  .pv-bar select { min-width: 0; max-width: 45%; }
+  .pv-long, .pv-bar .pv-full { display: none; }
+  .pv-edit { margin-left: auto; }
+  .pv-hint, .pv-status { order: 1; flex-basis: 100%; white-space: normal; font-size: 13px; }
+  .pv-failed { position: static; }
+  .pv-main { padding: 12px 8px 48px; }
+}

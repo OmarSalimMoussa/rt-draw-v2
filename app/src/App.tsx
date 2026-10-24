@@ -27,6 +27,7 @@ import { Canvas, type Tool } from "./canvas/Canvas.tsx";
 import { numberSpots } from "./canvas/marks.ts";
 import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScene, viewShowing } from "./canvas/view.ts";
+import { isCompact, useCompact } from "./compact.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
 import { type Building, Preview } from "./preview/Preview.tsx";
 import { buildEnded, buildJob } from "./preview/build.ts";
@@ -39,6 +40,7 @@ import { SettingsMenu } from "./SettingsMenu.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { StatusBadge } from "./StatusBadge.tsx";
 import { Icon } from "./sketch/Icon.tsx";
+import { Logo } from "./sketch/Logo.tsx";
 import { MarkSketch } from "./sketch/MarkSketch.tsx";
 import { Voice, onInkClock, plainVoiceError, withTyped } from "./speech/voice.ts";
 import { keepWarm } from "./warm.ts";
@@ -78,13 +80,17 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     addEventListener("resize", onResize);
     return () => removeEventListener("resize", onResize);
   }, []);
-  /** The canvas the sidebar and the prompt bar leave uncovered (v1's visibleRect). */
+  /** The canvas the sidebar and the prompt bar leave uncovered (v1's visibleRect). On a phone the sidebar folds away, so it's all the width. */
   const visibleRect = (): Rect => {
     const { width, height } = size();
     const panel = panelRef.current?.getBoundingClientRect();
     const bar = barRef.current?.getBoundingClientRect();
-    return { left: panel ? panel.right + 12 : 0, top: TOOLBAR_HEIGHT, right: width - 12, bottom: (bar?.top ?? height) - 12 };
+    return { left: isCompact() ? 12 : panel ? panel.right + 12 : 0, top: TOOLBAR_HEIGHT, right: width - 12, bottom: (bar?.top ?? height) - 12 };
   };
+  // On a phone the sidebar is a button at the top left, and opens over the board (compact.ts).
+  const compact = useCompact();
+  const [unfolded, setUnfolded] = useState(false);
+  const fold = () => setUnfolded(false);
 
   // Glides: camera(...) ops, and picking a page. A new glide ends the one before (its promise too, so a send waiting on it ends).
   const glide = useRef<{ frame: number; done: () => void }>(undefined);
@@ -464,23 +470,37 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         <SettingsMenu />
       </div>
 
-      <aside className="pg-panel" ref={panelRef}>
-        <Sidebar
-          board={board}
-          busy={busy || board.busy}
-          picked={picked}
-          onPage={(id) => {
-            setPicked(id);
-            const page = board.scene.get(id);
-            if (page) void glideTo(pageTop(page), GLIDE_MS);
-          }}
-          onAll={() => {
-            setPicked(undefined);
-            fitAll();
-          }}
-          onPreview={() => showPreview(null)}
-        />
-      </aside>
+      {compact && (
+        <button type="button" className="pg-fold" aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)} title="Pages and history">
+          <Logo size={24} />
+          <span>{board.meta()?.name ?? "Untitled"}</span>
+        </button>
+      )}
+      {compact && unfolded && <div className="pg-scrim" onClick={fold} />}
+      {(!compact || unfolded) && (
+        <aside className="pg-panel" ref={panelRef}>
+          <Sidebar
+            board={board}
+            busy={busy || board.busy}
+            picked={picked}
+            onPage={(id) => {
+              fold();
+              setPicked(id);
+              const page = board.scene.get(id);
+              if (page) void glideTo(pageTop(page), GLIDE_MS);
+            }}
+            onAll={() => {
+              fold();
+              setPicked(undefined);
+              fitAll();
+            }}
+            onPreview={() => {
+              fold();
+              showPreview(null);
+            }}
+          />
+        </aside>
+      )}
 
       <form
         ref={barRef}

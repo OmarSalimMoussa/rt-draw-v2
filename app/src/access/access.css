@@ -78,7 +78,16 @@
 .fb-menu textarea { font: inherit; font-size: 15px; padding: 6px 8px; border: 2px solid var(--line); border-radius: var(--wobble-s); background: var(--panel); resize: vertical; }
 .fb-menu .ac-go { margin-top: 0; }
 .fb-thanks { margin: 4px 0; font-size: 17px; }
-@media (max-width: 640px) { .fb-go span { display: none; } .fb-go { padding: 0 6px; } }
+/* Compact screens (compact.ts): the button is just its icon, and the words under it wrap to stay on screen. */
+@media (max-width: 640px), (max-height: 500px) {
+  .fb-go span { display: none; }
+  .fb-go { padding: 0 6px; }
+  .fb-beg { font-size: 17px; }
+  .fb-beg svg { width: 80px; height: 60px; margin-right: -14px; }
+  .fb-beg span { width: 140px; margin-right: 24px; white-space: normal; text-align: right; }
+  /* Opened from the button, it would hang off the left of the screen: it opens from the screen's right edge instead. */
+  .st-menu.fb-menu { position: fixed; top: 58px; right: 12px; width: min(300px, calc(100% - 24px)); box-sizing: border-box; }
+}
 
 /* Feedback on the admin's page: a tag on the person, and the notes themselves first in their work. */
 .ad-fb { padding: 0 8px; font-size: 13px; font-weight: 700; background: #ffe066; border: 1.5px solid var(--line); border-radius: 999px; }

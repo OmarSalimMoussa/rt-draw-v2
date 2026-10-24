@@ -65,9 +65,19 @@ export class Mic {
   onChunk?: (pcm: ArrayBuffer) => void;
 
   async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    // The audio first: iPhones only let it start in the tap that turned the mic on, and asking for the mic ends the tap.
     this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-    if (this.ctx.state === "suspended") await this.ctx.resume();
+    const resumed = this.ctx.state === "suspended" ? this.ctx.resume() : undefined;
+    // Awaited below; this only keeps it from going unhandled if the mic is refused first.
+    resumed?.catch(() => {});
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (err) {
+      void this.ctx.close().catch(() => {});
+      this.ctx = undefined;
+      throw err;
+    }
+    await resumed;
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
     await this.ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);

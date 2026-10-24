@@ -4,10 +4,11 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import { act } from "react";
 import { type Root as ReactRoot, createRoot } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runScript } from "../../src/core/ops.ts";
 import { Scene, type SceneJSON } from "../../src/core/scene.ts";
 import type { Board } from "./board/board.ts";
+import { COMPACT } from "./compact.ts";
 import { setElk } from "./board/layout.ts";
 import type { LatencyLog } from "./board/latency.ts";
 import type { Sender } from "./board/sender.ts";
@@ -224,6 +225,25 @@ describe("the preview", () => {
     expect(board.history.looking).toBeUndefined();
   });
 
+  it("offers Full screen only where the browser can do it (iPhones can't)", async () => {
+    const a = project(doc(SITE));
+    history.replaceState(null, "", `/?p=${a}#preview`);
+    const labels = () => [...document.querySelectorAll(".pv-bar button")].map((b) => b.textContent?.trim());
+    Object.defineProperty(document, "fullscreenEnabled", { value: false, configurable: true });
+    try {
+      await openKeepingHash(a);
+      expect(labels()).not.toContain("Full screen");
+      Object.defineProperty(document, "fullscreenEnabled", { value: true, configurable: true });
+      await act(async () => {
+        select().value = "services";
+        select().dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(labels()).toContain("Full screen");
+    } finally {
+      delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
+    }
+  });
+
   it("Edit this page goes back to the board on that page, and the pill returns to the preview there", async () => {
     const a = project(doc(SITE));
     history.replaceState(null, "", `/?p=${a}#preview=services`);
@@ -238,6 +258,43 @@ describe("the preview", () => {
     expect(location.hash).toBe("#preview=services");
     expect(select().value).toBe("services");
     expect(document.querySelector(".pg-back")).toBeNull();
+  });
+});
+
+describe("on a phone", () => {
+  // A phone-sized screen, as the CSS's compact rules see it (happy-dom doesn't evaluate media queries).
+  const real = window.matchMedia;
+  beforeEach(() => {
+    window.matchMedia = ((q: string) => ({ matches: q === COMPACT, media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  });
+  afterEach(() => {
+    window.matchMedia = real;
+  });
+  const fold = () => document.querySelector<HTMLButtonElement>(".pg-fold")!;
+
+  it("the sidebar folds into a button with the project's name; it opens over the board, and going to a page folds it", async () => {
+    const a = project(doc(SITE));
+    await open(a);
+    expect(document.querySelector(".lp-panel")).toBeNull();
+    expect(fold().textContent).toContain(app()!.board.meta()?.name ?? "Untitled");
+    expect(fold().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => fold().click());
+    expect(document.querySelector(".lp-panel")).not.toBeNull();
+    expect(fold().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".lp-tree button")].find((b) => b.textContent?.includes("Services"))!.click());
+    expect(document.querySelector(".lp-panel")).toBeNull();
+    // A tap on the board around it folds it too, and draws nothing there.
+    await act(async () => fold().click());
+    await act(async () => document.querySelector<HTMLElement>(".pg-scrim")!.click());
+    expect(document.querySelector(".lp-panel")).toBeNull();
+    expect(document.querySelector(".pg-scrim")).toBeNull();
+  });
+
+  it("on a big screen the sidebar stays open, with no button to fold it", async () => {
+    window.matchMedia = real;
+    await open(project(doc(SITE)));
+    expect(document.querySelector(".lp-panel")).not.toBeNull();
+    expect(document.querySelector(".pg-fold")).toBeNull();
   });
 });
 

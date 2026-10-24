@@ -140,7 +140,7 @@ export function Preview(p: Props) {
             <span className="pv-spinner" aria-hidden /> Building “{building.label}”…
           </span>
         ) : (
-          <span className="pv-hint">Click buttons, links and pictures. Ones that lead nowhere yet get their page built as you watch.</span>
+          <span className="pv-hint">{matchMedia("(hover: none)").matches ? "Tap" : "Click"} buttons, links and pictures. Ones that lead nowhere yet get their page built as you watch.</span>
         )}
         <button
           type="button"
@@ -149,11 +149,13 @@ export function Preview(p: Props) {
           onClick={() => page && p.onEdit(page.id)}
           title={here ? "Wait for the page to be built" : "Back to the board, fitted to this page"}
         >
-          <Icon name="pencil" /> Edit this page
+          {/* On a phone the bar is short of room: "Edit" and "Exit" (preview.css). */}
+          <Icon name="pencil" /> Edit<span className="pv-long"> this page</span>
         </button>
-        <button type="button" onClick={fullscreen}>Full screen</button>
+        {/* iPhones can't put a page full screen. */}
+        {document.fullscreenEnabled && <button type="button" className="pv-full" onClick={fullscreen}>Full screen</button>}
         <button type="button" className="pv-exit" onClick={p.onExit} title="Close the preview and go back to the editor">
-          <Icon name="close" /> Exit preview
+          <Icon name="close" /> Exit<span className="pv-long"> preview</span>
         </button>
       </header>
       {building?.failed && (

@@ -280,7 +280,11 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 /* At rest an icon shows its first drawing. Hovering its button or link (or an icon marked .ic-boil) flips
    through all three, 0.15s each: the icon boils, like a hand-drawn animation. */
 .ic-frame + .ic-frame { visibility: hidden; }
-:is(button, a, [role="link"]):hover .ic-frame, .ic-boil .ic-frame { animation: ic-boil 0.45s steps(1, end) infinite; }
+.ic-boil .ic-frame { animation: ic-boil 0.45s steps(1, end) infinite; }
+/* Only where there's a real hover: on a touch screen a tapped button would keep it until the next tap elsewhere. */
+@media (hover: hover) {
+  :is(button, a, [role="link"]):hover .ic-frame { animation: ic-boil 0.45s steps(1, end) infinite; }
+}
 :is(button, a, [role="link"]):hover .ic-frame:nth-child(2), .ic-boil .ic-frame:nth-child(2) { animation-delay: -0.3s; }
 :is(button, a, [role="link"]):hover .ic-frame:nth-child(3), .ic-boil .ic-frame:nth-child(3) { animation-delay: -0.15s; }
 @keyframes ic-boil { 0% { visibility: visible; } 33.33%, 100% { visibility: hidden; } }
@@ -292,18 +296,23 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
    Drawn icons also flip between their own redrawings (Icon.tsx). In the app, and in the sites it draws, in the
    preview and on the canvas. (Things placed absolutely or fixed, like the lab's buttons, the preview's minimized
    tab and the pictures behind a site's blocks, keep their place and move by translates instead: made relative,
-   a picture behind would drop into the page with no size, out from under the pointer, and flicker.) */
-:is(button:not(:disabled), a[href], [role="button"], [role="link"], [data-click], select, summary, label:has(> input)):not(.lab-btn, .pv-dock, .wf-behind):hover,
-.wf-place :is(.wf-btn, .wf-links > span, .wf-img, .wf-icon):not(.wf-behind):hover {
-  position: relative;
-  animation: boil 0.45s steps(1, end) infinite;
+   a picture behind would drop into the page with no size, out from under the pointer, and flicker.) Only where
+   there's a real hover: on a touch screen a tapped button would keep boiling, and a placed one would jump. */
+@media (hover: hover) {
+  :is(button:not(:disabled), a[href], [role="button"], [role="link"], [data-click], select, summary, label:has(> input)):not(.lab-btn, .pv-dock, .wf-behind, .pg-fold):hover,
+  .wf-place :is(.wf-btn, .wf-links > span, .wf-img, .wf-icon):not(.wf-behind):hover {
+    position: relative;
+    animation: boil 0.45s steps(1, end) infinite;
+  }
 }
 @keyframes boil {
   0% { left: 0.5px; top: 0; }
   33.33% { left: -0.5px; top: 0.5px; }
   66.66% { left: 0; top: -0.5px; }
 }
-:is(.lab-btn, .pv-dock):not(:disabled):hover, .wf-place .wf-behind:hover, .wf-behind[data-click]:hover { animation: boil-placed 0.45s steps(1, end) infinite; }
+@media (hover: hover) {
+  :is(.lab-btn, .pv-dock, .pg-fold):not(:disabled):hover, .wf-place .wf-behind:hover, .wf-behind[data-click]:hover { animation: boil-placed 0.45s steps(1, end) infinite; }
+}
 @keyframes boil-placed {
   0% { translate: 0.5px 0; }
   33.33% { translate: -0.5px 0.5px; }
@@ -380,3 +389,42 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
   border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.15);
 }
 .pg-back span { color: var(--muted); }
+
+/* ---- Touch screens ---- */
+/* A double tap doesn't zoom the page; pinching still does (the board pinches itself). A long press on the board draws, with no callout. */
+html { touch-action: manipulation; }
+.cv { -webkit-user-select: none; -webkit-touch-callout: none; }
+@media (pointer: coarse) {
+  /* iPhones zoom into any text field smaller than 16px when it's tapped. */
+  input, textarea, select { font-size: max(16px, 1em) !important; }
+}
+
+/* ---- Compact: phones and small windows (compact.ts has the same query). The sidebar folds into a button at the
+   top left and opens over the board; the status, the tip and the bar fit the screen. ---- */
+@media (max-width: 640px), (max-height: 500px) {
+  .pg-fold {
+    position: absolute; top: 12px; left: 12px; z-index: 7; display: flex; align-items: center; gap: 8px; box-sizing: border-box;
+    height: 38px; max-width: calc(100% - 212px); padding: 0 10px 0 6px; font-size: 17px; font-weight: 700; background: var(--panel);
+    border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12);
+  }
+  .pg-fold span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pg-fold::after { content: "▾"; color: var(--muted); }
+  .pg-fold[aria-expanded="true"]::after { content: "▴"; }
+  .pg-scrim { position: absolute; inset: 0; z-index: 6; background: rgb(30 30 30 / 0.12); }
+  .pg-panel { top: 58px; z-index: 7; box-sizing: border-box; width: min(320px, calc(100% - 24px)); max-height: calc(100% - 70px); }
+  .pg-topline { top: 58px; max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; }
+  .pg-state { gap: 8px; padding: 6px 14px; font-size: 17px; }
+  .pg-state svg { width: 20px; height: 20px; }
+  .pg-back { padding: 5px 12px; font-size: 15px; }
+  /* Under the Feedback button's nudge (access.css), which a tester sees at first too. */
+  .pg-hint { top: 156px; box-sizing: border-box; width: max-content; max-width: calc(100% - 24px); white-space: normal; font-size: 14px; border-radius: var(--wobble-s); }
+  .pg-bar { bottom: 56px; width: calc(100% - 16px); padding: 6px; }
+  .pg-bar textarea { padding: 6px 8px; }
+  .pg-mic { width: 44px; }
+  .pg-send, .pg-stop { min-width: 64px; }
+  .cv-zoom { left: 8px; bottom: 8px; }
+}
+/* A phone on its side: the bar goes down beside the zoom controls, to leave the board some height. */
+@media (max-height: 500px) {
+  .pg-bar { left: auto; right: 8px; bottom: 8px; transform: none; width: calc(100% - 232px); }
+}
