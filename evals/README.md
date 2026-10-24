@@ -133,30 +133,29 @@ From here on, the details. Every step below is plain code under `evals/` except 
 goes through one gateway with a hard cap.
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart TD
   subgraph setup["Once, before the loop"]
-    DR["Simulated users<br/>Sonnet drives rt-draw from screenshots"] --> BANK[("The bank<br/>445 recorded fork points")]
-    BANK --> B1["Benchmark B1<br/>62 frozen requests, 30 held out"]
+    direction LR
+    DR["Simulated users: Sonnet drives rt-draw from screenshots"] --> BANK[("The bank: 445 recorded fork points")] --> B1["Benchmark B1: 62 frozen requests, 30 held out"]
     LAB["A person labels ~90 pairs"] --> CAL["Judge calibrated"]
   end
   subgraph rounds["Each round: 64 in 22 hours"]
-    AN["Analyst and critic read digests:<br/>where the champion fails or is slow"] --> CARDS["Up to 3 cards"]
-    PQ["A person's queued cards<br/>23 of 112"] --> CARDS
-    CARDS --> ENG["Engineer agent edits src/core<br/>in its own worktree"]
-    ENG --> G0["G0 free gates: allowed files,<br/>no new magic numbers, typecheck"]
-    G0 --> G1["G1 diffscan, 0 calls:<br/>which banked cases change?"]
-    G1 --> AB["A/B on affected cases: same moment,<br/>live calls, timed and judged in looks of 16 to 80"]
+    AN["Analyst and critic read digests of where the champion fails or is slow"] --> CARDS["Up to 3 cards"]
+    PQ["A person's queued cards: 23 of 112"] --> CARDS
+    CARDS --> ENG["Engineer agent edits src/core in its own worktree"]
+    ENG --> G0["G0 free gates: allowed files, no new magic numbers, typecheck"]
+    G0 --> G1["G1 diffscan at 0 calls: which banked cases change?"]
+    G1 --> AB["A/B on affected cases: same moment, live calls, timed and judged in looks of 16 to 80"]
     AB --> V{"Verdict"}
-    V -->|clearly faster or better,<br/>nothing worse| KEEP["Keep: commit to loop/champion"]
-    V -->|no clear win| REV["Revert: patch saved to tried/"]
-    V -->|costs more, the look,<br/>a model switch| OWN["Owner list"]
-    V -->|unfair measurement| VOID["Void"]
+    V -->|"faster or better, nothing worse"| KEEP["Keep: commit to loop/champion"]
+    V -->|"no clear win"| REV["Revert: patch saved to tried/"]
+    V -->|"costs more, the look, a model switch"| OWN["Owner list"]
+    V -->|"unfair measurement"| VOID["Void"]
   end
-  KEEP --> CK["Checkpoint every 2 keeps:<br/>champion against the original on B1"]
+  setup --> rounds
+  KEEP --> CK["Checkpoint every 2 keeps: champion against the original on B1"]
   CK --> PG["eval/history and the progress page"]
-  BANK -.-> G1
-  BANK -.-> AB
-  CAL -.-> AB
 ```
 
 ### Simulated users and the bank
