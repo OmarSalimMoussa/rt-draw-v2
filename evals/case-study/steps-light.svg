@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="400" viewBox="0 0 760 400" font-family='system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif' role="img" aria-label="Line chart: time to the first change and time to done, as a share of the original's, fall from about 100% to under 50% in steps marked A to E.">
+<rect x="0.5" y="0.5" width="759" height="399" rx="8" fill="#fcfcfb" stroke="rgba(11,11,11,0.10)"/>
+<text x="20" y="30" font-size="15" font-weight="600" fill="#0b0b0b">Time as a share of the original's, request by request</text>
+<text x="20" y="50" font-size="12" fill="#52514e">Median of paired ratios on the 62 benchmark requests at each checkpoint; letters mark the key changes</text>
+<g transform="translate(20 72)" font-size="12" fill="#52514e"><line x1="0" x2="18" y1="-4" y2="-4" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/><text x="24" y="0">first change on screen</text><line x1="176" x2="194" y1="-4" y2="-4" stroke="#eb6834" stroke-width="2" stroke-linecap="round"/><text x="200" y="0">sketch finished</text></g>
+<line x1="52" x2="736" y1="348" y2="348" stroke="#c3c2b7" stroke-width="1"/>
+<text x="44" y="352" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">0%</text>
+<line x1="52" x2="736" y1="295.5" y2="295.5" stroke="#e1e0d9" stroke-width="1"/>
+<text x="44" y="299.5" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">25%</text>
+<line x1="52" x2="736" y1="243" y2="243" stroke="#e1e0d9" stroke-width="1"/>
+<text x="44" y="247" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">50%</text>
+<line x1="52" x2="736" y1="190.5" y2="190.5" stroke="#e1e0d9" stroke-width="1"/>
+<text x="44" y="194.5" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">75%</text>
+<line x1="52" x2="736" y1="138" y2="138" stroke="#e1e0d9" stroke-width="1"/>
+<text x="44" y="142" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">100%</text>
+<text x="52" y="366" font-size="11" fill="#898781" text-anchor="middle">0 h</text>
+<text x="171" y="366" font-size="11" fill="#898781" text-anchor="middle">4 h</text>
+<text x="289.9" y="366" font-size="11" fill="#898781" text-anchor="middle">8 h</text>
+<text x="408.9" y="366" font-size="11" fill="#898781" text-anchor="middle">12 h</text>
+<text x="527.8" y="366" font-size="11" fill="#898781" text-anchor="middle">16 h</text>
+<text x="646.8" y="366" font-size="11" fill="#898781" text-anchor="middle">20 h</text>
+<text x="394" y="390" font-size="11" fill="#898781" text-anchor="middle">hours since the loop started (19 October 2026, 03:47 UTC)</text>
+<line x1="65.3" x2="65.3" y1="121.8" y2="348" stroke="#c3c2b7" stroke-width="1"/><circle cx="65.3" cy="112.8" r="9" fill="#fcfcfb" stroke="#52514e" stroke-width="1"/><text x="65.3" y="116.8" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">A</text>
+<line x1="89.2" x2="89.2" y1="121.8" y2="348" stroke="#c3c2b7" stroke-width="1"/><circle cx="89.2" cy="112.8" r="9" fill="#fcfcfb" stroke="#52514e" stroke-width="1"/><text x="89.2" y="116.8" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">B</text>
+<line x1="226.4" x2="226.4" y1="121.8" y2="348" stroke="#c3c2b7" stroke-width="1"/><circle cx="226.4" cy="112.8" r="9" fill="#fcfcfb" stroke="#52514e" stroke-width="1"/><text x="226.4" y="116.8" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">C</text>
+<line x1="245.3" x2="245.3" y1="142.8" y2="348" stroke="#c3c2b7" stroke-width="1"/><circle cx="245.3" cy="133.8" r="9" fill="#fcfcfb" stroke="#52514e" stroke-width="1"/><text x="245.3" y="137.8" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">D</text>
+<line x1="630.8" x2="630.8" y1="121.8" y2="348" stroke="#c3c2b7" stroke-width="1"/><circle cx="630.8" cy="112.8" r="9" fill="#fcfcfb" stroke="#52514e" stroke-width="1"/><text x="630.8" y="116.8" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">E</text>
+<polyline points="52,130.3 78,177.2 101.5,188.4 172.3,182 211.6,190.5 243.6,226 275.4,223.2 545.3,232.6 638.8,234.8 688.6,234.3" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="52,131.1 78,189.3 101.5,198 172.3,189.3 211.6,189.9 243.6,246.1 275.4,248.6 545.3,248.4 638.8,247.3 688.6,249.3" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="52" cy="130.3" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="78" cy="177.2" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="101.5" cy="188.4" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="172.3" cy="182" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="211.6" cy="190.5" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="243.6" cy="226" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="275.4" cy="223.2" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="545.3" cy="232.6" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="638.8" cy="234.8" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/><circle cx="688.6" cy="234.3" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="52" cy="131.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="78" cy="189.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="101.5" cy="198" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="172.3" cy="189.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="211.6" cy="189.9" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="243.6" cy="246.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="275.4" cy="248.6" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="545.3" cy="248.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="638.8" cy="247.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/><circle cx="688.6" cy="249.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+</svg>

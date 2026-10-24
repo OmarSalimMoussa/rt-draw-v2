@@ -1,4 +1,4 @@
-// The fake API for a dry run (evals/README.md, "Rehearsing at 0 calls"): every role the chain
+// The fake API for a dry run (evals/RUNBOOK.md, "Rehearsing at 0 calls"): every role the chain
 // calls (product draw, resolver and pictures, driver, judges, failure analyst, analyst, probe)
 // answered with canned replies by its system prompt (fake-api.ts --replies), on the real median
 // timings of v2's logged calls (CONTEXT, §6.1) per role (--latency), so the bank, checkpoint,

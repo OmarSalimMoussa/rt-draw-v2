@@ -1,132 +1,305 @@
-# The eval loop
+# How rt-draw got twice as fast by testing itself
 
-An unattended loop that makes rt-draw better at what the owner wants: the highest fidelity at the lowest latency. Each
-epoch an analyst and a critic propose up to 3 changes (knob values, prompt variants, code in `src/core/`), each one is
-measured against the champion on banked sends, and a change that wins is kept on `loop/champion`. The owner merges the
-champion into his master when he chooses. The spec is `evalprep/work/spec/SPEC.md`; §11 is the first-run plan below.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="case-study/latency-dark.svg">
+  <img alt="Line chart: median seconds until the first change appears. The original stays between 5.1 and 5.8 seconds; the loop's best version falls from 5.4 to 2.4 seconds over 21 hours." src="case-study/latency-light.svg" width="760">
+</picture>
 
-## Why it's built this way: v1 cost too much
+In 22 hours of testing itself, rt-draw got about twice as fast. The wait for the first change on screen fell from 5.8
+to 2.4 seconds, and the wait for a finished sketch from 7.1 to 3.9 seconds. A program tried 112 changes, timed and
+judged each one against the best version so far, and kept the winners. No person timed a request or judged a drawing:
+an AI judge, checked against a person's judgment first, rated the drawings as good as before.
 
-- v1 worked (126–13–11 over 150 pairs, speech end → change 4.0 → 1.5 s), but each decision took ~2 h and 25–33% of a
-  five-hour window, and both accounts' windows were gone in one day.
-- Its coordinator was an Opus session that re-read ~375k tokens a request; here it's a script (`loop/run.ts`).
-- Every Claude process wrote the 1-hour cache (half its use); here every call is 5-minute cached and metered.
-- It re-ran whole sessions for every change; here forks are banked once and only the cases a change affects are paid.
-- No step makes a real call without `--cap n`: the gateway refuses call n+1, so a bug stops at the cap.
+## The short version
 
-## Running it
+- **The goal.** You talk and doodle, and rt-draw draws. Every second you wait makes it feel less like sketching with
+  someone, so the goal was simple: faster, without drawing worse.
+- **The loop.** A program that keeps trying small changes to rt-draw. It tests each one against the best version so
+  far on hundreds of recorded requests, and keeps it only if it's faster or better and nothing got worse.
+- **No person picking winners.** Ideas came from two places: the loop's own AI critic, which wrote 89 of the 112, and a
+  queue a person could add to, which supplied 23. Either way, the loop built each change, measured it and decided. It
+  hands a person only the calls that aren't its to make: a change that costs more money or changes how rt-draw looks.
+- **The result.** 112 changes tried in 64 rounds: 7 kept by the loop, 9 handed to a person (who adopted 3), and 96
+  thrown away.
 
-The step-by-step commands with caps, costs and times, laptop and PGX, are in `evals/RUNBOOK.md`.
+## How it works, simply
 
-From the loop's clone (`~/rt-eval/repo`) or the owner's checkout:
+The loop is a very patient tester that never gets tired:
 
-```bash
-rte() { node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@"; }   # direct runs
-bash evals/loop/launch.sh <command> [flags]   # supervised: a systemd unit holding the sleep inhibitor (laptop), tmux window `loop` (PGX)
-bash evals/loop/launch.sh stop
+1. **Record once.** AI "users" try rt-draw: they look at the screen, talk, scribble and press Enter, like people do.
+   Each moment they press Enter is saved, with what they meant, so it can be replayed later. 445 moments were saved.
+2. **Suggest a change.** An AI reads where rt-draw is slow or gets things wrong, and suggests up to three small
+   changes: a setting, a different instruction to the drawing model, or a bit of code. A person can queue ideas too.
+3. **Test it fairly.** The best version so far and the changed one get the same recorded requests at the same moment.
+   A stopwatch times both. A judge looks at both drawings side by side, without knowing which is which.
+4. **Decide.** Clearly faster or better, and nothing worse? Keep it. No clear win? Throw it away and remember not to
+   try it again. Costs more money or changes the look? Ask a person.
+5. **Check the big picture.** After every couple of kept changes, the best version is compared with the original on a
+   fixed set of 62 requests. That's the chart above.
+
+Speed is easy to measure; quality isn't. The loop trusts its judge because a person first labeled about 90 pairs of
+drawings. The judge picked the same drawing as the person on 81% of the pairs where the person had a preference, close
+to how often the person agreed with themselves when shown a pair again (88%).
+
+## What it found
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="case-study/steps-dark.svg">
+  <img alt="Line chart: time to the first change and time to done, as a share of the original's, fall from about 100% to under 50% in steps marked A to E." src="case-study/steps-light.svg" width="760">
+</picture>
+
+Most of the wait came before anything was drawn. To draw, rt-draw first works out what "this" or "that button" points
+to (resolving the references), then asks the drawing model. The biggest wins cut that first step.
+
+| | Change | Idea from | Measured when decided | Kept by |
+| --- | --- | --- | --- | --- |
+| A | The resolver answers without thinking first (it thought on 50 of 51 calls) | a person | first change ×0.66, done ×0.71, cost per request ×1.29 | a person, since it costs more |
+| B | The drawing prompt asks for each shape before its text and its picture | the loop | first change ×0.93, done ×0.96 | the loop |
+| C | Draw on a guess: Jev guesses the references in about 0.1 s and drawing starts at once; the drawing is kept only if the resolver agrees | a person | first change ×0.90 | the loop |
+| D | Jev alone resolves, with no Claude resolver call; the shapes it's unsure of go to the drawing model as hints | the loop | first change ×0.96, then ×0.94 when decided again with follow-up sends | the loop |
+| E | Smaller doodles: a shorter picture syntax (every element outlined unless it says otherwise), then at most 16, then 12 paths per doodle | a person, then the loop twice | done ×0.97, ×0.97, ×0.95 | a person for the first two (they touch the look), the loop for the last |
+| F | On "add something" requests, a reminder that every shape needs a description of 6 words or more, since a shorter one is thrown away | the loop | quality: won clearly (Z 2.7 over 80 requests) | the loop |
+
+Jev is TypeSafe AI's decision model: a yes or no, with a probability, for each candidate shape in one call of about
+0.1 s. C and D rely on switches a person built into rt-draw that week, off by default, and each was turned on only once
+the loop had measured it. The two biggest single steps, A and C, were a person's ideas that the loop measured and
+confirmed; B, D, F and two of E's three steps were the loop's own.
+
+Each "×" is the median of paired ratios on the requests the change affected, so they don't simply multiply. Measured
+together at the last checkpoint: first change ×0.47, done ×0.54.
+
+The kept changes live on the `loop/champion` branch, all in `src/core/`: `tuning.ts` (the settings), `prompts.ts`,
+`draw.ts`, `resolve.ts` and `picture.ts`.
+
+### What it threw away
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="case-study/timeline-dark.svg">
+  <img alt="Dot timeline of 112 changes the loop tried over 22 hours, by area: 7 kept, 9 handed to the owner, 83 reverted, 13 void." src="case-study/timeline-light.svg" width="760">
+</picture>
+
+Most ideas don't work, and the loop is built for that. A few it rejected:
+
+- **Drawing without thinking.** 10% faster to the first change, but the judge preferred the original 37 times to 22
+  (21 ties). Reverted: the speed cost fidelity.
+- **Sending every drawing call twice** and keeping whichever streams first. No faster at the median (×0.999) and 1.56
+  times the cost. Handed to the owner, who didn't adopt it.
+- **Changes too rare to measure.** A change that affects fewer than 32 of the recorded requests can't be judged fairly,
+  so it's reverted and listed for a person.
+- **13 void decisions.** The measurement itself was unfair, for example when one side started on cold processes 14% of
+  the time and the other never did. A void is never a verdict on the change; the loop re-runs or drops it.
+
+The loop stopped for 9 hours in the middle (its proposers ran out of cards to try) until a person restarted it.
+
+## Did quality hold?
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="case-study/quality-dark.svg">
+  <img alt="Line chart with an interval band: the judge preferred the loop's version on 45% to 56% of comparisons; every 90% interval includes 50%, a tie." src="case-study/quality-light.svg" width="760">
+</picture>
+
+At every checkpoint, the judge compared the best version with the original on the same 62 requests. 50% is a tie.
+Every point's 90% band includes 50%: no measurable loss, and no measurable gain overall either, while the time halved.
+
+30 of the 62 requests were never shown to the loop's proposers, to catch a change that only works on what it was tuned
+on. At the last checkpoint, those scored 45% (90% band 33–56%) and the other 32 scored 53%. A second judge, for how
+clean the page looks, scored 56% (47–63%). The per-request cost went down a little: $0.0158 against the original's
+$0.0173 at list prices.
+
+<details>
+<summary>The numbers behind the charts</summary>
+
+| Checkpoint | Hours | First change, original | First change, best | Done, original | Done, best | Paired ratio, first change | Paired ratio, done | Judge's share (90% band) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| ck-01 | 0.0 | 5.07 s | 5.35 s | 6.39 s | 6.41 s | 1.03 | 1.04 | 49% (41–58) |
+| ck-02 | 0.9 | 5.64 s | 4.29 s | 6.02 s | 5.00 s | 0.76 | 0.81 | 52% (45–59) |
+| ck-03 | 1.7 | 5.25 s | 3.83 s | 6.71 s | 4.81 s | 0.71 | 0.76 | 53% (45–61) |
+| ck-04 | 4.0 | 5.30 s | 3.96 s | 6.04 s | 5.22 s | 0.76 | 0.79 | 56% (49–64) |
+| ck-05 | 5.4 | 5.22 s | 3.93 s | 7.20 s | 5.13 s | 0.75 | 0.75 | 45% (38–54) |
+| ck-06 | 6.4 | 5.33 s | 2.34 s | 6.33 s | 3.44 s | 0.49 | 0.58 | 56% (47–63) |
+| ck-07 | 7.5 | 5.51 s | 2.83 s | 6.89 s | 4.11 s | 0.47 | 0.59 | 56% (48–65) |
+| ck-08 | 16.6 | 5.33 s | 2.38 s | 6.68 s | 3.60 s | 0.47 | 0.55 | 52% (45–59) |
+| ck-09 | 19.7 | 5.17 s | 2.64 s | 6.83 s | 3.56 s | 0.48 | 0.54 | 54% (47–61) |
+| ck-10 | 21.4 | 5.79 s | 2.44 s | 7.11 s | 3.89 s | 0.47 | 0.54 | 49% (41–57) |
+
+Times are medians over the 62 requests. Hour 0 is 19 October 2026, 03:47 UTC. Checkpoint ck-00, a day earlier, used
+an earlier judge and is left out.
+
+</details>
+
+## How the harness is built
+
+From here on, the details. Every step below is plain code under `evals/` except the model calls, and every model call
+goes through one gateway with a hard cap.
+
+```mermaid
+flowchart TD
+  subgraph setup["Once, before the loop"]
+    DR["Simulated users<br/>Sonnet drives rt-draw from screenshots"] --> BANK[("The bank<br/>445 recorded fork points")]
+    BANK --> B1["Benchmark B1<br/>62 frozen requests, 30 held out"]
+    LAB["A person labels ~90 pairs"] --> CAL["Judge calibrated"]
+  end
+  subgraph rounds["Each round: 64 in 22 hours"]
+    AN["Analyst and critic read digests:<br/>where the champion fails or is slow"] --> CARDS["Up to 3 cards"]
+    PQ["A person's queued cards<br/>23 of 112"] --> CARDS
+    CARDS --> ENG["Engineer agent edits src/core<br/>in its own worktree"]
+    ENG --> G0["G0 free gates: allowed files,<br/>no new magic numbers, typecheck"]
+    G0 --> G1["G1 diffscan, 0 calls:<br/>which banked cases change?"]
+    G1 --> AB["A/B on affected cases: same moment,<br/>live calls, timed and judged in looks of 16 to 80"]
+    AB --> V{"Verdict"}
+    V -->|clearly faster or better,<br/>nothing worse| KEEP["Keep: commit to loop/champion"]
+    V -->|no clear win| REV["Revert: patch saved to tried/"]
+    V -->|costs more, the look,<br/>a model switch| OWN["Owner list"]
+    V -->|unfair measurement| VOID["Void"]
+  end
+  KEEP --> CK["Checkpoint every 2 keeps:<br/>champion against the original on B1"]
+  CK --> PG["eval/history and the progress page"]
+  BANK -.-> G1
+  BANK -.-> AB
+  CAL -.-> AB
 ```
 
-Tokens: `~/.config/rt-eval/tokens.env` (chmod 600, outside every repo) with `RT_EVAL_TOKEN_1..3=…`, three loop
-accounts. `run.ts` reads it itself and never prints a token; one or two tokens work (a warning; the smoke skips U2).
-`--dev-token` uses the dev plugin's own token from `~/projects/rt-draw-v2/.env`, only with `--cap 60` or less, and never for `loop` (its critic and engineers run outside the cap).
+### Simulated users and the bank
 
-| Step (§11) | Command | Calls |
-|---|---|---|
-| all checks | `for c in evals/checks/t*.mjs; do node --import ./evals/loop/node-hooks.mjs "$c" \|\| break; done` | 0 |
-| clone, tag, champion, history | `rte init --from ~/projects/rt-draw-v2` (then `cd ~/rt-eval/repo`) | 0 |
-| readiness | `rte ready --stub --mock-api` | 0 |
-| concurrency knee | `bash evals/loop/launch.sh ladder --max 4` (`--max 12` on the PGX) | 0 |
-| smoke | `bash evals/loop/launch.sh smoke --cap 50` (§11's 40 is what a full smoke makes: 39–41 in the rehearsal) | ≤ 50 |
-| fixture doodles | `bash evals/loop/launch.sh bake --cap 36`, review, commit only `evals/fixtures/pictures.json` on master, `rte init --refresh && rte ready --stub --mock-api` (a new harness tag needs its own readiness before the loop) | ≤ 36 |
-| driver probe | `bash evals/loop/launch.sh probe --cap 10` (§2.8; bank build and refreshes run it themselves when `evals/core/driver.ts` or the served driver model changed; a failed one stops banking: read `probe.json`, then fix the driver or `rte probe --accept`) | 8 |
-| bank | `bash evals/loop/launch.sh bank build --tuning 32 --heldout-gate 8 --heldout-chart 8 --cap 1900` (a bank that fails §2.3 stops every later step: build again with more sessions, only the new ones run, or `rte bank accept`) | ~1,520 |
-| shared A/A, yardstick | `rte aa --shared --cases 16`, `rte bench freeze` | 0 |
-| checkpoint 0 | `bash evals/loop/launch.sh checkpoint --zero --cap 750` | ~600 |
-| calibration | `bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200`, label at `/evals/label/`, `rte calib --check` (else `calib --check --variant 2 --cap 150`) | ~200 |
-| first epochs, watched | `bash evals/loop/launch.sh loop --epochs 3 --seed-cards evals/optimizer/seed-cards.json` (`--quality-only` on the laptop) | per epoch |
-| nights | `bash evals/loop/launch.sh loop --night-windows 0.5` the first night, then without the flag (1.2) | night cap |
+A **driver** is Sonnet playing a user from the screen alone (`core/driver.ts`, `loop/drive.ts`). It gets a persona
+(`core/personas.ts`): a first-timer who knows only the store-page blurb and a loose memory of a site they want, an
+explorer, or a "breaker" who knows how the product works, as its public docs would say. A frozen scenario table (`core/scenarios.ts`) gives
+each send an ask type (add, change, remove, move...) and a beat, a twist like an undo or a vague "make it pop". Each
+turn the driver sees two screenshots, rates the last result, **writes down what it means before pressing Enter**, then
+talks and draws. `core/synth.ts` turns its steps ("circle that box") into what a person produces: timed words and
+messy ink on one clock, so the product gets exactly what it would get from a real user.
 
-Also: `rte status` (slots, cap, cwd, node, launched, inhibitor), `rte decide <branch> --cap n` (one branch through the
-funnel), `rte checkpoint --cap n`, `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`,
-`rte gc --trees`, `rte loop --resume` (a stale lock resumes by itself).
+Every Enter is a **fork point**: the scene before, the words, the ink, the screenshot and the stated intent
+(`loop/bank.ts`). The bank records them once, on the champion of the day, and every decision reuses them, so no
+decision pays for a driver. Cases are split three ways: **tuning** (the only ones the proposers ever read),
+**H-gate** (held out, a veto for keeps) and **H-chart** (held out, half of benchmark B1, which the charts above use).
 
-A loop stops on §6.7's rules (night cap, weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not
-passed, a sync conflict, a blocked request), pauses on others (all slots past 0.90 until the earliest reset, overloads, disk,
-battery) and writes each to the owner list. Mornings: `/evals/progress/`, `owner-list.md`, `budget.jsonl`.
+### Proposing a change
 
-## Rehearsing at 0 calls
+Each round, the **analyst** (one call) reads digests of at most 40k tokens built by frozen code from the bank and the
+runs (`optimizer/digest.ts`): where the champion itself fails first, then slow traces. The **critic** (a read-only
+Agent SDK session) turns that into up to three **cards**, each one change with its goal (latency, fidelity or craft),
+what it predicts and its risk. An **engineer** (an Agent SDK session) implements a card in its own git worktree. A
+candidate may only change `src/core/`, minus speech; every new number in it must become a named knob in `tuning.ts`.
+A person's cards go through the same queue: the seed cards (`optimizer/seed-cards.json`) start the first rounds, and
+`--seed-cards` adds more to a running loop.
 
-The whole chain, small, on a fake API that answers every role (`evals/mock/dry.ts`: canned replies by system prompt and
-prompt, v2's median call timings per role, the resolver's thinking-off pilot, three fake tokens). Run from a new
-`RT_EVAL_HOME` outside any repo, never `~/rt-eval`; it takes about an hour on the laptop and makes no real call
-(`HTTPS_PROXY` points at a closed port). The judge always ties, so verdicts come from latency alone.
+### The funnel: free first, paid last
 
-```bash
-export RT_EVAL_HOME=/tmp/rt-eval-dry      # new and empty
-rte init --from ~/projects/rt-draw-v2 && cd $RT_EVAL_HOME/repo
-rte ready --stub --mock-api
-node --import ./evals/loop/node-hooks.mjs evals/mock/dry.ts --port 5400 &   # READY http://127.0.0.1:5400
-F="--tokens $RT_EVAL_HOME/dry/tokens.env --mock-api http://127.0.0.1:5400"
-bash evals/loop/launch.sh ladder --max 4 --latency $RT_EVAL_HOME/dry/latency.jsonl
-bash evals/loop/launch.sh smoke --cap 50 $F
-bash evals/loop/launch.sh bake --cap 36 $F
-cp $RT_EVAL_HOME/out/pictures.json evals/fixtures/ && git commit -qm "dry: baked pictures" -- evals/fixtures/pictures.json   # in the clone only
-rte init --refresh && rte ready --stub --mock-api
-bash evals/loop/launch.sh probe --cap 10 $F; rte probe --accept   # FAILS: one canned reply per message can't tell good from bad
-bash evals/loop/launch.sh bank build --tuning 8 --heldout-gate 2 --heldout-chart 2 --cap 450 $F   # REFUSED by the §2.3 gates: a 56-send bank is too small, as it should be
-rte bank accept                                    # used anyway, for the rehearsal only
-rte aa --shared --cases 12
-rte bench freeze --heldout 8 --tuning 8            # smaller than B1's 32 + 32, for the rehearsal only
-bash evals/loop/launch.sh checkpoint --zero --cap 200 $F
-bash evals/loop/launch.sh calib --contrast draw.model=0 --cap 200 $F
-rte calib --fake-labels --mock-api http://127.0.0.1:5400; rte calib --check   # the judge's own verdicts (ties) as labels: "more" (on the fake API the loop waives calibration)
-bash evals/loop/launch.sh loop --epochs 1 --seed-cards evals/optimizer/seed-cards.json $F
-```
+1. **G0, free gates** (`optimizer/gates.ts`, 0 calls): allowed paths, the magic-number lint, no new network or speech,
+   `tsc` in the candidate's tree, and every banked scene through the candidate's `Scene.fromJSON` when `scene.ts`
+   changed. A diff in the measuring side or the editor's look goes to the owner list, never back to an engineer.
+2. **G1, the diffscan** (`loop/diffscan.ts`, 0 calls): both versions run every banked case with the bank's recorded
+   replies served instantly. A case is affected when any request, the scene after or the rendered stage differs; only
+   affected cases are ever paid for. The scan also classifies the change: N (no effect), S (speed only, from a timed
+   replay), Q (a request differs), R (a render differs) or D (dialogue: state only a later send reads).
+3. **G2, the A/B** (`loop/ab.ts`): both versions start from the same fork point on freshly reloaded pages and get the
+   case at the same moment, in a seeded, alternating order, with live model calls. Every case is timed (first change
+   and done) and, for quality cards, judged.
+4. **G3 and G4**: a keep must also hold on the affected H-gate cases, and a dialogue change on continuation sends.
 
-Then `./node_modules/.bin/vite --config evals/pages.vite.config.ts --port 5181` and `/evals/progress/` shows the
-rehearsal's history. The fake API's `GET /_log` lists every request it answered, with its role.
+### Deciding
 
-## The owner's commits and merging back
+All of it is in `loop/verdict.ts`, with frozen numbers in `loop/config.ts`. Statistics treat the driver session as the
+unit, since sends from one session are alike (`loop/stats.ts`: clustered standard errors and session bootstraps).
 
-`rte sync --cap 750` merges the owner's master into `loop/champion` as an owner step: G0's build checks, every banked
-before-scene through the merged `Scene.fromJSON` (failing cases are refused; past 10% a bank refresh is queued), then a
-checkpoint. The loop runs it between epochs when master moved and the last owner step is a day old. A merge conflict
-pauses the loop with an owner-list item: resolve it on master, then `rte sync`.
+- **Quality cards (Rule F).** The judge's verdicts are checked in looks at 16, 32, 48 and 80 affected cases. Keep when
+  the clustered Z reaches 2.3, 1.8 or 1.4 at looks 32, 48 or 80; revert as soon as it falls under -0.2, 0.3, 0.7 or 1.4.
+  A clear result stops early, so a dud costs 16 cases, not 80.
+- **Latency cards.** Keep when the 90% upper bound of the median paired ratio is under 1.0, or a slow-send tail (p90,
+  p95) is surely at least 10% faster, and fidelity holds: Z of at least 0 at look 32, -0.5 at 48, -1.0 at 80. A
+  fidelity Z of -1.25 or worse ends it: the speed costs fidelity.
+- **Vetoes.** Surely slower on any measure, losing on held-out cases, or more empty or failed pictures. A cost over
+  ×1.2 per request, alone or added up since the original, sends the change to the owner list instead.
+- **Void.** A case that trips an invariant (a timing stall, unequal cold starts, an arm dispatched first too often)
+  is never a product result, and too many voids void the decision.
 
-Taking the champion into master (the loop never touches the owner's checkout):
+### Checkpoints: the stable yardstick
 
-```bash
-git -C ~/projects/rt-draw-v2 fetch ~/rt-eval/repo loop/champion && git -C ~/projects/rt-draw-v2 merge --ff-only FETCH_HEAD
-```
+After every second keep, `loop/checkpoint.ts` runs the champion against the frozen original (A0) on benchmark B1, live
+and unshared, judged for fidelity and craft on every case. That gives the champion's share with a 90% bootstrap, the
+latency ratios, an overfitting gap (tuning against held out), health numbers and a trust level. Changing the judge, the
+benchmark or the measuring code starts a new **era**, bridged so the numbers carry across; era 2 began at hour 0.
 
-When `--ff-only` refuses, master has commits the champion lacks: `rte sync` first.
+### The judge
 
-Moving to another machine: `rte export <host>` (bank/, cache/replies/, cache/blobs/, labels/, human/, and eval/history
-as eval/history-import), then `rte init --refresh` there.
+Sonnet at high effort (`judge/judge.ts`, prompts frozen in `judge/prompts.ts`). Once per case it writes an expectation
+from the before image and the stated intent. Then **fidelity** sees the before image, both results and both change
+lists, and says which did what was meant; **craft** sees the screens alone. Left and right are balanced exactly, and a
+low-confidence verdict, plus a random fifth of the rest, is asked again with the sides swapped. Editing a word of a
+judge prompt starts a new era.
 
-## Where everything lives (`$RT_EVAL_HOME`, default `~/rt-eval`)
+Before the loop could run, it had to pass **calibration** (`judge/calibrate.ts`): the owner labeled pairs at
+`/evals/label/`, never knowing which side was which, mixing real near-ties, clear contrasts and bias probes ("did
+more", "did nothing"). The first check asked for more labels; the second passed: 81% agreement on 56 decisive pairs and
+33 of 40 clear ones, against the owner's own 88% on repeats.
 
-| Path | What |
-|---|---|
-| `repo/` | the loop's clone of the owner's master; `loop/champion`, `cand/e<E>-h<n>` branches, tag `eval-harness-<n>` |
-| `history/` | worktree of the orphan `eval/history`: decisions, checkpoints, epochs, budget, ledger, owner list, tried patches, bench/ |
-| `bank/cases/` | banked fork points (`c-<bank>-s<session>-<n>`); `bank/archive/` retired ones |
-| `runs/<run>/` | every run's cases, rows, verdict; run ids `<stamp>-e<E>-h<n>-{g0,scan,ab}` |
-| `cache/replies/`, `cache/blobs/` | model replies by request hash, images |
-| `meter/calls.jsonl`, `meter/slots.json` | one line per model call (slot numbers only), each slot's window and week |
-| `wt/`, `trees/`, `trees-old/` | engineer worktrees; served arm trees by content hash (and the harness); an old harness's trees after a re-pin, until `gc --trees` |
-| `state.json`, `loop.lock`, `heartbeat.json` | the coordinator's cursor, one loop at a time, suspend detection |
-| `logs/` | every `run.ts` line (`run-<date>.log`), arm servers |
-| `machine.json`, `ready/`, `labels/`, `human/`, `out/` | the ladder's slots, readiness runs, calibration labels, the owner's sends, baked pictures |
+### Measuring time fairly
 
-Code: `evals/loop/` (CLI, gateway, runner, history), `evals/judge/`, `evals/optimizer/` (agents, digests, G0),
-`evals/core/` (driver, synthesizer, personas), `evals/checks/` (one acceptance check per task, 0 real calls).
+Every model call goes through `loop/gateway.ts`, its own process so the coordinator's work can't delay a stream. Calls
+are never queued (a queue would read as model latency); each case slot pools its processes like one user's server.
+Byte-identical requests from both arms share one real call, each arm getting the chunks on its own clock
+(`loop/cache.ts`). An event-loop delay over 20 ms voids the case. `--cap n` refuses call n+1, so a loop or retry bug
+stops at the cap instead of burning a usage window.
 
-## What changed on the owner's 5180 server at merge
+### Guard rails
 
-- His model calls now run with the 5-minute cache and an empty config dir (`.data/claude-config`), quiet and
-  email-free. The first real call after the merge is the first real use of this env: its `.data/model-calls.jsonl`
-  line should show `cacheWrite1h` 0 and the served model (the smoke checks it again).
-- Voice keeps working there: only servers the harness starts set `RT_DENY_TTS=1` (`/api/tts` and `/api/stt-token` answer
-  403 on them).
-- Plugins honour `RT_DATA_DIR` (default `<root>/.data`), so eval runs never write his data.
+The loop stops itself on a night cap, the weekly allowance, two voids in a row, a broken invariant, failed readiness or
+calibration, or a merge conflict, and pauses while every token is past 90% of its window. After three reverts in a row
+in one area it rests that area until the next checkpoint. Everything it can't decide lands in `owner-list.md`.
+
+### Why it's built this way: v1 cost too much
+
+rt-draw v1 had a loop too. It worked: 126 wins, 13 losses and 11 ties over 150 pairs, and speech end to change went from
+4.0 to 1.5 s. But each decision took about 2 hours and a quarter to a third of a five-hour usage window, and two
+accounts' windows were gone in one day.
+
+- v1's coordinator was an Opus session that re-read ~375k tokens a request; here it's a script (`loop/run.ts`).
+- Every v1 call wrote the 1-hour cache (half its use); here every call is 5-minute cached and metered.
+- v1 re-ran whole sessions for every change; here fork points are banked once and only affected cases are paid.
+- No step makes a real call without `--cap n`.
+
+The 64 rounds here made 21,182 model calls, about $217 at API list prices; a decision averaged about $1.70 and 7
+minutes.
+
+## What a person did
+
+No person timed a request, judged a drawing or picked a winner from the numbers. A person:
+
+- built the harness with Claude Code, from 16 to 19 October 2026;
+- labeled about 90 pairs once, to calibrate the judge;
+- wrote the cards behind 23 of the 112 changes tried: the 8 seed cards that started the loop and about ten more during
+  the run, A and C among them;
+- made the calls the loop handed over: adopted three ideas (A, and E's shorter picture syntax and 16-path cap) and
+  declined five (sending calls twice, a costlier resolver race, two changes to how rough the drawing looks, and a
+  picture-size rule); one idea was handed over twice;
+- built switches the loop could then try (Jev as the resolver, drawing on a guess, sending calls twice) and fixed
+  harness bugs the owner list surfaced; those commits were merged into the champion 6 times, each followed by a
+  checkpoint;
+- restarted the loop after its 9-hour stop.
+
+## The code and the data
+
+| Where | What |
+| --- | --- |
+| `core/` | the driver's prompt and parsing, personas, the frozen scenario table, synthetic speech and ink |
+| `driver/` | a demo page to watch a driver use the product |
+| `bridge/` | the page each arm runs the product in, with the harness's own clock and ink overlay |
+| `fixtures/` | frozen start scenes and their baked pictures |
+| `loop/` | the coordinator (`run.ts`), gateway, bank, A/B runner, diffscan, verdicts, statistics, checkpoints |
+| `judge/` | the judges, their frozen prompts, calibration and a canary |
+| `optimizer/` | the analyst, critic and engineer, their digests, prompts and gates, and the seed cards |
+| `progress/`, `label/`, `pages/` | the progress page, the labeling page and their server |
+| `mock/` | a fake API that answers every role, to rehearse the whole chain at 0 calls |
+| `checks/` | the harness's own tests, `t0` to `t22` |
+| `case-study/` | this page's charts: `node evals/case-study/charts.ts` redraws them from `eval/history` |
+
+- **`eval/history`** is the loop's record: every decision (`decisions.jsonl`, readable in `ledger.md`), checkpoint,
+  round and budget line, the owner list, each run's verdict and every reverted patch in `tried/`. The 445-case bank
+  itself isn't in git.
+- **`loop/champion`** is the best version found.
+- **The progress page** reads `eval/history` straight from git: `git fetch origin eval/history:eval/history`, then
+  `./node_modules/.bin/vite --config evals/pages.vite.config.ts --port 5181` and open
+  http://localhost:5181/evals/progress/.
+- **Running the loop yourself:** `evals/RUNBOOK.md` has every command, cap, cost and time. Code comments cite the
+  design spec by section (§1 to §12); the spec itself isn't in this repo.

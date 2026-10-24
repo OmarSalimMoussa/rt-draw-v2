@@ -3,7 +3,7 @@
 // process under a hard --cap, so a loop or retry bug stops at the cap instead of burning a window (v1 burned two
 // in a day). Tokens come only from the tokens file, read here (agents) and by the gateway, never from the
 // environment: a systemd unit doesn't see the caller's variables.
-//   node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts <command> [flags]      (`rte`, evals/README.md)
+//   node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts <command> [flags]      (`rte`, evals/RUNBOOK.md)
 // Every command takes --cap n, --tokens <file> (checks; default ~/.config/rt-eval/tokens.env), --dev-token (the
 // dev plugin's own token, only under --cap 60), --mock-api <url> (every Claude process on that fake API, checks),
 // --port n (the first arm server's, default 5300) and --fakes <module> (checks: a canned critic, engineer, judge).
@@ -60,7 +60,7 @@ import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Judged, Row, SceneJSON, SendOutcome } from "./types.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
 
-const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/README.md)
+const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/RUNBOOK.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)

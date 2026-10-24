@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="340" viewBox="0 0 760 340" font-family='system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif' role="img" aria-label="Line chart with an interval band: the judge preferred the loop's version on 45% to 56% of comparisons; every 90% interval includes 50%, a tie.">
+<rect x="0.5" y="0.5" width="759" height="339" rx="8" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+<text x="20" y="30" font-size="15" font-weight="600" fill="#f0efec">How often the judge preferred the loop's version to the original</text>
+<text x="20" y="50" font-size="12" fill="#c3c2b7">Share of the 62 benchmark requests at each checkpoint, a tie counting half; the band is the 90% interval</text>
+<line x1="52" x2="736" y1="288" y2="288" stroke="#383835" stroke-width="1"/>
+<text x="44" y="292" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">30%</text>
+<line x1="52" x2="736" y1="233.5" y2="233.5" stroke="#2c2c2a" stroke-width="1"/>
+<text x="44" y="237.5" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">40%</text>
+<line x1="52" x2="736" y1="179" y2="179" stroke="#2c2c2a" stroke-width="1"/>
+<text x="44" y="183" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">50%</text>
+<line x1="52" x2="736" y1="124.5" y2="124.5" stroke="#2c2c2a" stroke-width="1"/>
+<text x="44" y="128.5" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">60%</text>
+<line x1="52" x2="736" y1="70" y2="70" stroke="#2c2c2a" stroke-width="1"/>
+<text x="44" y="74" font-size="11" fill="#898781" text-anchor="end" style="font-variant-numeric: tabular-nums">70%</text>
+<text x="52" y="306" font-size="11" fill="#898781" text-anchor="middle">0 h</text>
+<text x="171" y="306" font-size="11" fill="#898781" text-anchor="middle">4 h</text>
+<text x="289.9" y="306" font-size="11" fill="#898781" text-anchor="middle">8 h</text>
+<text x="408.9" y="306" font-size="11" fill="#898781" text-anchor="middle">12 h</text>
+<text x="527.8" y="306" font-size="11" fill="#898781" text-anchor="middle">16 h</text>
+<text x="646.8" y="306" font-size="11" fill="#898781" text-anchor="middle">20 h</text>
+<text x="394" y="330" font-size="11" fill="#898781" text-anchor="middle">hours since the loop started (19 October 2026, 03:47 UTC)</text>
+<polygon points="52,136.4 78,128.2 101.5,118 172.3,104.3 211.6,158.8 243.6,105.8 275.4,98.3 545.3,130.3 638.8,119.5 688.6,140.1 688.6,227.8 638.8,194.7 545.3,203.8 275.4,189.3 243.6,196 211.6,247.1 172.3,184 101.5,206.2 78,203.8 52,226" fill="#3987e5" fill-opacity="0.12"/>
+<line x1="52" x2="736" y1="179" y2="179" stroke="#c3c2b7" stroke-width="1"/>
+<text x="408.9" y="173" font-size="11" fill="#c3c2b7" text-anchor="middle">50%: a tie</text>
+<polyline points="52,183.4 78,165.8 101.5,161.4 172.3,143.8 211.6,205.4 243.6,148.2 275.4,143.8 545.3,165.8 638.8,157 688.6,183.4" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="52" cy="183.4" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="78" cy="165.8" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="101.5" cy="161.4" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="172.3" cy="143.8" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="211.6" cy="205.4" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="243.6" cy="148.2" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="275.4" cy="143.8" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="545.3" cy="165.8" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="638.8" cy="157" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/><circle cx="688.6" cy="183.4" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"/>
+</svg>

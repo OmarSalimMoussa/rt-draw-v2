@@ -38,21 +38,21 @@ loop. It ran on its own, day and night, and tried to make rt-draw quicker
 without making its drawings worse.
 
 Each round, AI reviewers suggested a few small changes: a setting, a different
-way of wording the instructions to the AI, or a bit of code. Every change was
-tested against the best version so far, on hundreds of saved example requests.
-A change was kept only if it did better.
+way of wording the instructions to the AI, or a bit of code. We added a few
+ideas of our own. Every change was tested against the best version so far, on
+hundreds of saved example requests, and kept only if it did better.
 
-Over six days (14 to 20 October 2026), for a typical request:
+In about 22 hours of running (19 to 20 October 2026), for a typical request:
 
 | | Before | After |
 | --- | --- | --- |
-| First change on screen | 5.8 seconds | 2.5 seconds |
-| Sketch finished | 7.5 seconds | 4.0 seconds |
+| First change on screen | 5.8 seconds | 2.4 seconds |
+| Sketch finished | 7.1 seconds | 3.9 seconds |
 
 The drawings were just as good.
 
-- `evals/` is the loop itself. `evals/README.md` and `evals/RUNBOOK.md` explain
-  how to run it.
+- `evals/` is the loop itself. `evals/README.md` tells the story, with charts,
+  and `evals/RUNBOOK.md` explains how to run it.
 - The `loop/champion` branch is the best version the loop found.
 - The `eval/history` branch is its record of every change it tried, kept or not.
 
