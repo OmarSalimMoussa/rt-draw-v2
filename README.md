@@ -4,6 +4,12 @@ A doodle-style canvas the model can see: free-form shapes in layers, a small
 line-based op language, and your voice and ink linked to what's on screen.
 Design notes: the Claude Doc "rt-draw: a canvas the model can see".
 
+
+
+https://github.com/user-attachments/assets/557ccdd4-02e2-417d-b997-eb50f3c1f12e
+
+
+
 v2 is built from small parts, each tested alone in a playground before
 anything is assembled. None of them call a model.
 
