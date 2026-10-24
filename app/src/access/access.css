@@ -16,6 +16,23 @@
 .ac-story { margin: 0; max-width: 60ch; font-size: 15px; color: var(--muted); }
 .ac-story a { color: var(--text); font-weight: 700; white-space: nowrap; text-decoration-thickness: 2px; text-underline-offset: 3px; }
 .ac-story a::after { content: " →"; }
+/* The welcome page (Welcome.tsx) in two columns on a wide screen: the words on the left, larger and in full ink over
+   a soft patch of paper so the doodles never fight them; the tour and the waitlist on the right. One column on a phone. */
+.ac-welcome { max-width: 1180px; }
+.ac-intro, .ac-side { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.ac-intro { position: relative; isolation: isolate; }
+.ac-intro::before { content: ""; position: absolute; inset: -12px -20px; z-index: -1; background: var(--bg); border-radius: 64px; filter: blur(24px); opacity: 0.92; }
+.ac-welcome .ac-lede { max-width: none; color: var(--text); font-size: 19px; line-height: 1.5; }
+.ac-welcome .ac-story { max-width: none; color: var(--text); font-size: 17px; line-height: 1.5; }
+.ac-welcome .ac-foot { font-size: 15px; }
+@media (min-width: 960px) {
+  .ac-welcome { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); column-gap: 56px; align-items: start; padding-block: 56px; }
+  .ac-welcome h1 { font-size: clamp(40px, 4vw, 54px); }
+  .ac-welcome .ac-lede { font-size: 21px; }
+  .ac-welcome .ac-story { font-size: 18px; }
+  /* The tour starts level with the headline, under the wordmark. */
+  .ac-side { padding-top: 58px; }
+}
 .ac-video { display: block; width: 100%; max-width: 100%; aspect-ratio: 1440 / 996; height: auto; background: #1e1e1e; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
 .ac-card { display: flex; flex-direction: column; gap: 8px; padding: 18px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.12); }
 .ac-card h1, .ac-card h2 { margin: 0 0 4px; font-size: 24px; }
