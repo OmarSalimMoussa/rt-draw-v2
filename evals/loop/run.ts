@@ -596,7 +596,7 @@ async function realCmd() {
   const since = str("since") ?? REAL_SINCE, only = str("only");
   const shots = (f: (shot: Shot) => Promise<void>) => {
     const champ = championArm();
-    return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => f(pageShot((await rig.tab(0, "A", champ.tree)).page)), 1), true);
+    return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => f(real.realShot((await rig.tab(0, "A", champ.tree)).page)), 1), true);
   };
   if (step === "ingest") for (const line of real.ingestStep(str("raw"))) say(`real ingest: ${line}`);
   else if (step === "render") {

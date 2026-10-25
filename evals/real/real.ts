@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import { SCREEN, type View } from "../../src/core/board.ts";
 import { changeFrame } from "../core/diff.ts";
+import { type Page, capture } from "../loop/chrome.ts";
 import type { Shot } from "../loop/human.ts";
 import { ask } from "../loop/client.ts";
 import { historyWrite } from "../loop/history.ts";
@@ -100,18 +101,42 @@ function boundsOf(j: SceneJSON): View {
   const boxes = (j.shapes.some((s) => s.kind === "frame") ? j.shapes.filter((s) => s.kind === "frame") : j.shapes).map((s) => s.box);
   return boxes.length ? fit(boxes.reduce(unite), 40) : { x: 0, y: 0, ...SCREEN };
 }
-/** Where a result is looked at: the person's screen and everything the send changed. */
-export const frameOf = (before: SceneJSON, after: SceneJSON, camera: View): View => {
-  const ch = changeFrame(before, [after], ASPECT);
-  return ch ? fit(unite(camera, ch)) : camera;
-};
-/** The person's screen, widened to the stage's shape around its center (a phone's is tall; the bridge would pin it top-left). */
+const meets = (a: View, b: View, gap = 0) => a.x - gap < b.x + b.w && b.x - gap < a.x + a.w && a.y - gap < b.y + b.h && b.y - gap < a.y + a.h;
+/** Pages this close to what a send touched are shown with it ("an iPad screen next to it"). */
+const NEAR_PX = 400;
+/**
+ * Where a send is looked at, before and after alike: what it changed and the ink, with every page near them or on
+ * the person's screen. The screen alone when none of that exists (it may show only empty board: a person scrolled
+ * above the page still sends).
+ */
+export function frameOf(before: SceneJSON, after: SceneJSON, camera: View, strokes: RealSend["strokes"] = []): View {
+  const ch = changeFrame(before, [after], ASPECT, 0);
+  const pts = strokes.flatMap((s) => s.points);
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const ink = pts.length ? { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) } : undefined;
+  const focus = [ch, ink].filter((b): b is View => !!b);
+  const pages = [...before.shapes, ...after.shapes].filter((s) => s.kind === "frame").map((s) => s.box);
+  const near = pages.filter((p) => focus.some((f) => meets(p, f, NEAR_PX)) || meets(p, camera));
+  const all = [...focus, ...near];
+  return all.length ? fit(all.reduce(unite), 40) : camera;
+}
 export const cameraOf = (x: RealSend, before: SceneJSON): View => (x.camera ? fit(x.camera) : boundsOf(before));
+
+/** Real-use images are shot at the stage's own width: Opus reads pictures' detail that 640 px loses. */
+export const REAL_PX = 1280;
+/** A Shot on a bridge page at REAL_PX (human.ts' pageShot, wider). */
+export const realShot = (page: Page): Shot => async (scene, view, strokes) => {
+  await page.reload();
+  await page.eval("new Promise((r) => { const t = () => (window.rtEval ? r() : setTimeout(t, 20)); t(); })");
+  await page.eval(`rtEval.load(${js({ scene, camera: view })})`);
+  await page.eval(`rtEval.showInk(${js(strokes)}, { numbers: true })`);
+  return capture(page, { width: REAL_PX, quality: 0.85 });
+};
 
 type Images = Record<string, { before: string; after: string }>;
 const imagesOf = (dir: string) => maybe<Images>(join(dir, "img", "index.json")) ?? {};
 
-/** Each send's before (the person's screen, with their ink) and after (framed on what changed), as JPEGs; ones already shot are kept. */
+/** Each send's before (with the person's ink) and after, on one frame (frameOf), as JPEGs; ones already shot are kept. */
 export async function renderSession(dir: string, s: Session, shot: Shot): Promise<number> {
   const index: Images = {};
   let made = 0;
@@ -127,8 +152,8 @@ export async function renderSession(dir: string, s: Session, shot: Shot): Promis
   };
   for (const x of s.sends) {
     const before = beforeOf(dir, x), after = afterOf(dir, x);
-    const camera = cameraOf(x, before);
-    index[x.key] = { before: await shoot(before, camera, x.strokes), after: await shoot(after, frameOf(before, after, camera), []) };
+    const frame = frameOf(before, after, cameraOf(x, before), x.strokes);
+    index[x.key] = { before: await shoot(before, frame, x.strokes), after: await shoot(after, frame, []) };
   }
   put(join(dir, "img", "index.json"), index);
   return made;
@@ -239,7 +264,9 @@ export async function shootGold(shot: Shot): Promise<number> {
     const x = ss?.s.sends[g.n - 1];
     if (!g.gold || !ss || !x || existsSync(join(out, "gold.jpg")) || !existsSync(join(out, "gold.scene.json"))) continue;
     const before = beforeOf(ss.dir, x), after = json<SceneJSON>(join(out, "gold.scene.json"));
-    writeFileSync(join(out, "gold.jpg"), await shot(after, frameOf(before, after, cameraOf(x, before)), []));
+    // Gold on the app's result's frame, widened if gold reached further.
+    const app = frameOf(before, afterOf(ss.dir, x), cameraOf(x, before), x.strokes);
+    writeFileSync(join(out, "gold.jpg"), await shot(after, fit(unite(app, frameOf(before, after, cameraOf(x, before), x.strokes))), []));
     made++;
   }
   return made;
