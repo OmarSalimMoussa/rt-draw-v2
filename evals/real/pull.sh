@@ -10,7 +10,8 @@ set -euo pipefail
 
 BOX=${RTDRAW_BOX:-deploy@31.220.50.146}
 PGX=${RT_PGX:-omar-salim-moussa@thinkstationpgx-0eea}
-LOCAL=${RT_LOCAL_DATA:-$(cd "$(dirname "$0")/../.." && pwd)/.data}
+# The dev server's data is in the main checkout, also when this runs from a worktree.
+LOCAL=${RT_LOCAL_DATA:-$(dirname "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)")/.data}
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DEST="rt-eval/real/raw/$STAMP"
 

@@ -105,7 +105,8 @@ export const frameOf = (before: SceneJSON, after: SceneJSON, camera: View): View
   const ch = changeFrame(before, [after], ASPECT);
   return ch ? fit(unite(camera, ch)) : camera;
 };
-export const cameraOf = (x: RealSend, before: SceneJSON): View => x.camera ?? boundsOf(before);
+/** The person's screen, widened to the stage's shape around its center (a phone's is tall; the bridge would pin it top-left). */
+export const cameraOf = (x: RealSend, before: SceneJSON): View => (x.camera ? fit(x.camera) : boundsOf(before));
 
 type Images = Record<string, { before: string; after: string }>;
 const imagesOf = (dir: string) => maybe<Images>(join(dir, "img", "index.json")) ?? {};
