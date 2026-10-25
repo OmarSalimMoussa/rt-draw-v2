@@ -18,6 +18,8 @@ just that part.
 A rough sketch is the fastest way to show someone an idea before anyone builds
 it. rt-draw makes that sketch for you while you talk.
 
+This is what you would typically do before even moving to canva/figma.
+
 ## How it works
 
 An AI model does the drawing. It doesn't paint a picture. It writes
@@ -27,9 +29,6 @@ appearing right away instead of all at once at the end.
 
 The AI also sees your marks. When you circle something and say "this", it knows
 which thing you mean.
-
-This is the second version. The first one drew plainer web page mockups, and
-more slowly.
 
 ## It got faster by testing itself
 
@@ -84,8 +83,7 @@ npm run typecheck
 
 ### The app
 
-`app/` is the product people use: the first version's look and controls on top
-of this version's drawing engine. It has a board of pages you draw on and talk
+`app/` is the product people use. It has a board of pages you draw on and talk
 to, your projects, links between pages, and a preview you can click through. It
 runs on its own port and uses the same services as the playgrounds: the AI
 model, and ElevenLabs Scribe to turn speech into text.
