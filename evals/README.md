@@ -5,40 +5,36 @@
   <img alt="Line chart: median seconds until the first change appears. The original stays between 5.1 and 5.8 seconds; the loop's best version falls from 5.4 to 2.4 seconds over 21 hours." src="case-study/latency-light.svg" width="760">
 </picture>
 
-In 22 hours of testing itself, rt-draw got about twice as fast. The wait for the first change on screen fell from 5.8
-to 2.4 seconds, and the wait for a finished sketch from 7.1 to 3.9 seconds. A program tried 112 changes, timed and
-judged each one against the best version so far, and kept the winners. No person timed a request or judged a drawing:
-an AI judge, checked against a person's judgment first, rated the drawings as good as before.
+In 22 hours of testing itself, rt-draw got about twice as fast. The time to first shape dropped from 5.8
+to 2.4 seconds, and time to finished sketch from 7.1 to 3.9 seconds. A program tried 112 changes, timed and
+judged each one against the best version so far, and kept the winners.
 
-## The short version
+## TLDR
 
 - **The goal.** You talk and doodle, and rt-draw draws. Every second you wait makes it feel less like sketching with
-  someone, so the goal was simple: faster, without drawing worse.
+  someone, so the goal was: increase speed without sacrificing quality.
 - **The loop.** A program that keeps trying small changes to rt-draw. It tests each one against the best version so
-  far on hundreds of recorded requests, and keeps it only if it's faster or better and nothing got worse.
+  far on hundreds of recorded requests, and keeps it only if it's faster with no quality regressions.
 - **No person picking winners.** Ideas came from two places: the loop's own AI critic, which wrote 89 of the 112, and a
-  queue a person could add to, which supplied 23. Either way, the loop built each change, measured it and decided. It
-  hands a person only the calls that aren't its to make: a change that costs more money or changes how rt-draw looks.
+  queue a person could add to, which supplied 23.
 - **The result.** 112 changes tried in 64 rounds: 7 kept by the loop, 9 handed to a person (who adopted 3), and 96
   thrown away.
 
-## How it works, simply
-
-The loop is a very patient tester that never gets tired:
+## How it works
 
 1. **Record once.** AI "users" try rt-draw: they look at the screen, talk, scribble and press Enter, like people do.
    Each moment they press Enter is saved, with what they meant, so it can be replayed later. 445 moments were saved.
 2. **Suggest a change.** An AI reads where rt-draw is slow or gets things wrong, and suggests up to three small
    changes: a setting, a different instruction to the drawing model, or a bit of code. A person can queue ideas too.
-3. **Test it fairly.** The best version so far and the changed one get the same recorded requests at the same moment.
-   A stopwatch times both. A judge looks at both drawings side by side, without knowing which is which.
+3. **Test it fairly.** A/B test the changes against the golden version. We test at the same time to make sure they experience the same load on the maching.
+   A stopwatch times both. A blind judge looks at both drawings side by side.
 4. **Decide.** Clearly faster or better, and nothing worse? Keep it. No clear win? Throw it away and remember not to
-   try it again. Costs more money or changes the look? Ask a person.
+   try it again. Costs more money or changes the look? Escalate.
 5. **Check the big picture.** After every couple of kept changes, the best version is compared with the original on a
-   fixed set of 62 requests. That's the chart above.
+   fixed set of 62 golden test cases. That's the chart above.
 
 Speed is easy to measure; quality isn't. The loop trusts its judge because a person first labeled about 90 pairs of
-drawings. The judge picked the same drawing as the person on 81% of the pairs where the person had a preference, close
+drawings (golden set). The judge picked the same drawing as the person on 81% of the pairs where the person had a preference, close
 to how often the person agreed with themselves when shown a pair again (88%).
 
 ## What it found
@@ -60,16 +56,6 @@ to (resolving the references), then asks the drawing model. The biggest wins cut
 | E | Smaller doodles: a shorter picture syntax (every element outlined unless it says otherwise), then at most 16, then 12 paths per doodle | a person, then the loop twice | done ×0.97, ×0.97, ×0.95 | a person for the first two (they touch the look), the loop for the last |
 | F | On "add something" requests, a reminder that every shape needs a description of 6 words or more, since a shorter one is thrown away | the loop | quality: won clearly (Z 2.7 over 80 requests) | the loop |
 
-Jev is TypeSafe AI's decision model: a yes or no, with a probability, for each candidate shape in one call of about
-0.1 s. C and D rely on switches a person built into rt-draw that week, off by default, and each was turned on only once
-the loop had measured it. The two biggest single steps, A and C, were a person's ideas that the loop measured and
-confirmed; B, D, F and two of E's three steps were the loop's own.
-
-Each "×" is the median of paired ratios on the requests the change affected, so they don't simply multiply. Measured
-together at the last checkpoint: first change ×0.47, done ×0.54.
-
-The kept changes live on the `loop/champion` branch, all in `src/core/`: `tuning.ts` (the settings), `prompts.ts`,
-`draw.ts`, `resolve.ts` and `picture.ts`.
 
 ### What it threw away
 
@@ -78,7 +64,7 @@ The kept changes live on the `loop/champion` branch, all in `src/core/`: `tuning
   <img alt="Dot timeline of 112 changes the loop tried over 22 hours, by area: 7 kept, 9 handed to the owner, 83 reverted, 13 void." src="case-study/timeline-light.svg" width="760">
 </picture>
 
-Most ideas don't work, and the loop is built for that. A few it rejected:
+Most ideas don't work. A few it rejected:
 
 - **Drawing without thinking.** 10% faster to the first change, but the judge preferred the original 37 times to 22
   (21 ties). Reverted: the speed cost fidelity.
@@ -88,8 +74,6 @@ Most ideas don't work, and the loop is built for that. A few it rejected:
   so it's reverted and listed for a person.
 - **13 void decisions.** The measurement itself was unfair, for example when one side started on cold processes 14% of
   the time and the other never did. A void is never a verdict on the change; the loop re-runs or drops it.
-
-The loop stopped for 9 hours in the middle (its proposers ran out of cards to try) until a person restarted it.
 
 ## Did quality hold?
 
@@ -129,7 +113,7 @@ an earlier judge and is left out.
 
 ## How the harness is built
 
-From here on, the details. Every step below is plain code under `evals/` except the model calls, and every model call
+Every step below is plain code under `evals/` except the model calls, and every model call
 goes through one gateway with a hard cap.
 
 ```mermaid
@@ -240,65 +224,3 @@ are never queued (a queue would read as model latency); each case slot pools its
 Byte-identical requests from both arms share one real call, each arm getting the chunks on its own clock
 (`loop/cache.ts`). An event-loop delay over 20 ms voids the case. `--cap n` refuses call n+1, so a loop or retry bug
 stops at the cap instead of burning a usage window.
-
-### Guard rails
-
-The loop stops itself on a night cap, the weekly allowance, two voids in a row, a broken invariant, failed readiness or
-calibration, or a merge conflict, and pauses while every token is past 90% of its window. After three reverts in a row
-in one area it rests that area until the next checkpoint. Everything it can't decide lands in `owner-list.md`.
-
-### Why it's built this way: v1 cost too much
-
-rt-draw v1 had a loop too. It worked: 126 wins, 13 losses and 11 ties over 150 pairs, and speech end to change went from
-4.0 to 1.5 s. But each decision took about 2 hours and a quarter to a third of a five-hour usage window, and two
-accounts' windows were gone in one day.
-
-- v1's coordinator was an Opus session that re-read ~375k tokens a request; here it's a script (`loop/run.ts`).
-- Every v1 call wrote the 1-hour cache (half its use); here every call is 5-minute cached and metered.
-- v1 re-ran whole sessions for every change; here fork points are banked once and only affected cases are paid.
-- No step makes a real call without `--cap n`.
-
-The 64 rounds here made 21,182 model calls, about $217 at API list prices; a decision averaged about $1.70 and 7
-minutes.
-
-## What a person did
-
-No person timed a request, judged a drawing or picked a winner from the numbers. A person:
-
-- built the harness with Claude Code, from 16 to 19 October 2026;
-- labeled about 90 pairs once, to calibrate the judge;
-- wrote the cards behind 23 of the 112 changes tried: the 8 seed cards that started the loop and about ten more during
-  the run, A and C among them;
-- made the calls the loop handed over: adopted three ideas (A, and E's shorter picture syntax and 16-path cap) and
-  declined five (sending calls twice, a costlier resolver race, two changes to how rough the drawing looks, and a
-  picture-size rule); one idea was handed over twice;
-- built switches the loop could then try (Jev as the resolver, drawing on a guess, sending calls twice) and fixed
-  harness bugs the owner list surfaced; those commits were merged into the champion 6 times, each followed by a
-  checkpoint;
-- restarted the loop after its 9-hour stop.
-
-## The code and the data
-
-| Where | What |
-| --- | --- |
-| `core/` | the driver's prompt and parsing, personas, the frozen scenario table, synthetic speech and ink |
-| `driver/` | a demo page to watch a driver use the product |
-| `bridge/` | the page each arm runs the product in, with the harness's own clock and ink overlay |
-| `fixtures/` | frozen start scenes and their baked pictures |
-| `loop/` | the coordinator (`run.ts`), gateway, bank, A/B runner, diffscan, verdicts, statistics, checkpoints |
-| `judge/` | the judges, their frozen prompts, calibration and a canary |
-| `optimizer/` | the analyst, critic and engineer, their digests, prompts and gates, and the seed cards |
-| `progress/`, `label/`, `pages/` | the progress page, the labeling page and their server |
-| `mock/` | a fake API that answers every role, to rehearse the whole chain at 0 calls |
-| `checks/` | the harness's own tests, `t0` to `t22` |
-| `case-study/` | this page's charts: `node evals/case-study/charts.ts` redraws them from `eval/history` |
-
-- **`eval/history`** is the loop's record: every decision (`decisions.jsonl`, readable in `ledger.md`), checkpoint,
-  round and budget line, the owner list, each run's verdict and every reverted patch in `tried/`. The 445-case bank
-  itself isn't in git.
-- **`loop/champion`** is the best version found.
-- **The progress page** reads `eval/history` straight from git: `git fetch origin eval/history:eval/history`, then
-  `./node_modules/.bin/vite --config evals/pages.vite.config.ts --port 5181` and open
-  http://localhost:5181/evals/progress/.
-- **Running the loop yourself:** `evals/RUNBOOK.md` has every command, cap, cost and time. Code comments cite the
-  design spec by section (§1 to §12); the spec itself isn't in this repo.
