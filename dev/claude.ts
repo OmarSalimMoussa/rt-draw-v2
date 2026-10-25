@@ -37,7 +37,8 @@ const THINKING_OFF: Record<string, object | undefined> = {
   "claude-sonnet-5-5": { type: "between_tools" },
 };
 
-export type EnvOpts = { configDir: string; model?: string; thinking?: Thinking; maxRetries?: number; mockApi?: MockApi };
+/** `maxTokens`: the output limit, MAX_TOKENS (the product's) unless the caller says otherwise (the eval gateway's own roles). */
+export type EnvOpts = { configDir: string; model?: string; thinking?: Thinking; maxRetries?: number; maxTokens?: number; mockApi?: MockApi };
 
 /** The env of every Claude process (spec §7.3). */
 export function childEnv(token: string, o: EnvOpts): Record<string, string> {
@@ -45,7 +46,7 @@ export function childEnv(token: string, o: EnvOpts): Record<string, string> {
   for (const k of ["PATH", "HOME", "LANG", "TMPDIR"]) if (process.env[k]) env[k] = process.env[k]!;
   Object.assign(env, {
     CLAUDE_CODE_OAUTH_TOKEN: token,
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(MAX_TOKENS),
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(o.maxTokens ?? MAX_TOKENS),
     FORCE_PROMPT_CACHING_5M: "1",
     CLAUDE_CODE_PROMPT_CACHE_TTL: "5m",
     DISABLE_AUTOUPDATER: "1",

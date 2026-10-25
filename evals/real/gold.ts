@@ -1,7 +1,7 @@
 // Gold for a real send (evals/real/README.md): Opus's reply read into the board it describes. Its ops run on
 // the send's before board with the product's own runScript, and every drawing() takes the picture Opus drew,
-// read through the product's readPicture with room for detail (picture.maxPaths 80, picture.colors 10), so
-// gold renders exactly as a result of the product would.
+// read through the product's readPicture uncapped, as the product's own pictures are (picture.maxPaths and
+// picture.colors 0), so gold renders exactly as a result of the product would.
 import rough from "roughjs";
 import { Scene, type Shape } from "../../src/core/scene.ts";
 import { runScript } from "../../src/core/ops.ts";
@@ -29,8 +29,8 @@ const drawable = (d: string) => {
   }
 };
 
-/** Gold's pictures: up to 60 elements and 8 colors asked, read with a little room. */
-export const GOLD_TUNING = { ...DEFAULTS, "picture.maxPaths": 80, "picture.colors": 10 };
+/** Gold's pictures: no cap on elements or colors (the owner's rule), only the detail the ask asks for. */
+export const GOLD_TUNING = { ...DEFAULTS, "picture.maxPaths": 0, "picture.colors": 0 };
 
 const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 const r = (n: number) => Math.round(n);

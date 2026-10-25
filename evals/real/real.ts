@@ -23,6 +23,8 @@ import { type RealSend, type Session, afterOf, beforeOf, ingest } from "./sessio
 import { reviewPage } from "./review.ts";
 
 export const OPUS = { model: "opus", effort: "high" } as const;
+/** Gold is the ideal the product aims at with cheap, fast models: nothing throttles it, so it thinks at the most effort there is. */
+export const GOLD = { model: "opus", effort: "max" } as const;
 /** Sends judged per triage call: two images each. */
 const TRIAGE_WINDOW = 11;
 const ASPECT = SCREEN.w / SCREEN.h;
@@ -240,7 +242,7 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   mkdirSync(out, { recursive: true });
   const base = { key: x.key, session: s.id, n, batch, at: new Date().toISOString(), prompt: sha(GOLD_SYSTEM()), meant: t.meant, categories: t.categories, evidence: t.evidence };
   const { text } = await ask({
-    role: "real-gold", ...OPUS, system: GOLD_SYSTEM(), user: goldUser(s, x, n, t, boardOps(before)),
+    role: "real-gold", ...GOLD, system: GOLD_SYSTEM(), user: goldUser(s, x, n, t, boardOps(before)),
     images: [dataUrl(join(dir, "img", img.before)), dataUrl(join(dir, "img", img.after))], run, case: x.key,
   });
   writeFileSync(join(out, "reply.txt"), text);

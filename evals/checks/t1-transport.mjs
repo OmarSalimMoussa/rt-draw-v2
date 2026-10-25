@@ -102,6 +102,8 @@ check(!("CLAUDE_CODE_EXTRA_BODY" in plain) && !("CLAUDE_CODE_MAX_RETRIES" in pla
 const full = childEnv(FAKE, { configDir, mockApi, maxRetries: 2, thinking: "off", model: "claude-sonnet-5-5" });
 envOk(full, "childEnv with mockApi", { token: FAKE, mock: true, config: configDir });
 check(full.CLAUDE_CODE_MAX_RETRIES === "2" && JSON.parse(full.CLAUDE_CODE_EXTRA_BODY).thinking, "childEnv with maxRetries 2 / thinking off misses them");
+// Only the product keeps the 4096-token limit: an eval role (gold, triage, the judge) asks for the model's own maximum.
+check(childEnv(FAKE, { configDir, maxTokens: 128000 }).CLAUDE_CODE_MAX_OUTPUT_TOKENS === "128000", "childEnv ignores an eval role's maxTokens");
 check(!("CLAUDE_CODE_EXTRA_BODY" in childEnv(FAKE, { configDir, thinking: "auto", model: "claude-sonnet-5-5" })), "thinking auto adds an extra body");
 
 // ---- streamCall on the fake API: the request Claude Code sends, the stats, errors.

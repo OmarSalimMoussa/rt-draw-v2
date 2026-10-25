@@ -40,7 +40,13 @@ export const EVAL_IN_FLIGHT = 6;
 const MAX_WARM = 4;
 /** An overload fails in ~2 s, not 102 s: the case is voided and replayed. */
 const MAX_RETRIES = 2;
+/** A product call's limit, as on the hosted app (dev/model-plugin.ts). Eval roles have none (live()). */
 const TIMEOUT_MS = 120_000;
+/**
+ * An eval role's output, at most: the model's own maximum. Only the product's calls keep MAX_TOKENS, as the hosted app
+ * does: gold is the ideal the product aims at, so nothing throttles it (nor triage, the judge or the analyst).
+ */
+const EVAL_MAX_TOKENS = 128_000;
 const LOOP_RESOLUTION_MS = 10;
 const LATE_MAX_MS = 1000;
 /** A warm scan's case end waits this long, at most, for the processes it started to finish starting. */
@@ -100,8 +106,8 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   let evalBusy = 0;
   const evalWaiting: (() => void)[] = [];
 
-  const start = (r: Req, slot: SlotN) => () =>
-    startProcess(r.model, r.system, { token: tokenOf(slot), effort: r.effort as Effort, thinking: r.thinking as Thinking, configDir: p.claudeConfig, maxRetries: MAX_RETRIES, mockApi: o.mockApi });
+  const start = (r: Req, slot: SlotN, evalRole = false) => () =>
+    startProcess(r.model, r.system, { token: tokenOf(slot), effort: r.effort as Effort, thinking: r.thinking as Thinking, configDir: p.claudeConfig, maxRetries: MAX_RETRIES, mockApi: o.mockApi, ...(evalRole ? { maxTokens: EVAL_MAX_TOKENS } : {}) });
   const spawnQueue: (() => void)[] = [];
   let lastSpawn = -Infinity;
   let spawnTimer: ReturnType<typeof setTimeout> | undefined;
@@ -162,12 +168,14 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!a.page) await evalTurn();
     const token = a.token ?? (a.page ? slots.current : (slots.boundary() ?? slots.current));
     const key = poolKey(a, token);
-    const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token), a.page), waiting: false, readyAtTake: false };
+    const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token, !a.page), a.page), waiting: false, readyAtTake: false };
     if (a.page) topUp(key, keepOf(a.warm, MAX_WARM), start(a.req, token));
     // Closing the query ends its stream cleanly, so what stopped it is noted: a reply cut short is never a reply.
     let stopped: "page" | "timer" | undefined;
+    // A product call has the hosted app's limit; an eval role's has none (Claude Code's own stream-idle watchdog ends a
+    // dead connection, and the API's pings keep a long think alive).
     const late = `no reply within ${TIMEOUT_MS / 1000} s`;
-    const timer = setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), TIMEOUT_MS);
+    const timer = a.page ? setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), TIMEOUT_MS) : undefined;
     // A page that dropped its call stops it, unless another arm's identical call is waiting on this one; none may join after.
     const stop = () => {
       if (flight?.followers.size) return;
