@@ -23,6 +23,8 @@ export type Job = {
   strokes: Stroke[];
   words: Promise<Word[] | string>;
   enter: number;
+  /** The ink clock's zero (performance.now()): its strokes and words are ms after it. */
+  clock0?: number;
   /** Its turn has come, before the send starts (not run if it was stopped while it waited). */
   before?: () => Promise<void>;
   /** After it ended, the board settled and committed: how it went, and how many ops changed the board. */
@@ -48,6 +50,8 @@ export type SenderDeps = {
   onStart?: (job: Job) => void;
   /** A send ended; `landed` ops changed the board. A promise: the board is settling, and the next send waits for it. */
   onEnd: (job: Job, landed: number, error?: string) => void | Promise<void>;
+  /** A send ran and the board has settled after it: what it was given and how it went (the send log, capture.ts). */
+  onSettled?: (job: Job, input: SendInput, end: { status: JobStatus; landed: number; error?: string; ttfcMs?: number; ttdMs?: number }) => void;
   log: LatencyLog;
 };
 
@@ -222,6 +226,7 @@ export class Sender {
       times.layout = performance.now();
       log.touch();
     }
+    deps.onSettled?.(job, { strokes: job.strokes, words }, { status, landed, error, ttfcMs: times.ttfcMs, ttdMs: times.ttdMs });
     this.tell(job, status, landed, error);
   }
 }

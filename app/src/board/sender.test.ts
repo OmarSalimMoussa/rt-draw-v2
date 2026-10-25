@@ -233,4 +233,23 @@ describe("sender", () => {
     await sender.idle();
     expect(log.sends[0]).toMatchObject({ callsFrom: 5, callsTo: 9 });
   });
+
+  it("tells the send log what each send was given and how it went, once the board has settled", async () => {
+    const settled = vi.fn();
+    let layout!: () => void;
+    const { sender, runs, job } = rig({ onSettled: settled, onEnd: vi.fn(() => new Promise<void>((r) => (layout = r))) });
+    sender.enqueue(job("make it blue"));
+    await tick();
+    runs[0].hooks.onOp!(op(true));
+    runs[0].done();
+    await tick();
+    await tick();
+    expect(settled).not.toHaveBeenCalled();
+    layout();
+    await sender.idle();
+    expect(settled).toHaveBeenCalledTimes(1);
+    const [, input, end] = settled.mock.calls[0];
+    expect(input).toMatchObject({ words: "make it blue", strokes: [{ id: 1 }] });
+    expect(end).toMatchObject({ status: "done", landed: 1, ttfcMs: 100, ttdMs: 300 });
+  });
 });

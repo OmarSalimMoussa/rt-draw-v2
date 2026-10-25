@@ -21,8 +21,9 @@ import { FeedbackButton } from "./access/Feedback.tsx";
 import { Board, SETTLE_MS } from "./board/board.ts";
 import { BoardArrows } from "./board/BoardArrows.tsx";
 import { BoardView } from "./board/BoardView.tsx";
+import { type SendStart, postSend, sendId } from "./board/capture.ts";
 import { LatencyLog } from "./board/latency.ts";
-import { Sender } from "./board/sender.ts";
+import { type Job, Sender } from "./board/sender.ts";
 import { Canvas, type Tool } from "./canvas/Canvas.tsx";
 import { numberSpots } from "./canvas/marks.ts";
 import { toStroke } from "./canvas/strokes.ts";
@@ -193,6 +194,8 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   // Sends: one at a time, timed, and the board saved after each one that changed it.
   const log = useMemo(() => new LatencyLog(), []);
   const clock = useRef<Clock>(undefined);
+  /** Each running send's start, for its record in the send log (capture.ts). */
+  const starts = useMemo(() => new WeakMap<Job, SendStart>(), []);
   const sender = useMemo(
     () =>
       new Sender({
@@ -205,11 +208,22 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         lastCall: () => calls.at(-1)?.n ?? 0,
         ready: board.settled,
         failedCalls: (from, to) => calls.filter((c) => c.n > from && c.n <= to && c.error).map((c) => `${c.req.model.startsWith("jev") ? "Jev" : (c.req.from ?? c.req.model)}: ${c.error}`),
-        onStart: () => {
+        onStart: (job) => {
           board.busy = true;
           board.stopLooking();
           // Painted before the clock starts, so going back to the live board doesn't count as the send's changes.
           board.flush();
+          starts.set(job, { at: Date.now(), camera: sendView(viewRef.current, visibleRect(), size()), before: board.scene.toJSON(), beforeVersion: board.history.latest() });
+        },
+        onSettled: (job, input, end) => {
+          const start = starts.get(job);
+          if (!start) return;
+          postSend({
+            id: sendId(), project: board.project, at: new Date(start.at).toISOString(), label: job.label, spoken: job.spoken,
+            kind: job.before ? "build" : "send", camera: start.camera, words: input.words, strokes: input.strokes,
+            enterAtMs: job.clock0 === undefined ? 0 : Math.round(job.enter - job.clock0),
+            before: start.before, beforeVersion: start.beforeVersion, afterVersion: board.history.latest(), ...end,
+          });
         },
         onEnd: (job, landed) => {
           const finish = () => {
@@ -334,7 +348,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     const enter = performance.now();
     const ep = epoch.current;
     const words = voice.take().then((ws) => withTyped(onInkClock(ws, ep), typed, Math.round(enter - ep)));
-    sender.enqueue({ label: typed || said || "(drawing only)", spoken: !typed && !!said, strokes: taken, words, enter });
+    sender.enqueue({ label: typed || said || "(drawing only)", spoken: !typed && !!said, strokes: taken, words, enter, clock0: ep });
     setStrokes([]);
     setPrompt("");
     epoch.current = performance.now();
