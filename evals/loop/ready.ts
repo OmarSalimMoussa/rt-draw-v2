@@ -409,6 +409,10 @@ function pagesOk(pg: Pages) {
     if (s.recolourPictures) why.push(`${tag}: a recolour send made ${s.recolourPictures} picture calls`);
     const ttfc = s.recolour.timing.ttfcMs;
     if (!(ttfc !== undefined && ttfc > DRAW_DELAY_MS)) why.push(`${tag}: recolour TTFC ${ttfc} ms (want > the drawing stub's ${DRAW_DELAY_MS} ms)`);
+    // The deciding latencies (LOOP-V2.md): a recolour's first drawing is its TTFC, and its frames are timed.
+    const { ttfdMs, renderP90Ms } = s.recolour.timing;
+    if (ttfdMs !== ttfc) why.push(`${tag}: recolour TTFD ${ttfdMs} ms isn't its TTFC ${ttfc} ms`);
+    if (!(renderP90Ms !== undefined && renderP90Ms > 0)) why.push(`${tag}: recolour render p90 ${renderP90Ms} (want a timed frame)`);
     const failed = [s.recolour, s.driven].flatMap((x) => [x.error, ...x.ops.filter((op) => !op.ok).map((op) => op.error ?? op.line)]).filter(Boolean);
     if (failed.length) why.push(`${tag}: a send failed (${failed[0]})`);
     if (s.errors.length) why.push(`${tag}: page error ${s.errors[0]}`);
@@ -417,7 +421,7 @@ function pagesOk(pg: Pages) {
   }
   if (!pg.roundTrip) why.push("a scene round trip A→B or B→A changed the scene");
   const [a] = pg.sides;
-  return verdict(why, `both arms healthy (${a.health.rafPerSec} rAF/s), captures non-blank (variance ${a.variance.toFixed(0)}), recolour TTFC ${a.recolour.timing.ttfcMs} ms with 0 pictures, scenes round-trip, heap +${pg.sides.map((s) => (s.heap.at(-1)! - s.heap[0]).toFixed(1)).join("/")} MB over ${HEAP_CASES} cases`);
+  return verdict(why, `both arms healthy (${a.health.rafPerSec} rAF/s), captures non-blank (variance ${a.variance.toFixed(0)}), recolour TTFC = TTFD ${a.recolour.timing.ttfcMs} ms with 0 pictures, render p90 ${a.recolour.timing.renderP90Ms} ms, scenes round-trip, heap +${pg.sides.map((s) => (s.heap.at(-1)! - s.heap[0]).toFixed(1)).join("/")} MB over ${HEAP_CASES} cases`);
 }
 
 async function voice(tree: string, port: number, pg?: Pages) {

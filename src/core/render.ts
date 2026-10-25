@@ -83,11 +83,24 @@ function outline(s: Shape) {
   return `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
 }
 
+/**
+ * Whether a shape's box is invisible (render.pictureBox, and always for an illustration()): it holds a picture and has
+ * no stroke or fill of its own, so the picture is the shape and fills it. An outline the model never asked for framed
+ * every subject. The bridge's clock has its own copy (evals/bridge/main.ts pictureOnly): such a shape's first drawing is
+ * its picture's first element.
+ */
+export function bareBox(s: Shape, knobs: Tuning = DEFAULTS): boolean {
+  const st = s.style;
+  const noStroke = st.stroke === "transparent" || (st.stroke === undefined && knobs["render.pictureBox"] === 1);
+  return !!s.drawing && s.kind !== "frame" && noStroke && (st.fill === undefined || st.fill === "transparent");
+}
+
 function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shape, knobs: Tuning): SVGGElement {
   const g = el("g", { "data-id": s.id });
   const { x, y, w, h } = s.box;
   const st = s.style;
   if (st.opacity !== undefined) g.setAttribute("opacity", String(st.opacity));
+  const bare = bareBox(s, knobs);
   const opts: Options = {
     seed: seedOf(s.id),
     roughness: st.roughness ?? knobs["render.roughness"],
@@ -115,7 +128,7 @@ function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shap
       body.append(head(0.45), head(-0.45));
     }
   } else body = rc.rectangle(x, y, w, h, opts);
-  g.append(body);
+  if (!bare) g.append(body);
 
   const clipId = `clip-${s.id}`;
   const clip = el("clipPath", { id: clipId });
@@ -136,7 +149,8 @@ function drawShape(rc: ReturnType<typeof rough.svg>, svg: SVGSVGElement, s: Shap
     // The doodle, scaled to fit the shape as it is now (it may have moved or been resized since). Fade dims it, not the box.
     const pic = el("g", { "clip-path": `url(#${clipId})` });
     if (st.fade) pic.setAttribute("style", `opacity:${1 - st.fade * knobs["render.fadeOpacity"]};filter:saturate(${1 - st.fade})`);
-    const k = Math.min((w * knobs["picture.fill"]) / drawn.w, (ph * knobs["picture.fill"]) / drawn.h);
+    const share = bare ? 1 : knobs["picture.fill"];
+    const k = Math.min((w * share) / drawn.w, (ph * share) / drawn.h);
     const fit = el("g", { transform: `translate(${x + (w - drawn.w * k) / 2} ${y + (ph - drawn.h * k) / 2}) scale(${k})` });
     renderPicture(fit, drawn.els, { x: 0, y: 0, w: drawn.w, h: drawn.h }, knobs, svg);
     pic.append(fit);

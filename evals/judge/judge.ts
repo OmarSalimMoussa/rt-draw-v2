@@ -44,13 +44,19 @@ export function judgeId(role: Role, served: string | undefined, variant: P.Varia
 /** The model the API last said it served (message_start): existing expectations and miss checks are reused while their judgeId matches it. */
 let servedNow: string | undefined;
 export const lastServed = () => servedNow;
-const current = (have: { judgeId: string } | undefined, role: Role) => !!have && (servedNow === undefined || have.judgeId === judgeId(role, servedNow));
+/** An expectation from an owner-approved rubric (bench R1's gold, evals/real/shadow.ts): no judge made it, so none re-makes it. */
+export const RUBRIC = "rubric";
+const current = (have: { judgeId: string } | undefined, role: Role) => !!have && (have.judgeId === RUBRIC || servedNow === undefined || have.judgeId === judgeId(role, servedNow));
 
 export const calibrationFile = () => join(paths().history, "judge", "calibration.json");
-/** The prompt variants calibration chose (§4.5): 1 until a check adopts 2. craftCalibrated false: craft-goal keeps go to the owner list. */
-export function variants(): { fidelity: P.Variant; craft: P.Variant; craftCalibrated: boolean } {
-  const use = maybe<{ use?: { fidelity?: P.Variant | null; craft?: P.Variant | null } }>(calibrationFile())?.use;
-  return { fidelity: use?.fidelity ?? 1, craft: use?.craft ?? 1, craftCalibrated: !!use?.craft };
+/**
+ * The prompt variants calibration chose (§4.5): 1 until a check adopts 2. craftCalibrated false: craft-goal keeps go
+ * to the owner list. illustrationsCalibrated false (the owner hasn't labeled illustrations yet): picture.model keeps
+ * go there too, and R1 decides nothing (LOOP-V2.md A5, C3).
+ */
+export function variants(): { fidelity: P.Variant; craft: P.Variant; craftCalibrated: boolean; illustrationsCalibrated: boolean } {
+  const use = maybe<{ use?: { fidelity?: P.Variant | null; craft?: P.Variant | null; illustrations?: boolean } }>(calibrationFile())?.use;
+  return { fidelity: use?.fidelity ?? 1, craft: use?.craft ?? 1, craftCalibrated: !!use?.craft, illustrationsCalibrated: !!use?.illustrations };
 }
 
 /** Each judgeId once in history/judge/ids.json, with what went into it. */

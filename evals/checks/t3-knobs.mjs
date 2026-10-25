@@ -31,14 +31,31 @@ const old = await import(pathToFileURL(join(home, "tuning-before.ts")).href);
 const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "picture.prompt": 0, "draw.noThink": 0, "resolve.noThink": 0, "picture.noThink": 0, "draw.mapMaxShapes": 0, "picture.timeoutMs": 120000,
   "resolve.engine": 0, "resolve.jevModel": 0, "resolve.jevMaxCandidates": 8, "resolve.jevYes": 0.5, "resolve.jevSure": 0.3, "resolve.jevRace": 0, "resolve.jevHints": 0, "resolve.jevHintMin": 0.2, "resolve.jevPrompt": 0, "resolve.speculate": 0,
   "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0, "draw.copies": 1, "draw.copyAfterMs": 0, "picture.copies": 1, "picture.copyAfterMs": 0 };
-// Defaults the owner changed since T3 (decisions on eval/history), at their T3-time values: the comparisons with the code
-// before T3 run under these, since they're about T3's refactor, not later decisions.
-const T3_TIME = { "resolve.noThink": 0, "picture.maxPaths": 24 };
+// Knobs added after T3, at their defaults.
+const LATER = { "draw.addHint": 1, "draw.addYes": 0.5, "draw.addWaitMs": 1500, "picture.strokeWidth": 3, "render.captionMaxShare": 0.4, "render.minTextScale": 0.4,
+  "ops.waitForShape": 1, "picture.context": 2, "picture.contextColors": 8, "picture.contextPoints": 300, "render.pictureBox": 1 };
+// Defaults the owner changed since T3 (decisions on eval/history, and LOOP-V2.md's product fixes), and later knobs that
+// change what a send asks or shows, at their T3-time behaviour: the comparisons with the code before T3 run under these,
+// since they're about T3's refactor, not later decisions.
+const T3_TIME = { "resolve.noThink": 0, "picture.maxPaths": 24, "picture.colors": 4, "resolve.engine": 0, "resolve.jevHints": 0, "resolve.speculate": 0, "draw.prompt": 0, "picture.prompt": 0,
+  "draw.addHint": 0, "picture.context": 0, "render.pictureBox": 0, "ops.waitForShape": 0 };
 const OWNER_DEFAULTS = {
   "resolve.noThink": 1, // 2026-10-19: e2-h1, the resolver answers without thinking (TTFC ×0.66)
-  "picture.maxPaths": 16, // 2026-10-19: e45-h1, doodles at most 16 elements (TTD ×0.965, $ ×0.94)
+  "resolve.engine": 1, // 4420f45: Jev resolves references
+  "resolve.jevHints": 1, // 94ba1c1: Jev's answers go to the drawing model as hints
+  "resolve.speculate": 1, // 94ba1c1: the drawing call starts on Jev's guess
+  "picture.maxPaths": 0, "picture.colors": 0, // LOOP-V2.md B1: no caps on a picture's elements or colors
+  "picture.prompt": 3, // LOOP-V2.md B1: detail matched to the ask
+  "draw.prompt": 1, // LOOP-V2.md B2, B4, C1: the illustrated manual
 };
-for (const [key, value] of Object.entries({ ...NEW, ...OWNER_DEFAULTS })) {
+// Fields of knobs from before T3 that changed since, as they were then.
+const T3_FIELDS = {
+  "ops.minDescriptionWords": { doc: "a new shape's description needs at least this many words" },
+  "shot.inkNumberGapPx": { doc: "the [n] sits this far up and right of the mark's top-right-most ink" },
+  "picture.maxPaths": { value: 24, min: 4, doc: "a doodle may use at most this many paths" },
+  "picture.colors": { value: 4, min: 1, doc: "and at most this many colors" },
+};
+for (const [key, value] of Object.entries({ ...NEW, ...LATER, ...OWNER_DEFAULTS })) {
   const k = KNOBS.find((x) => x.key === key);
   if (!check(k, `no knob ${key}`)) continue;
   const part = key.split(".")[0];
@@ -48,7 +65,7 @@ for (const [key, value] of Object.entries({ ...NEW, ...OWNER_DEFAULTS })) {
   if (key.endsWith(".noThink")) check(k.max === 1 && k.name, `${key} isn't an on/off knob`);
 }
 check(PROMPTS.picture.length >= 2, "no picture variant 1");
-check(isDeepStrictEqual(KNOBS.filter((k) => !(k.key in NEW)).map((k) => (k.key in T3_TIME ? { ...k, value: T3_TIME[k.key] } : k)), old.KNOBS), "a knob from before T3 changed (patches.* included, owner defaults at their T3-time values), or one was added beyond the new ones");
+check(isDeepStrictEqual(KNOBS.filter((k) => !(k.key in NEW) && !(k.key in LATER)).map((k) => ({ ...k, ...T3_FIELDS[k.key] })), old.KNOBS), "a knob from before T3 changed (patches.* included, changes since at their T3-time fields), or one was added beyond the new and later ones");
 
 // ---- A Vite serving today's src and, at /src/core/__base__/<f>.ts, the five modules as they were (their other imports are today's).
 const BASE = join(ROOT, "src/core/__base__");
@@ -184,16 +201,19 @@ const run = (expr) => page.eval(`t3.${expr}`);
 const js = JSON.stringify;
 
 // ---- Variant 0 is today's text.
+// The drawing call is the one role the owner changed since T3 on purpose: the manual's shipped text (8819cc1's ordering
+// rule, 8a12c01's links, b5de72e and 0855a54's pages) and its user text (the site map, Jev's add hint, 4f0de87). Its
+// prompt and request are no longer T3's, so they're left out of the comparisons below; every other role still is T3's.
+const CHANGED_SINCE = new Set(["draw"]);
 const texts = await run("texts()");
-for (const [role, same] of Object.entries(texts)) check(same, `${role}: variant 0 isn't the text before T3`);
+for (const [role, same] of Object.entries(texts)) if (!CHANGED_SINCE.has(role)) check(same, `${role}: variant 0 isn't the text before T3`);
 
-// ---- Under DEFAULTS, byte for byte the same prompt and requests as before T3, on the 4 fixtures.
+// ---- Under DEFAULTS (T3's), byte for byte the same requests as before T3 on the 4 fixtures, the drawing call's aside.
 const FIXTURES = ["toyshop-home", "clowns", "messy", "grid"];
 for (const id of FIXTURES) {
   const was = await run(`send("was", ${js(id)})`);
   const now = await run(`send("now", ${js(id)}, ${js(T3_TIME)})`);
-  const shas = (r) => r.requests.map((q) => `${q.from} ${q.sha}`).sort();
-  check(now.prompt === was.prompt && isDeepStrictEqual(now.features, was.features), `${id}: buildPrompt's text differs from before T3`);
+  const shas = (r) => r.requests.filter((q) => !CHANGED_SINCE.has(q.from)).map((q) => `${q.from} ${q.sha}`).sort();
   check(isDeepStrictEqual(shas(now), shas(was)), `${id}: requests differ from before T3 (before: ${shas(was).filter((s) => !shas(now).includes(s)).map((s) => s.split(" ")[0])}; now: ${shas(now).filter((s) => !shas(was).includes(s)).map((s) => s.split(" ")[0])})`);
   check(isDeepStrictEqual(now.ops, was.ops) && isDeepStrictEqual(now.pics, was.pics), `${id}: ops or pictures differ from before T3`);
   const roles = new Set(now.requests.map((q) => q.from));
@@ -203,7 +223,8 @@ for (const id of FIXTURES) {
 // The canvas (no camera) and describe one shape per call: the other texts, the same way.
 const wasCanvas = await run(`send("was", "clowns", { "describe.batch": 0, "draw.gridCellPx": 40 }, { canvas: true })`);
 const nowCanvas = await run(`send("now", "clowns", ${js({ ...T3_TIME, "describe.batch": 0, "draw.gridCellPx": 40 })}, { canvas: true })`);
-check(nowCanvas.prompt === wasCanvas.prompt && isDeepStrictEqual(nowCanvas.requests.map((q) => q.sha).sort(), wasCanvas.requests.map((q) => q.sha).sort()), "on a canvas with one shape per describe call, the prompt or requests differ from before T3");
+const others = (r) => r.requests.filter((q) => !CHANGED_SINCE.has(q.from)).map((q) => q.sha).sort();
+check(isDeepStrictEqual(others(nowCanvas), others(wasCanvas)), "on a canvas with one shape per describe call, the requests differ from before T3");
 
 // ---- <role>.noThink = 1 sets thinking "off" on that role's requests (and its warm-up) and on no other.
 for (const [role, froms] of [["draw", ["draw"]], ["resolve", ["draw-refs"]], ["picture", ["picture", "warm"]]]) {
@@ -213,19 +234,19 @@ for (const [role, froms] of [["draw", ["draw"]], ["resolve", ["draw-refs"]], ["p
 }
 
 // ---- draw.mapMaxShapes caps the site map (and the canvas id map); the rest are counted.
-const capped = await run(`send("now", "toyshop-home", { "draw.mapMaxShapes": 10 }, { noDescribe: true })`);
-const uncapped = await run(`send("now", "toyshop-home", {}, { noDescribe: true })`);
+const capped = await run(`send("now", "toyshop-home", ${js({ ...T3_TIME, "draw.mapMaxShapes": 10 })}, { noDescribe: true })`);
+const uncapped = await run(`send("now", "toyshop-home", ${js(T3_TIME)}, { noDescribe: true })`);
 check(capped.features.mapChars > 0 && capped.features.mapChars < uncapped.features.mapChars / 2, `draw.mapMaxShapes=10: site map ${capped.features.mapChars} chars against ${uncapped.features.mapChars}`);
 const drawReq = (r) => r.requests.find((q) => q.from === "draw");
 check(/\(\d+ more shapes not listed\)/.test(drawReq(capped)?.user ?? "") && (drawReq(capped).user.match(/^[ \t]*- /gm) ?? []).length === 10, "draw.mapMaxShapes=10 doesn't list exactly 10 shapes and count the rest");
 
 // ---- A reply of only camera(...) has no first op and no 'first op applied' mark; a scene op after it does.
 REPLIES.draw = "camera(0 0 2560 1600)";
-const cam = await run(`send("now", "toyshop-home", {}, { noDescribe: true })`);
+const cam = await run(`send("now", "toyshop-home", ${js(T3_TIME)}, { noDescribe: true })`);
 check(cam.ops.length === 1 && cam.ops[0].ok && cam.ops[0].camera, `the camera-only reply didn't apply as a camera move: ${js(cam.ops)}`);
 check(cam.firstOpMs === undefined && cam.marks === 0, `a camera-only reply gave firstOpMs ${cam.firstOpMs} and ${cam.marks} 'first op applied' marks`);
 REPLIES.draw = `camera(0 0 2560 1600)\n${NEW_SHAPE}`;
-const after = await run(`send("now", "toyshop-home", {}, { noDescribe: true })`);
+const after = await run(`send("now", "toyshop-home", ${js(T3_TIME)}, { noDescribe: true })`);
 check(after.firstOpMs !== undefined && after.firstOpMs === after.firstOpAt && after.marks === 1, `camera then a shape: firstOpMs ${after.firstOpMs} (the shape at ${after.firstOpAt}), ${after.marks} marks`);
 
 // ---- A picture call past picture.timeoutMs is stopped and counts as failed (the slow endpoint answers at 3 s).

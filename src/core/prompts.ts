@@ -16,6 +16,18 @@ type DrawThinkText = { name: string; question: string; yes: string; no: string }
 
 /** The op manual, short on purpose: v1's long manual is not carried over. On a board it speaks of board pixels, pages and the camera. */
 function drawShipped(board: boolean, w: number, h: number, cell: number, pageW: number): string {
+  return drawManual(board, w, h, cell, pageW, false);
+}
+
+/**
+ * The manual with illustrations (LOOP-V2.md B2, B4, C1): the illustration() op for a subject drawn as one picture, a
+ * picture's box unseen unless styled, detail matched to the ask, and a color example that isn't the person's red pen.
+ */
+function drawIllustrated(board: boolean, w: number, h: number, cell: number, pageW: number): string {
+  return drawManual(board, w, h, cell, pageW, true);
+}
+
+function drawManual(board: boolean, w: number, h: number, cell: number, pageW: number, illustrated: boolean): string {
   const intro = board
     ? "You edit an infinite board of web pages and app screens, in board pixels (x right, y down). A page is a frame shape: its text is its name, shown above it, and the shapes inside its box are its content."
     : `You edit a drawing canvas of ${w}×${h} pixels (x right, y down, origin top-left).`;
@@ -26,19 +38,21 @@ Reply ONLY with op lines, one per line: no prose, no code fences. Each line is a
 
 shape(id, kind, box, "description", style...)   add a shape, or change only what you give
 text(id, "words", size:s|m|l|xl, color:..., align:left|center|right, weight:bold)
-drawing(id, "what the picture shows", fade:0-1)  a doodle picture inside a shape
+${illustrated ? `illustration(id, box, "what it shows")   a picture on its own: a subject, a scene, a sketch made real
+drawing(id, "what the picture shows", fade:0-1)  a picture inside a shape (a photo on a card); the shape's box is unseen unless you give it a fill or stroke` : `drawing(id, "what the picture shows", fade:0-1)  a doodle picture inside a shape`}
 layer(id, front | back | above:other | below:other)
 move(id, box)      remove(id)      group(id, [a, b, ...])${board ? `
 camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look ("zoom out", "show me the cart"), or, as your last line, onto what you made if it's off screen` : ""}
 
 kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page, ${pageW} wide for a website, or sized to fit whatever they ask for: a phone screen, a desktop, a diagram. An empty page is theirs to use: draw on it, resizing it to fit, rather than adding another beside it. Put a new one anywhere beside the others without overlapping them; the board moves pages into place after you finish. A frame is only ever a whole page: a strip, panel or card on a page is a rect)` : ""}.
 box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
-Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)
+${illustrated ? `Example: shape(sale-badge, pill, 1100 90 150 50, "small yellow pill badge in the top right corner announcing a toy sale", fill:#ffd43b, stroke:none)` : `Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)`}
 style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).${board ? `
 Clicks: give link:<page id> (the id in [brackets] in the site map) to anything that opens another page (nav items, buttons, cards, a logo that goes home), and button:yes to anything else a visitor would click; link:none and button:no undo them. Never draw arrows between pages: the board draws them from the links. Aim the camera at a page by its id: camera(contact).` : ""}
 Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
 A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
-Order: a shape() always comes before any text(), drawing() or move() on its id, and a text() only targets a shape that already exists (a new id never gets a bare text(): shape it first). Put each drawing() on the line right after its shape(), before the page's text and chrome, so pictures can start drawing while you are still writing.
+Order: a shape() always comes before any text(), drawing() or move() on its id, and a text() only targets a shape that already exists (a new id never gets a bare text(): shape it first). Put each drawing() on the line right after its shape(), before the page's text and chrome, so pictures can start drawing while you are still writing.${illustrated ? `
+Draw a subject they ask for (an animal, a person, an object, a scene) as one illustration(), early in your reply, rather than assembling it from boxes and circles, and never let a plain box stand in for it. Match the detail to what they ask: a sketch or an icon stays simple, and real detail comes only when they ask for it. When they ask to turn their sketch into something real, put the illustration() where the sketch is.` : ""}
 
 The user's words carry [ink n] markers: n is the red ink mark labeled [n] in the ${board ? "pictures" : "screenshot"}, drawn while they said that word. Their ink points at things or sketches a shape and place; it is never part of the page, so don't copy it unless they ask you to draw what they sketched. If the request is unclear, make the most likely change.`;
 }
@@ -81,17 +95,26 @@ Reply with only a JSON object: {"<id>": "<description>"}.`;
 const PICTURE_SYSTEM = "You draw small, charming doodles as SVG elements. Output only the elements, one per line: no prose, no code fences, no <svg> wrapper.";
 const PICTURE_LOOK = `Like a quick, cute marker sketch in a notebook: a recognizable silhouette, simple shapes, flat colors, no text, no background, no shading.
 It must hold together: draw the biggest shape first (the body), then attach every other part so it overlaps or touches what it belongs to. Nothing floats.`;
+/** The element and color limits, as the knobs set them: picture.maxPaths and picture.colors at 0 cap nothing (the owner, LOOP-V2.md B1). */
+const limits = (t: Tuning) =>
+  t["picture.maxPaths"] || t["picture.colors"]
+    ? `At most ${t["picture.maxPaths"] || "any number of"} elements and ${t["picture.colors"] || "any number of"} colors`
+    : "As many elements and colors as the subject needs, and no more";
 const pictureRules = (t: Tuning) => `Use only these elements, each on its own line and self-closing: <path d="..."/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>.
 Attributes: geometry, fill, stroke, stroke-width. Absolute coordinates, no transforms, no groups, no style attribute.
-At most ${t["picture.maxPaths"]} elements and ${t["picture.colors"]} colors (hex, like #e8590c; fill="none" for outlines). Outlines in near-black #1e1e1e, stroke-width 2 to 4.
+${limits(t)} (hex, like #e8590c; fill="none" for outlines). Outlines in near-black #1e1e1e, stroke-width 2 to 4.
 Example (a smiling sun in a 100 x 100 box):
 <circle cx="50" cy="50" r="28" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>
 <path d="M38 56 Q50 66 62 56" fill="none" stroke="#1e1e1e" stroke-width="3"/>`;
 
+// The matched variant's look: detail as the subject asks for it, not always a quick doodle (the owner, LOOP-V2.md B1).
+const PICTURE_MATCHED = `Match the detail to what was asked. A sketch, icon or doodle stays simple: a bold, recognizable silhouette in a few flat shapes. When the subject asks for more (detailed, realistic, high fidelity), give it real detail: more parts, layered flat tones for light and shadow, texture lines; tone, shadow and texture layers take stroke="none", so only the outer shapes are outlined.
+Either way it must hold together: draw the biggest shapes first, then attach every part so it overlaps or touches what it belongs to. Nothing floats. No text unless the subject asks for words; no background unless the subject is a scene.`;
+
 // The short-stroke variant: every element is already outlined in #1e1e1e at the default width, so the model writes stroke and stroke-width only when they differ.
 const pictureRulesShort = (t: Tuning) => `Use only these elements, each on its own line and self-closing: <path d="..."/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>.
 Attributes: geometry, fill, stroke, stroke-width. Absolute coordinates, no transforms, no groups, no style attribute.
-At most ${t["picture.maxPaths"]} elements and ${t["picture.colors"]} colors (hex, like #e8590c; fill="none" for outlines).
+${limits(t)} (hex, like #e8590c; fill="none" for outlines).
 Every element is outlined in near-black #1e1e1e at stroke-width ${t["picture.strokeWidth"]} unless it says otherwise, so leave out stroke and stroke-width when they are those. Write stroke="none" on a fill-only detail (a pupil, a highlight), or another stroke color or stroke-width where you want one.
 Example (a smiling sun in a 100 x 100 box):
 <circle cx="50" cy="50" r="28" fill="#ffd43b"/>
@@ -99,7 +122,10 @@ Example (a smiling sun in a 100 x 100 box):
 <circle cx="42" cy="44" r="3" fill="#1e1e1e" stroke="none"/>`;
 
 export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: DescribeText[]; picture: PictureText[]; resolveJev: ResolveJevText[]; drawThink: DrawThinkText[] } = {
-  draw: [{ name: "shipped", system: drawShipped }],
+  draw: [
+    { name: "shipped", system: drawShipped },
+    { name: "illustrated", system: drawIllustrated },
+  ],
   resolve: [{ name: "shipped", system: RESOLVE_SHIPPED }],
   resolveJev: [
     { name: "scratch-v2", task: RESOLVE_SHIPPED, question: (line) => `Do their words or ink refer to this existing shape: ${line}?`, yes: RESOLVE_JEV_YES, no: RESOLVE_JEV_NO },
@@ -144,6 +170,16 @@ The box is ${w} wide and ${h} tall.`,
 
 ${PICTURE_LOOK}
 The box is ${w} wide and ${h} tall (x right, y down, 0 0 at the top left). Fill most of it, centered, and keep everything inside it.
+${pictureRulesShort(t)}`,
+    },
+    // Short-stroke's rules with detail matched to the ask: a sketch stays simple, a detailed or realistic subject gets detail.
+    {
+      name: "matched",
+      system: () => "You draw pictures as SVG elements. Output only the elements, one per line: no prose, no code fences, no <svg> wrapper.",
+      user: (subject, w, h, t) => `Picture: ${subject}
+
+${PICTURE_MATCHED}
+The box is ${w} wide and ${h} tall (x right, y down, 0 0 at the top left). Fill it, and keep everything inside it.
 ${pictureRulesShort(t)}`,
     },
   ],

@@ -168,7 +168,14 @@ function base64(buf: ArrayBuffer) {
 export class ScribeEngine {
   private ws?: WebSocket;
   private stopped = false;
-  constructor(private events: SpeechEvents, private mic: Mic, private tuning: () => Tuning) {}
+  private events: SpeechEvents;
+  private mic: Mic;
+  private tuning: () => Tuning;
+  constructor(events: SpeechEvents, mic: Mic, tuning: () => Tuning) {
+    this.events = events;
+    this.mic = mic;
+    this.tuning = tuning;
+  }
 
   async start() {
     this.stopped = false;

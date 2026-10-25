@@ -6,8 +6,8 @@
 //
 // Rotation: new work moves off a slot at the first of five-hour utilization (or,
 // until the server reports it, list $ since the window start over the window's
-// estimated size W) ≥ 0.90, an allowed_warning, a rejected event or a 429, or the
-// slot's weekly allowance. Two slots reporting the same resetsAt are one account.
+// estimated size W) ≥ LOOP.fiveHourPauseAt (0.60: the token is shared with testers on prod), an allowed_warning, a
+// rejected event or a 429, or the slot's weekly allowance (LOOP.weekSevenDayMax). Two slots reporting the same resetsAt are one account.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -91,8 +91,6 @@ type SlotState = {
 export class Slots {
   private s: SlotState[];
   current: SlotN;
-  /** $ spent since this process started: the night cap's count. */
-  nightUsd = 0;
   private file?: string;
   private now: () => number;
   constructor(slots: SlotN[], file?: string, now = () => Date.now()) {
@@ -117,7 +115,6 @@ export class Slots {
     this.renew(s);
     s.windowStart ??= now;
     s.usdWindow += o.usd;
-    this.nightUsd += o.usd;
     const hour = String(now - (now % 3600_000));
     s.hours[hour] = (s.hours[hour] ?? 0) + o.usd;
     for (const h of Object.keys(s.hours)) if (Number(h) < now - WEEK) delete s.hours[h];
@@ -167,7 +164,7 @@ export class Slots {
     if (this.week(s)) return "weekly allowance";
     if (s.limited) return "rate limited";
     if (s.status === "allowed_warning") return "allowed_warning";
-    if (this.use(slot) >= LOOP.rotateAt) return `five-hour use ${this.use(slot).toFixed(2)}`;
+    if (this.use(slot) >= LOOP.fiveHourPauseAt) return `five-hour use ${this.use(slot).toFixed(2)}`;
   }
 
   private next(): SlotN | undefined {
@@ -188,10 +185,12 @@ export class Slots {
     for (const a of known) for (const b of known) if (a.slot < b.slot && a.resetsAt === b.resetsAt) return [a.slot, b.slot];
   }
 
-  /** What run.ts paces by: stop (weekly or night cap) or pause until the earliest reset. */
-  pace(nightWindows: number = LOOP.nightWindows): { ok: true } | { ok: false; stop?: string; pauseUntil?: number } {
-    const W = this.s.reduce((a, s) => a + s.W, 0) / this.s.length;
-    if (this.nightUsd >= nightWindows * W) return { ok: false, stop: `night cap (${nightWindows} windows)` };
+  /**
+   * What run.ts and each paying step pace by: stop (every slot past its week) or pause until the earliest five-hour
+   * reset (LOOP-V2.md A4). The night cap is the loop's own rule between steps (state.ts), counted from the loop's meter
+   * with its --night-windows: this process's start and default would be a second, different night.
+   */
+  pace(): { ok: true } | { ok: false; stop?: string; pauseUntil?: number } {
     if (this.s.every((s) => this.week(s))) return { ok: false, stop: "every slot past its weekly allowance" };
     if (this.s.every((s) => this.why(s.slot))) return { ok: false, pauseUntil: Math.min(...this.s.map((s) => (s.resetsAt ? s.resetsAt * 1000 : (s.windowStart ?? this.now()) + FIVE_H))) };
     return { ok: true };

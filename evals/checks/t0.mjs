@@ -58,8 +58,10 @@ process.env.RT_EVAL_HOME = home;
 
 // ---- config.ts: §1.6 verbatim (pinned by its hash), browser-safe, the same id in every process.
 // sha256 of LOOP and DRIVE_VIEW as spec §1.6 writes them (2026-10-16), plus latFloorZ and latFutilityZ (2026-10-17, before
-// any run: a latency keep's fidelity floor by look). Changing a frozen number is an era change: update this on purpose.
-const SPEC_CONFIG_ID = "82867120cb4387e1ed1ae7e433bbaa1bb2164d44e0f4bb6943013a74a53ddf7d";
+// any run: a latency keep's fidelity floor by look), then the owner's v2 rules (2026-10-25, evals/LOOP-V2.md: first drawing
+// and render decide with no allowance, no cost cap, the 60% / 50% budget, the search's numbers). Changing a frozen number
+// is an era change: update this on purpose.
+const SPEC_CONFIG_ID = "660cb39794461f3f4182fd9553332011101d01d85512aaa9ba2d1d9c308bf109";
 const cfg = await import("../loop/config.ts");
 check(cfg.configId === SPEC_CONFIG_ID, "config.ts' LOOP or DRIVE_VIEW differ from spec §1.6");
 check(cfg.configId === sha(JSON.stringify({ LOOP: cfg.LOOP, DRIVE_VIEW: cfg.DRIVE_VIEW })), "configId isn't sha256(JSON.stringify({ LOOP, DRIVE_VIEW }))");

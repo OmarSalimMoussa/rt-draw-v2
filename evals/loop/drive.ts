@@ -533,7 +533,8 @@ function armFiles(x: Sent, loopP99: number): ArmFiles {
   return {
     "result.json": { ops: o.ops, reply: o.reply, ...(o.error ? { error: o.error } : {}), ...(o.pics ? { pics: o.pics } : {}), stopReasons: x.calls.flatMap((c) => (c.stopReason ? [c.stopReason] : [])),
       calls: x.calls.map((c) => ({ role: c.role, reqHash: c.reqHash, shared: c.shared, mode: c.mode, ms: c.ms, firstMs: c.firstMs, waitMs: c.waitMs, readyAtTake: c.readyAtTake, thinkingTokens: c.thinkingTokens })) },
-    "timing.json": { enterAt: o.timing.enterAt, ttfcMs: o.timing.ttfcMs, ttdMs: o.timing.ttdMs, ttloMs: o.timing.ttloMs, firstTextMs: first && Math.round(first.atMs - o.timing.enterAt),
+    "timing.json": { enterAt: o.timing.enterAt, ttfcMs: o.timing.ttfcMs, ttdMs: o.timing.ttdMs, ttloMs: o.timing.ttloMs,
+      ttfdMs: o.timing.ttfdMs, renderP50Ms: o.timing.renderP50Ms, renderP90Ms: o.timing.renderP90Ms, renderMaxMs: o.timing.renderMaxMs, firstTextMs: first && Math.round(first.atMs - o.timing.enterAt),
       resolverMs: resolver && Math.round(resolver.endMs - resolver.startMs), picturesMs: o.pics?.ms, renders: o.timing.renders, longTasksMs: o.timing.longTasksMs,
       // The page's clock: Enter plus the time node waited for the send to quiesce.
       quiescedAt: Math.round(o.timing.enterAt + x.at[1] - x.at[0]), heapMb: o.timing.heapMb, gatewayLoopP99Ms: loopP99 },

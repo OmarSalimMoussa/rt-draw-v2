@@ -5,7 +5,7 @@
 // sha256 in cache/blobs/ and hard-linked where a case names them.
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { View } from "../../src/core/board.ts";
 import { needsPicture, readPicture } from "../../src/core/picture.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
@@ -47,9 +47,9 @@ export function appendLine(file: string, row: object) {
   appendFileSync(file, `${JSON.stringify(row)}\n`);
 }
 
-/** An image stored once as cache/blobs/<sha256>.jpg and hard-linked at `file`. */
+/** An image stored once as cache/blobs/<sha256>.jpg (real/cache/blobs for a file under real/) and hard-linked at `file`. */
 export function putImage(file: string, jpg: Uint8Array) {
-  const blob = paths().blob(sha256(jpg));
+  const blob = paths().blob(sha256(jpg), resolve(file).startsWith(paths().real + sep));
   if (!existsSync(blob)) put(blob, jpg);
   if (existsSync(file)) {
     // The same image already (a link, or a copy after a move between machines).

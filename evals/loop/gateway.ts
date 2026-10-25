@@ -11,7 +11,8 @@
 // behaves like one user's server; eval roles run at most 6 at once and never pool.
 // A run is live (fresh calls, shared inside a case unless the run says share: false),
 // replay (cached replies on their own clock) or scan (instant: a hit, else the case's
-// stand-in, else empty; a warm scan also starts the processes its calls would take). Only eval calls resume from the cache within their run: a
+// stand-in, else empty; a warm scan also starts the processes its calls would take; a timed
+// scan plays them on their recorded clock, so a render-only decision's first drawing means something). Only eval calls resume from the cache within their run: a
 // product call is a fresh sample (or the other arm's, shared) in every live run,
 // except the request hashes the run names as identical in both arms (the diffscan
 // found them): those come from the bank cache on their recorded clock, for both.
@@ -64,6 +65,7 @@ type Out = {
   text: string; stats: Record<string, unknown>; mode: CallMode; shared: Shared; scan?: "hit" | "standin" | "miss"; error?: string; cacheFile?: string; chunks: Chunk[];
   /** a real call was made: its list $ and token slot (none for Jev) */ upstream?: { usd: number; token?: SlotN };
   /** refused before any call (the cap): no meter line */ refused?: boolean;
+  /** its page dropped it (a copy that lost, a speculation that missed, a picture past its timeout): no error */ dropped?: boolean;
 };
 /** A case's loop delays by whole ms (the last bucket: LATE_MAX_MS and more), a fixed size however long the case runs. */
 type CaseState = { lates: Uint32Array; ordinals: Map<string, number>; calls: Record<string, RecordedReply[]>; /** a warm scan's processes, settled once up */ ups: Promise<void>[] };
@@ -82,7 +84,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   const tokenOf = (slot: SlotN) => o.tokens.find((t) => t.slot === slot)!.token;
   const pool = new Pool();
   const flights = new Flights();
-  const runs = new Map<string, { mode: RunMode; share: boolean; cached?: Set<string>; warm?: boolean }>();
+  const runs = new Map<string, { mode: RunMode; share: boolean; cached?: Set<string>; warm?: boolean; timed?: boolean }>();
   const cases = new Map<string, CaseState>();
   // The loop's delay, sampled every LOOP_RESOLUTION_MS into each open case: how late a tick ran, less the time spent
   // starting processes since the last one. The starts are the harness's own and spaced (SPAWN_GAP_MS); counted, a
@@ -162,9 +164,17 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const key = poolKey(a, token);
     const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token), a.page), waiting: false, readyAtTake: false };
     if (a.page) topUp(key, keepOf(a.warm, MAX_WARM), start(a.req, token));
-    const timer = setTimeout(() => taken.proc.q.close(), TIMEOUT_MS);
-    // A page that dropped its call stops it, unless another arm's identical call is waiting on this one.
-    const stop = () => !flight?.followers.size && taken.proc.q.close();
+    // Closing the query ends its stream cleanly, so what stopped it is noted: a reply cut short is never a reply.
+    let stopped: "page" | "timer" | undefined;
+    const late = `no reply within ${TIMEOUT_MS / 1000} s`;
+    const timer = setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), TIMEOUT_MS);
+    // A page that dropped its call stops it, unless another arm's identical call is waiting on this one; none may join after.
+    const stop = () => {
+      if (flight?.followers.size) return;
+      if (flight) flight.stopped = true;
+      stopped ??= "page";
+      taken.proc.q.close();
+    };
     if (a.gone?.aborted) stop();
     a.gone?.addEventListener("abort", stop);
     const chunks: Chunk[] = [];
@@ -182,16 +192,24 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       const st = { ...head, ...flat(stats), ms: since(), firstMs: chunks[0]?.ms, waitMs };
       const usd = listUsd(a.req.model, { inTokens: stats.inTokens, cacheRead: stats.cacheRead, cacheWrite5m: stats.write5m, cacheWrite1h: stats.write1h, outTokens: stats.outTokens });
       slots.record(token, { usd, rateLimit: stats.rateLimit });
+      // Stopped, by its page or the timeout: whatever came is cut short, so it's never cached, followed or replayed.
+      if (stopped) {
+        if (flight) Flights.end(flight, { ms: st.ms, error: stopped === "page" ? "dropped by its page" : late });
+        return { text: "", stats: st, mode: "live", shared: "-", ...(stopped === "page" ? { dropped: true } : { error: late }), chunks, upstream: { usd, token } };
+      }
       const cacheFile = writeReply(p, { reqHash: a.hash, run: a.run, role: a.role, at: new Date().toISOString(), request: a.req, text, chunks, doneMs: st.ms, stats: st }, !a.page);
       if (flight) Flights.end(flight, { ms: st.ms, stats: st, cacheFile });
       return { text, stats: st, mode: "live", shared: flight?.followers.size ? "leader" : "-", chunks, cacheFile, upstream: { usd, token } };
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const error = stopped === "timer" ? late : err instanceof Error ? err.message : String(err);
       const s = err instanceof CallError ? err.stats : undefined;
       const usd = s ? listUsd(a.req.model, { inTokens: s.inTokens, cacheRead: s.cacheRead, cacheWrite5m: s.write5m, cacheWrite1h: s.write1h, outTokens: s.outTokens }) : 0;
       slots.record(token, { usd, rateLimit: s?.rateLimit, limited: /rate.?limit/i.test(error) });
       if (flight) Flights.end(flight, { ms: since(), error });
-      return { text: "", stats: { ...head, ...(s ? flat(s) : {}), ms: since(), waitMs }, mode: "live", shared: "-", error, chunks, upstream: { usd, token } };
+      // A call its page dropped (stop() closed it) is the product's own choice, never a transport failure (V7): recorded
+      // as an error, it voided or lost the case of every copies card and every speculation that missed.
+      const dropped = stopped === "page";
+      return { text: "", stats: { ...head, ...(s ? flat(s) : {}), ms: since(), waitMs }, mode: "live", shared: "-", ...(dropped ? { dropped } : { error }), chunks, upstream: { usd, token } };
     } finally {
       clearTimeout(timer);
       a.gone?.removeEventListener("abort", stop);
@@ -221,7 +239,8 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   }
 
   async function serve(a: Ask, onText: (t: string) => void): Promise<Out> {
-    const { mode, share, cached, warm } = runs.get(a.run) ?? { mode: "live", share: true };
+    const { mode, share, cached, warm, timed } = runs.get(a.run) ?? { mode: "live", share: true };
+    const instant = mode === "scan" && !!a.page && !timed;
     // A warm scan (ab.ts' warm-up send, a slot's first in a live run) starts the processes each call would take.
     if (warm && a.page) topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined);
     // A copy is another draw of the upstream wait: live, a fresh call of its own (never the cache's, never another arm's);
@@ -230,13 +249,13 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     // An eval call this run already made (a resume); in replay and scan any product reply the cache holds; in live the run's named ones.
     const hit = !a.page || mode !== "live" || cached?.has(a.hash) ? readReply(p, a.hash, a.run, !a.page) : undefined;
     if (hit) {
-      await replay(hit.chunks, hit.doneMs, a.t0, onText, mode === "scan" && a.page);
+      await replay(hit.chunks, hit.doneMs, a.t0, onText, instant);
       return { text: hit.text, stats: hit.stats, mode: !a.page ? "resume" : mode === "live" ? "replay" : mode, shared: "-", chunks: hit.chunks, cacheFile: replyName(a.hash, a.run, !a.page), scan: mode === "scan" && a.page ? "hit" : undefined };
     }
     if (mode === "scan" && a.page) {
       const s = a.case ? standIn(p, a.case, a.role, a.ordinal, a.req.user) : undefined;
       if (!s) return { text: "", stats: {}, mode: "scan", shared: "-", chunks: [], scan: "miss" };
-      await replay(s.chunks, s.doneMs, a.t0, onText, true);
+      await replay(s.chunks, s.doneMs, a.t0, onText, instant);
       return { text: s.text, stats: s.stats, mode: "scan", shared: "-", chunks: s.chunks, cacheFile: replyName(s.reqHash, s.run, false), scan: "standin" };
     }
     const scope = share && a.page && a.case && a.arm ? `${a.run}|${a.case}` : undefined;
@@ -274,20 +293,21 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       sdk: SDK_VERSION, reqHash: a.hash, shared: out.shared, mode: out.mode, scan: out.scan,
       inTokens: up ? n(s.inTokens) : 0, cacheRead: up ? n(s.cacheRead) : 0, cacheWrite5m: up ? n(s.write5m) : 0, cacheWrite1h: up ? n(s.write1h) : 0, outTokens: up ? n(s.outTokens) : 0,
       thinkingTokens: up ? n(s.thinkingTokens) : 0, stopReason: s.stopReason as string | undefined, ms: Math.round(performance.now() - t0), firstMs: firstMs === undefined ? undefined : Math.round(firstMs),
-      waitMs: up ? (s.waitMs as number | undefined) : undefined, readyAtTake: up ? (s.readyAtTake as boolean) : undefined, retries: up ? n(s.retries) : 0, apiError: out.error,
+      waitMs: up ? (s.waitMs as number | undefined) : undefined, readyAtTake: up ? (s.readyAtTake as boolean) : undefined, retries: up ? n(s.retries) : 0, apiError: out.error, dropped: out.dropped,
       listUsd: up?.usd ?? 0, costUsd: up ? (s.costUsd as number | undefined) : undefined, token: up?.token as SlotN, fiveHour: rl?.fiveHour, sevenDay: rl?.sevenDay, resetsAt: rl?.resetsAt,
     });
     // The case's calls per arm, for its replies.json (the stand-in index); a picture by its subject.
-    const c = a.case && a.arm && !out.error ? cases.get(`${a.run}|${a.case}`) : undefined;
+    const c = a.case && a.arm && !out.error && !out.dropped ? cases.get(`${a.run}|${a.case}`) : undefined;
     if (c) {
-      const subject = a.role === "picture" ? /^Doodle: (.+)$/m.exec(String(a.req.user))?.[1] : undefined;
+      // The subject line of every picture prompt variant: "Doodle: …" or, from the matched variant on, "Picture: …".
+      const subject = a.role === "picture" ? /^(?:Doodle|Picture): (.+)$/m.exec(String(a.req.user))?.[1] : undefined;
       (c.calls[a.arm!] ??= []).push({ role: a.role, ordinal: a.ordinal, subject, reqHash: a.hash, cacheFile: out.cacheFile ?? "", offsets: out.chunks.map((x) => Math.round(x.ms)), ...(a.copy ? { copy: a.copy } : {}) });
     }
     return out;
   }
 
   const model = (m: unknown) => (typeof m === "string" ? (MODEL_IDS[m] ?? (Object.values(MODEL_IDS).includes(m) ? m : undefined)) : undefined);
-  function reqOf(b: Record<string, unknown>, user: string | string[]): { req?: Req; error?: string } {
+  function reqOf(b: Record<string, unknown>, user: string | string[], run: string): { req?: Req; error?: string } {
     // Jev: the version is the model; no images, effort or thinking (fixed, so the hash is stable).
     if (isJev(b.model)) return typeof user === "string" ? { req: { model: b.model as string, system: typeof b.system === "string" ? b.system : "", user, images: [], effort: "low", thinking: "auto" } } : { error: "a Jev call's user is one JSON text" };
     const id = model(b.model);
@@ -295,14 +315,14 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!id) return { error: `unknown model "${b.model}" (haiku, sonnet, opus)` };
     if (!EFFORTS.includes(effort)) return { error: `unknown effort "${effort}"` };
     if (typeof b.system !== "string") return { error: "system must be a string" };
-    return { req: { model: id, system: b.system, user, images: storeImages(p, (b.images as string[]) ?? []), effort, thinking: b.thinking === "off" ? "off" : "auto" } };
+    return { req: { model: id, system: b.system, user, images: storeImages(p, (b.images as string[]) ?? [], run), effort, thinking: b.thinking === "off" ? "off" : "auto" } };
   }
 
   /** An arm page's /api/model: NDJSON text chunks, then the stats line (with reqHash, shared, mode). */
   async function product(req: IncomingMessage, res: ServerResponse, b: Record<string, unknown>, arrived: number) {
     const h = (k: string) => req.headers[`x-rt-${k}`] as string | undefined;
     const base = { run: h("run") ?? "-", case: h("case"), arm: h("arm"), slot: h("slot") === undefined ? undefined : Number(h("slot")), role: h("role") ?? (b.from as string) ?? "product" };
-    const { req: r, error } = reqOf(b, (b.user as string) ?? "");
+    const { req: r, error } = reqOf(b, (b.user as string) ?? "", base.run);
     if (!r) return json(res, 400, { error });
     const c = base.case ? caseOf(base.run, base.case) : undefined;
     if (b.user === undefined && isJev(b.model)) return json(res, 200, { warming: 0 });
@@ -331,7 +351,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   async function evalCall(res: ServerResponse, b: Record<string, unknown>, arrived: number) {
     const user = (b.user ?? b.turns) as string | string[] | undefined;
     if (!user || typeof b.role !== "string") return json(res, 400, { error: "a call needs a role and user text (turns)" });
-    const { req: r, error } = reqOf(b, user);
+    const { req: r, error } = reqOf(b, user, (b.run as string) ?? "-");
     if (!r) return json(res, 400, { error });
     const a: Ask = { run: (b.run as string) ?? "-", case: b.case as string | undefined, role: b.role, ordinal: 0, t0: arrived, page: false, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], token: b.token as SlotN | undefined };
     const out = await serveAndRecord(a, () => {});
@@ -367,7 +387,8 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       if (path === "/run") {
         if (!["live", "replay", "scan"].includes(b.mode as string)) return json(res, 400, { error: "mode is live, replay or scan" });
         if (b.warm && b.mode !== "scan") return json(res, 400, { error: "only a scan warms" });
-        runs.set(b.run as string, { mode: b.mode as RunMode, share: b.share !== false, cached: b.cached ? new Set(b.cached as string[]) : undefined, warm: b.warm === true });
+        if (b.timed && b.mode !== "scan") return json(res, 400, { error: "only a scan is timed (a replay always is)" });
+        runs.set(b.run as string, { mode: b.mode as RunMode, share: b.share !== false, cached: b.cached ? new Set(b.cached as string[]) : undefined, warm: b.warm === true, timed: b.timed === true });
         return json(res, 200, {});
       }
       if (path === "/case-end") return json(res, 200, await endCase(b.run as string, b.case as string));

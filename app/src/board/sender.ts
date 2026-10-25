@@ -72,7 +72,10 @@ export class Sender {
   /** Jobs whose done() has been called: once each, crash or not. */
   private told = new WeakSet<Job>();
 
-  constructor(private deps: SenderDeps) {}
+  private deps: SenderDeps;
+  constructor(deps: SenderDeps) {
+    this.deps = deps;
+  }
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);

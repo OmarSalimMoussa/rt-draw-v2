@@ -17,6 +17,17 @@ const CLOSE_MS = 3000;
 /** Who a page's model calls belong to; the runner sets `case` before each case. */
 export type Labels = { run: string; case: string; arm: string; slot: number };
 
+/** A page evaluation's longest wait: a send's own timeout (LOOP.sendTimeoutMs, 120 s) and then some. */
+export const EVAL_TIMEOUT_MS = 240_000;
+/** A page load's longest wait (a Vite server that stopped answering, a load event that never comes). */
+export const LOAD_TIMEOUT_MS = 60_000;
+/** `p`, or a rejection saying what didn't happen within `ms`. */
+const within = <T>(p: Promise<T>, ms: number, what: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} within ${ms / 1000} s`)), ms)));
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+};
+
 export type Page = {
   labels: Labels;
   /** Any CDP command on this page. */
@@ -24,8 +35,11 @@ export type Page = {
   goto(url: string): Promise<void>;
   /** A fresh page for the next case (the product keeps every call and span in memory). */
   reload(): Promise<void>;
-  /** Runs an expression in the page (promises awaited) and returns its JSON value. */
-  eval<T = unknown>(expression: string): Promise<T>;
+  /**
+   * Runs an expression in the page (promises awaited) and returns its JSON value. One that hasn't settled after
+   * `timeoutMs` (default EVAL_TIMEOUT_MS) rejects: a send that never settles fails its case, never hangs the run.
+   */
+  eval<T = unknown>(expression: string, timeoutMs?: number): Promise<T>;
   /** This page's CDP events (enable their domain first), e.g. Runtime.exceptionThrown. */
   on(method: string, fn: (params: any) => void): void;
   close(): Promise<void>;
@@ -113,17 +127,16 @@ export async function launchChrome(o: { dir: string; onBlocked: (url: string, la
       send: (method, params) => send(method, params, sessionId),
       async goto(url) {
         const done = load();
-        const { errorText } = await page.send("Page.navigate", { url });
+        const { errorText } = await within(page.send("Page.navigate", { url }), LOAD_TIMEOUT_MS, `${url} didn't load`);
         if (errorText) throw new Error(`can't load ${url}: ${errorText}`);
-        await done;
+        await within(done, LOAD_TIMEOUT_MS, `${url} didn't load`);
       },
       async reload() {
         const done = load();
-        await page.send("Page.reload");
-        await done;
+        await within(page.send("Page.reload").then(() => done), LOAD_TIMEOUT_MS, "the page didn't reload");
       },
-      async eval(expression) {
-        const r = await page.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+      async eval(expression, timeoutMs = EVAL_TIMEOUT_MS) {
+        const r = await within(page.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }), timeoutMs, "the page didn't settle");
         if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
         return r.result.value;
       },

@@ -46,7 +46,7 @@ async function until(f, ms, what) {
     const v = f();
     if (v) return v;
   }
-  fail(`timed out waiting for ${what}`);
+  fail(`timed out waiting for ${typeof what === "function" ? what() : what}`);
 }
 const gone = (pid) => { try { process.kill(-pid, 0); return false; } catch { return true; } };
 
@@ -138,7 +138,7 @@ check(second.code !== 0 && /another loop holds/.test(second.out), `a second loop
 
 // SIGKILL while a case of the knob card's A/B has paid calls but isn't done.
 const midCase = () => upstream(lines(p.calls)).find((l) => /-e1-h1-ab$/.test(l.run) && l.case && !existsSync(join(p.run(l.run), "cases", l.case, "done")));
-const hit = await until(() => midCase() ?? (first.child.exitCode !== null && "exited"), 900_000, "a paid call in the knob card's A/B");
+const hit = await until(() => midCase() ?? (first.child.exitCode !== null && "exited"), 900_000, () => `a paid call in the knob card's A/B: ${first.out().trim().split("\n").slice(-25).join(" | ").slice(-3000)}`);
 if (hit === "exited") fail(`the loop ended before the knob card's A/B: ${short(first.out())}`);
 process.kill(-first.child.pid, "SIGKILL");
 await until(() => gone(first.child.pid), 20_000, "the killed loop's process group to end");
@@ -146,12 +146,12 @@ await until(() => chromeCount(join(p.home, "chrome")) === 0, 20_000, "the killed
 const killAt = Date.now(), reqsAtKill = api.requests.length, meterAtKill = lines(p.calls).length;
 check(!existsSync(join(p.run(hit.run), "cases", hit.case, "done")), `case ${hit.case} finished before the kill (not mid-case)`);
 
-// Every slot past its five-hour 0.90: the resumed loop pauses until the earliest resetsAt.
+// Every slot past its five-hour pause line (60%): the resumed loop pauses until the earliest resetsAt.
 const now = Math.floor(Date.now() / 1000);
 writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, W: 170, calibrated: false, limited: false, hours: {} }))));
 const resumed = await rte(["loop", "--resume", ...FLAGS]).done;
 check(resumed.code === 0 && /loop: done/.test(resumed.out), `loop --resume didn't finish (exit ${resumed.code}): ${short(resumed.out)}`);
-check(/pause until .*every slot is past its five-hour 0\.90/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
+check(/pause until .*every slot is past 60% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
 const after = api.requests.slice(reqsAtKill);
 check(after.length > 0 && after[0].at >= (now + 7) * 1000, `the first call after the resume came at ${after[0]?.at}, before the earliest resetsAt ${(now + 7) * 1000}`);
 const all = lines(p.calls);
@@ -205,10 +205,10 @@ check(bad.code !== 0 && /--notify-usd takes a number/.test(bad.out), `--notify-u
 const slotsFile = join(p.home, "meter", "slots.json"), slotsBefore = readFileSync(slotsFile, "utf8");
 const wNow = Date.now(), oldRead = wNow - 27 * 3600_000;
 const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {}, ...o });
-writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.5, sevenDayAt: wNow - 3600_000 })]));
+writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.6, sevenDayAt: wNow - 3600_000 })]));
 const w0 = api.requests.length;
 const wk = await rte(["week", "--cap", "5", ...FLAGS]).done;
-check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(the loop stops at 40%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
+check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(the loop stops at 50%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
   `week (exit ${wk.code}, ${api.requests.length - w0} requests): ${short(wk.out)}`);
 const wb = lines(join(H, "budget.jsonl")).slice(-3);
 check(wb.map((b) => b.slot).join() === "1,2,3" && wb[1].sevenDay === 0.11 && wb[1].sevenDayAt >= wNow && /^(ok|allowed)$/.test(wb[1].status) && wb[2].status === "weekly allowance" && wb[2].sevenDayAt === wNow - 3600_000,
@@ -285,7 +285,7 @@ const d = (verdict, o = {}) => ({ id: "x", verdict, component: "draw", at: new D
 const fires = {
   "slots spent → pause": [{ pace: { ok: false, pauseUntil: T + 5000 } }, "pause", /five-hour/],
   "weekly allowance → stop": [{ pace: { ok: false, stop: "every slot past its weekly allowance" } }, "stop", /weekly/],
-  "night cap → stop": [{ nightUsd: 250 }, "stop", /night cap/],
+  "night cap → pause until the next night": [{ nightUsd: 250 }, "pause", /night cap.*next night/],
   "3 overruns tonight → stop": [{ recent: [d("void", { overrun: true }), d("revert"), d("void", { overrun: true }), d("keep"), d("void", { overrun: true })] }, "stop", /overran/],
   "2 voids in a row → stop": [{ recent: [d("keep"), d("void"), d("void")] }, "stop", /2 void/],
   "V9 → stop": [{ recent: [d("void", { v9: true })] }, "stop", /V9/],
@@ -296,8 +296,10 @@ const fires = {
   "--cap reached → stop": [{ error: "call cap 40 reached" }, "stop", /--cap/],
   "a sync conflict → stop for the owner": [{ blocked: "sync: master conflicts" }, "stop", /paused for the owner/],
   "/api/tts → abort": [{ error: "run x aborted: a page requested http://127.0.0.1:5334/api/tts" }, "stop", /aborted/],
-  "6 reverts → owner": [{ recent: ["a", "b", "c", "a", "b", "c"].map((c) => d("revert", { component: c })) }, "owner", /dry well: 6/],
-  "3 reverts on one component → skip it": [{ recent: [d("revert"), d("keep", { component: "picture" }), d("revert"), d("revert")] }, "skip", /3 reverts in a row on draw/],
+  // The dry well scales with the cards an epoch (LOOP-V2.md D3): 2 epochs' worth in a row, one epoch's on a component.
+  [`${RULES.revertsInRow} reverts → owner`]: [{ recent: Array.from({ length: RULES.revertsInRow }, (_, i) => d("revert", { component: "abc"[i % 3] })) }, "owner", new RegExp(`dry well: ${RULES.revertsInRow}`)],
+  [`${RULES.componentRevertsInRow} reverts on one component → skip it`]: [{ recent: [d("revert"), d("keep", { component: "picture" }), ...Array.from({ length: RULES.componentRevertsInRow - 1 }, () => d("revert"))] }, "skip", new RegExp(`${RULES.componentRevertsInRow} reverts in a row on draw`)],
+  "a sweep's values are one try": [{ recent: Array.from({ length: RULES.revertsInRow + 3 }, (_, i) => d("revert", { component: "abc"[i % 3], ...(i < 4 ? { sweep: "e1-h1" } : {}) })) }, "owner", new RegExp(`dry well: ${RULES.revertsInRow}`)],
   "3 overloads in 10 min → pause": [{ overloads: [T - 1000, T - 2000, T - 3000] }, "pause", /overloaded/],
   "disk < 20 GB → owner": [{ diskGb: 15, daysLeft: 3 }, "owner", /days left/],
   "disk < 10 GB → pause": [{ diskGb: 5 }, "pause", /free disk/],
@@ -313,7 +315,7 @@ const want = {
   "$37 → reached, the next soon": [nf({ leg: { usd: 37 } }), "reached usd:1,soon usd:2:soon"], "97 min → soon": [nf({ leg: { start: T - 97 * 60_000 } }), "soon minutes:1:soon"],
   "1 decision → none": [nf({ leg: { decisions: 1 } }), ""], "2 decisions → reached": [nf({ leg: { decisions: 2 } }), "reached decisions:1"],
   "a checkpoint → one": [nf({ leg: { checkpoints: ["ck-01"] } }), "checkpoint checkpoint:ck-01"], "a checkpoint, notices off → none": [nf({ every: { ...every, checkpoint: 0 }, leg: { checkpoints: ["ck-01"] } }), ""],
-  "night cap 82% → soon": [nf({ nightUsd: 165 }), "soon night:0.8"], "night cap 96% → both": [nf({ nightUsd: 192 }), "soon night:0.8,soon night:0.95"], "night cap reached → none (the stop rule says it)": [nf({ nightUsd: 200 }), ""],
+  "night cap 82% → soon": [nf({ nightUsd: 165 }), "soon night:0.8"], "night cap 96% → both": [nf({ nightUsd: 192 }), "soon night:0.8,soon night:0.95"], "night cap reached → none (the pause rule says it)": [nf({ nightUsd: 200 }), ""],
   "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, nightUsd: 100, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
 };
 for (const [name, [f, keys]] of Object.entries(want)) check(due(f) === keys, `notices, ${name}: ${due(f)} (want ${keys || "none"})`);

@@ -187,6 +187,63 @@ export function quantileRatio(a: number[], b: number[], clusters: string[], p: n
   return { est: Math.exp(est), lo90: e(0.1), hi90: e(0.9), lo95: e(0.05), hi95: e(0.95) };
 }
 
+// ---- The session-swap test, for what latency decides
+
+/** Up to this many sessions every pattern of swapped arms is taken (2^11 = 2,048), past it LOOP.bootstrap random ones. */
+const SWAP_EXACT_G = 11;
+
+/**
+ * One-sided p-values of a B/A statistic by swapping the arms of whole sessions: `above` is P(T* ≥ T), `below` P(T* ≤ T).
+ * Exact under "the arms are alike" at any number of sessions, where the session bootstrap's bounds weren't (LOOP-V2.md
+ * A3: at 32 cases from 8 sessions a no-effect median read surely slower 13% of the time for a nominal 5%, at 8 cases
+ * from 2 sessions 48%). With few sessions it can't be small: 4 sessions give 1/16 at best, so held-out cases from 4
+ * sessions or fewer never read surely anything. `stat` may reorder its buffers.
+ */
+function swapTest(a: number[], b: number[], clusters: string[], stat: (a: Float64Array, b: Float64Array, n: number) => number, seed: number) {
+  const by = new Map<string, number[]>();
+  clusters.forEach((c, i) => (by.get(c) ?? by.set(c, []).get(c)!).push(i));
+  const groups = [...by.values()];
+  const n = a.length;
+  const [bufA, bufB] = [new Float64Array(n), new Float64Array(n)];
+  const run = (swapped: (g: number) => boolean) => {
+    let k = 0;
+    groups.forEach((g, j) => {
+      const s = swapped(j);
+      for (const i of g) (bufA[k] = s ? b[i] : a[i]), (bufB[k++] = s ? a[i] : b[i]);
+    });
+    return stat(bufA, bufB, n);
+  };
+  const obs = run(() => false);
+  const exact = groups.length <= SWAP_EXACT_G;
+  const draws = exact ? 2 ** groups.length : LOOP.bootstrap;
+  const r = rng(seed);
+  let above = 0, below = 0;
+  for (let k = 0; k < draws; k++) {
+    const t = exact ? run((g) => ((k >> g) & 1) === 1) : run(() => r() < 0.5);
+    if (t >= obs - 1e-12) above++;
+    if (t <= obs + 1e-12) below++;
+  }
+  // Exact: the observed pattern is among the 2^G. Random: counted once more, as a randomization test's p must be.
+  return exact ? { above: above / draws, below: below / draws } : { above: (above + 1) / (draws + 1), below: (below + 1) / (draws + 1) };
+}
+
+/** The median paired ratio's swap test against B = c·A: `slower` P that it's above c by chance, `faster` below. */
+export function medianSwapP(a: number[], b: number[], clusters: string[], c: number, seed: number) {
+  const logs = new Float64Array(a.length);
+  const t = swapTest(a, b.map((x) => x / c), clusters, (A, B, n) => {
+    for (let i = 0; i < n; i++) logs[i] = Math.log(B[i] / A[i]);
+    return median(logs, n);
+  }, seed);
+  return { slower: t.above, faster: t.below };
+}
+
+/** A tail ratio's swap test (both arms' p quantile, B/A) against B = c·A. */
+export function quantileSwapP(a: number[], b: number[], clusters: string[], p: number, c: number, seed: number) {
+  const at = Math.min(a.length - 1, Math.max(0, Math.floor(p * a.length)));
+  const t = swapTest(a, b.map((x) => x / c), clusters, (A, B, n) => Math.log(select(B, n, at) / select(A, n, at)), seed);
+  return { slower: t.above, faster: t.below };
+}
+
 // ---- Chains of same-run ratios (latency and quality debt, §1.4)
 
 /** One run's paired estimate on the log scale: a log-ratio, or a share in log-odds. */

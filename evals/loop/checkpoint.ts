@@ -19,14 +19,15 @@ import { readPacket } from "../judge/packet.ts";
 import { type ArmSpec, INPUT_FILES, type Rig, benchCases, checkpointRun, harnessTag, product } from "./ab.ts";
 import { LOOP, configId } from "./config.ts";
 import { AMBER, type Anchor, ONE, commitHistory, historyAdd, historyRead, historyRows, historyWrite, ledger, openHistory, ownerItem, saveRun, trustOf } from "./history.ts";
-import { type CheckpointLinks, type Debts, chainSince, debtsAfter, linksOf, pairedRatio } from "./latency.ts";
+import { type CheckpointLinks, type Debts, GATED, type Gated, chainFrom, chainSince, debtsAfter, gatedStats, linksOf, pairedRatio } from "./latency.ts";
 import { meterOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { appendLine, caseDir, runFile } from "./record.ts";
 import { entryOrder, rng, seedOf } from "./stats.ts";
 import { treeOf } from "./trees.ts";
 import type { BenchManifest, CaseInfo, CaseInput, CheckpointRow, DecisionRow, Era, Judged, Lat, LoadSample, Marker, Meant, Row, RunInfo } from "./types.ts";
-import { aaPass } from "./verdict.ts";
+import { aaPass, latencyVeto } from "./verdict.ts";
+import { realShadow } from "../real/shadow.ts";
 
 type Bench = "B1" | "U1";
 type BenchCase = ReturnType<typeof benchCases>[number];
@@ -40,6 +41,8 @@ export type StoredCheckpoint = CheckpointRow & {
   links: CheckpointLinks; debts: Debts;
   /** The harness tag and the served product models: a change is a marker, never an era. */
   harness: string; served: string[];
+  /** Latency debt starting here, checked in one run of today's champion against the one at each signalling metric's chain start (`against`). */
+  debtCheck?: { run: string; against: string; confirmed: boolean; why: string[] };
 };
 
 /** Runs a pair on the yardstick (A the anchor, B the champion) and returns its rows. */
@@ -58,12 +61,12 @@ const rank = (xs: number[], p: number) => {
   return s.length ? s[Math.max(0, Math.ceil(p * s.length) - 1)] : 0;
 };
 
-/** (wins + ½ ties) / n over `score`d rows, with a 90% bootstrap over whole origin sessions. */
+/** (wins + ½ ties) / n over `score`d rows (a lost case is a void here), with a 90% bootstrap over whole origin sessions. */
 function shareOf(rows: Row[], score: (r: Row) => number | undefined, seed: string): Share | undefined {
   const by = new Map<string, number[]>();
   for (const r of rows) {
     const s = score(r);
-    if (!r.void && s !== undefined) (by.get(r.cluster) ?? by.set(r.cluster, []).get(r.cluster)!).push((s + 1) / 2);
+    if (!r.void && !r.lost && s !== undefined) (by.get(r.cluster) ?? by.set(r.cluster, []).get(r.cluster)!).push((s + 1) / 2);
   }
   const groups = [...by.values()];
   const n = groups.reduce((a, g) => a + g.length, 0);
@@ -78,10 +81,26 @@ function shareOf(rows: Row[], score: (r: Row) => number | undefined, seed: strin
   return { n, share: groups.flat().reduce((a, b) => a + b, 0) / n, lo90: rank(means, 0.05), hi90: rank(means, 0.95) };
 }
 
-/** One arm's TTFC and TTD at p50 and p75 (0 = A, 1 = B). */
+/** The deciding latencies at a checkpoint (LOOP-V2.md): this run's ratios, and each chained from the first checkpoint that measured it. */
+function gatedLatency(rows: Row[], links: CheckpointLinks[]): Partial<CheckpointRow["latency"]> {
+  const [ttfd, render] = [pairedRatio(rows, "ttfd"), pairedRatio(rows, "render")];
+  const chained = (m: "ttfd" | "render") => chainFrom(links, undefined, m);
+  const [cTtfd, cRender] = [chained("ttfd"), chained("render")];
+  return {
+    ...(ttfd ? { ratioTtfd: ttfd } : {}), ...(render ? { ratioRender: render } : {}),
+    ...(cTtfd ? { chainedTtfd: Math.exp(cTtfd.f.log) } : {}), ...(cRender ? { chainedRender: Math.exp(cRender.f.log) } : {}),
+  };
+}
+
+/** One arm's latencies at p50 and p75 (0 = A, 1 = B): TTFD and render once rows have them. */
 function latOf(rows: Row[], i: 0 | 1): Lat {
-  const ttfc = rows.flatMap((r) => (r.ttfc[i] ? [r.ttfc[i]!] : [])), ttd = rows.flatMap((r) => (r.ttd[i] ? [r.ttd[i]] : []));
-  return { ttfcP50: rank(ttfc, 0.5), ttfcP75: rank(ttfc, 0.75), ttdP50: rank(ttd, 0.5), ttdP75: rank(ttd, 0.75) };
+  const of = (m: "ttfc" | "ttd" | "ttfd" | "render") => rows.flatMap((r) => (r[m]?.[i] ? [r[m]![i]!] : []));
+  const [ttfc, ttd, ttfd, render] = [of("ttfc"), of("ttd"), of("ttfd"), of("render")];
+  return {
+    ttfcP50: rank(ttfc, 0.5), ttfcP75: rank(ttfc, 0.75), ttdP50: rank(ttd, 0.5), ttdP75: rank(ttd, 0.75),
+    ...(ttfd.length ? { ttfdP50: rank(ttfd, 0.5), ttfdP75: rank(ttfd, 0.75) } : {}),
+    ...(render.length ? { renderP50: rank(render, 0.5), renderP75: rank(render, 0.75) } : {}),
+  };
 }
 
 // ---- The yardstick's identity: what starts an era
@@ -219,7 +238,7 @@ function healthOf(run: string, rows: Row[], bench: Map<string, BenchCase>): Chec
   }
   const load = existsSync(runFile(run, "load.ndjson")) ? readFileSync(runFile(run, "load.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => (JSON.parse(l) as LoadSample).psiCpu) : [];
   return {
-    voidPct: rows.length ? rows.filter((r) => r.void).length / rows.length : 0, flipPct: audited ? flipped / audited : 0,
+    voidPct: rows.length ? rows.filter((r) => r.void || r.lost).length / rows.length : 0, flipPct: audited ? flipped / audited : 0,
     hedgePct: dirs.length ? dirs.filter((d) => maybe<Meant>(join(d, "meant.json"))?.hedged).length / dirs.length : 0,
     beatCompliance: beats.length ? beats.filter((c) => c.beatDone).length / beats.length : 1, thinking,
     coldShare: calls.length ? calls.filter((c) => c.readyAtTake === false).length / calls.length : 0, psiMedian: rank(load, 0.5),
@@ -266,19 +285,31 @@ function writeBack(run: string) {
 /** The trees a checkpoint's rig must serve: the anchor's and champion's, and the last pair's when the yardstick changed (its bridge). */
 export function checkpointTrees(champion: ArmSpec): string[] {
   const anchors = historyRead("anchors.json"), era = historyRead("eras.json").at(-1);
-  const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
+  const past = historyRows("checkpoints.jsonl") as StoredCheckpoint[], last = past.at(-1);
   const bridge = last && era && (benchHash() !== era.bench || measureHash() !== era.measureHash);
+  // A second signal in a row starts latency debt, checked against the champion each metric's chain ran from: their trees too.
+  const vs = last?.debts.latency.signal && !last.debts.latency.debt ? last.latency.vsLatencyCheckpoint : undefined;
+  const atL = vs ? GATED.flatMap((m) => past.find((c) => c.id === vs[m]?.since)?.champion ?? []) : [];
   // Checkpoint 0's anchor is the champion: its tree listed twice, so each arm gets its own Vite (openRig).
-  const shas = [anchors.at(-1)?.sha ?? champion.sha, ...(bridge ? [last.champion, anchors.find((a) => a.id === last.anchor)?.sha] : [])].filter((s): s is string => !!s);
+  const shas = [anchors.at(-1)?.sha ?? champion.sha, ...(bridge ? [last.champion, anchors.find((a) => a.id === last.anchor)?.sha] : []), ...atL].filter((s): s is string => !!s);
   return [champion.tree, ...new Set(shas.map(treeOf))];
 }
 
 /** The default runner: checkpointRun, live and unshared, judged by fidelity and craft on every case. */
+const pinArm = (a: Pin): ArmSpec => ({ sha: a.sha, tree: a.tree ?? treeOf(a.sha), ...(a.tuning ? { tuning: a.tuning } : {}) });
 const liveRunner = (rig?: Rig): Runner => async (s) => {
   if (!rig) throw new Error("a checkpoint needs a rig serving checkpointTrees()");
-  const arm = (a: Pin): ArmSpec => ({ sha: a.sha, tree: a.tree ?? treeOf(a.sha), ...(a.tuning ? { tuning: a.tuning } : {}) });
-  return (await checkpointRun(rig, { run: s.run, anchor: arm(s.anchor), champion: arm(s.champion), seed: s.seed, judge: judging(s.run, { seed: s.seed, craft: "all" }) })).rows;
+  return (await checkpointRun(rig, { run: s.run, anchor: pinArm(s.anchor), champion: pinArm(s.champion), seed: s.seed, judge: judging(s.run, { seed: s.seed, craft: "all" }) })).rows;
 };
+/** Bench R1, anchor against champion, after B1 (LOOP-V2.md A5): reported, never deciding; a failure only says so. */
+async function realAt(rig: Rig, run: string, anchor: Pin, champion: Pin, seed: string): Promise<CheckpointRow["real"]> {
+  try {
+    return await realShadow(rig, { run, arms: { A: pinArm(anchor), B: pinArm(champion) }, seed, judge: judging(run, { seed, craft: "none" }) });
+  } catch (err) {
+    console.error(`${run}: R1 failed: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
 
 /**
  * The next checkpoint (ck-00 is checkpoint 0: the champion is A0 and runs against itself). `owner`: an owner
@@ -304,9 +335,13 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
     const b = `${id}-bridge`;
     const pin = anchors.find((a) => a.id === last.anchor)!;
     const rows = await runner({ run: b, anchor: pin, champion: { sha: last.champion, tuning: last.championTuning }, seed: last.seed });
+    // A latency the last checkpoint didn't measure has no step: its chain starts after the bridge (latency.ts chainFrom).
+    const was = { ttfd: last.latency.ratioTtfd, render: last.latency.ratioRender };
+    const stepOf = (m: "ttfd" | "render") => (was[m] ? { [m]: (pairedRatio(rows, m)?.est ?? 1) / was[m]!.est } : {});
     const step = {
       Q: logit(shareOf(rows, (r) => r.s, b)?.share ?? 0.5) - logit(last.share.all!.share),
       ttfc: (pairedRatio(rows, "ttfc")?.est ?? 1) / last.latency.ratioTtfc.est, ttd: (pairedRatio(rows, "ttd")?.est ?? 1) / last.latency.ratioTtd.est,
+      ...stepOf("ttfd"), ...stepOf("render"),
     };
     era = { era: era0!.era + 1, from: now, why, judgeId: "", bench, measureHash: measure, bridge: { run: b, step } };
     saveRun(b);
@@ -314,6 +349,7 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   }
 
   const rows = await runner({ run, anchor, champion: o.champion, seed });
+  const real = !o.runner && o.rig ? await realAt(o.rig, `real-r1-${id}`, anchor, o.champion, seed) : undefined;
   const judgeId = judgeOf(run) ?? era0?.judgeId ?? "";
   if (!era0) era = { era: 1, from: now, why: "bench", judgeId, bench, measureHash: measure };
   else if (era) era.judgeId = judgeId; // the bridge ran under today's judge too
@@ -321,7 +357,7 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
     // A new judge: the last checkpoint's stored packets re-judged by it, the bridge.
     const b = `${id}-rejudge`;
     const r = await rejudge(last.run, b);
-    era = { era: era0.era + 1, from: now, why: "judge", judgeId, bench, measureHash: measure, bridge: { run: b, step: { Q: logit(r.after) - logit(r.before), ttfc: 1, ttd: 1 } } };
+    era = { era: era0.era + 1, from: now, why: "judge", judgeId, bench, measureHash: measure, bridge: { run: b, step: { Q: logit(r.after) - logit(r.before), ttfc: 1, ttd: 1, ttfd: 1, render: 1 } } };
   }
   const eraNo = era?.era ?? era0!.era;
 
@@ -343,6 +379,29 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   const moved = !zero && trust !== "void" && all.share >= LOOP.anchorMove.share && all.lo90 >= LOOP.anchorMove.lo90;
   const links = [...past.map((c) => c.links), linksOf(id, rows, moved)];
   const { debts, vsLatencyCheckpoint, vsQualityCheckpoint } = debtsAfter(last?.debts, links);
+  // Latency debt starting here is checked first (LOOP-V2.md D2): today's champion against the one each signalling
+  // metric's chain ran from (L, or the first checkpoint that measured it), in one run, latency only, unjudged. Every chain
+  // since L shares L's own noisy link, so chains alone started debt in about a quarter of 12-checkpoint runs with no drift
+  // at all. Unconfirmed, the signal is spent: L moves here, so the next checkpoint doesn't start debt on the same chain.
+  let debtCheck: StoredCheckpoint["debtCheck"];
+  const signalled = GATED.filter((m) => (vsLatencyCheckpoint[m]?.lo90 ?? 0) > LOOP.latDebtLo90);
+  const since = debts.latency.debt && !last?.debts.latency.debt ? [...new Set(signalled.map((m) => vsLatencyCheckpoint[m]!.since))] : [];
+  const checks: NonNullable<StoredCheckpoint["debtCheck"]>[] = [];
+  for (const at of since) {
+    const L = past.find((c) => c.id === at);
+    if (!L) continue;
+    const r = since.length > 1 ? `${id}-debt-${at}` : `${id}-debt`, atL: Pin = { sha: L.champion, ...(L.championTuning ? { tuning: L.championTuning } : {}) };
+    const check = o.runner ? await o.runner({ run: r, anchor: atL, champion: o.champion, seed: `${seed} debt` }) : o.rig ? (await checkpointRun(o.rig, { run: r, anchor: pinArm(atL), champion: pinArm(o.champion), seed: `${seed} debt` })).rows : undefined;
+    if (!check) continue;
+    const mine = signalled.filter((m) => vsLatencyCheckpoint[m]!.since === at);
+    const why = latencyVeto(Object.fromEntries(Object.entries(gatedStats(check)).filter(([k]) => mine.includes(k.split(" ")[0] as Gated))));
+    checks.push({ run: r, against: at, confirmed: why.length > 0, why });
+    saveRun(r);
+  }
+  if (checks.length) {
+    debtCheck = { run: checks.map((c) => c.run).join(", "), against: checks.map((c) => c.against).join(", "), confirmed: checks.some((c) => c.confirmed), why: checks.flatMap((c) => c.why) };
+    if (!debtCheck.confirmed) debts.latency = { debt: false, signal: false, L: id };
+  }
   const usd = (i: 0 | 1) => (ok.length ? ok.reduce((a, r) => a + r.usd[i], 0) / ok.length : 0);
   const overfitGap = share.tuning && share.heldout ? share.tuning.share - share.heldout.share : 0;
   const harness = harnessTag();
@@ -354,12 +413,13 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
     latency: {
       champion: latOf(ok, 1), anchor: latOf(ok, 0), ratioTtfc: pairedRatio(rows, "ttfc") ?? ONE, ratioTtd: pairedRatio(rows, "ttd") ?? ONE,
       chainedTtfc: Math.exp(chainSince(links, undefined, "ttfc").log), chainedTtd: Math.exp(chainSince(links, undefined, "ttd").log),
+      ...gatedLatency(rows, links),
       debt: debts.latency.debt, vsLatencyCheckpoint,
     },
     quality: { debt: debts.quality.debt, vsQualityCheckpoint },
     ...(aa ? { aa: { pass: aa.pass, ci: aa.ci, tests: aa.tests } } : {}),
-    productUsdPerSend: { champion: usd(1), anchor: usd(0) }, overfitGap, health, realism: realismOf([...byId.values()]),
-    run, seed, judgeId, ...(o.champion.tuning ? { championTuning: o.champion.tuning } : {}), links: links.at(-1)!, debts, harness, served,
+    productUsdPerSend: { champion: usd(1), anchor: usd(0) }, overfitGap, health, realism: realismOf([...byId.values()]), ...(real ? { real } : {}),
+    run, seed, judgeId, ...(o.champion.tuning ? { championTuning: o.champion.tuning } : {}), links: links.at(-1)!, debts, harness, served, ...(debtCheck ? { debtCheck } : {}),
   };
 
   // ---- Written only now, so a failed run leaves the record as it was.
@@ -381,7 +441,8 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
     const d: DecisionRow = {
       id: `owner-${id}`, kind: "owner-step", epoch: o.epoch, candSha: o.owner.candSha, baseSha: o.owner.baseSha, class: "owner", goal: "owner", verdict: "owner",
       reasons: [`owner: ${o.owner.commits} commits merged by rte sync`], trust, looks: [], counts: { wins: 0, losses: 0, ties: 0, exactTies: 0 },
-      affected: { tuning: 0, of: 0, topUp: 0 }, checkpoint: id, latency: { ttfc: row.latency.ratioTtfc, ttd: row.latency.ratioTtd },
+      affected: { tuning: 0, of: 0, topUp: 0 }, checkpoint: id,
+      latency: { ttfc: row.latency.ratioTtfc, ttd: row.latency.ratioTtd, ...(row.latency.ratioTtfd ? { ttfd: row.latency.ratioTtfd } : {}), ...(row.latency.ratioRender ? { render: row.latency.ratioRender } : {}) },
       work: 1, emptyRise: 0, failedPicRise: 0, cost: { usdPerCaseRatio: usd(0) ? usd(1) / usd(0) : 1, listUsd: info?.meter.listUsd ?? 0, calls: info?.meter.calls ?? 0 },
       minutes: Math.round(info?.meter.minutes ?? 0), run, judgeId, configId,
     };

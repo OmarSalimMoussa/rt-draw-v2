@@ -28,7 +28,8 @@ function drawReply(start, i) {
   const lines = start === "blank"
     ? [`shape(title-${i}, rect, 60 60 600 80, "the big welcome title at the top of the home page", stroke:none)`, `text(title-${i}, "Hello ${i}")`]
     : [`shape(home-nav, fill:${["#ffe3e3", "#d0ebff", "#d3f9d8", "#fff3bf"][i % 4]})`];
-  if (kind === 0) lines.push(`shape(sale-${i}, pill, 900 100 200 60, "small pill badge for the toy sale", fill:#ffd43b)`);
+  // Kind 0's badge is placed on grid cells: ops.cellPx decides where it lands (the parser tweak).
+  if (kind === 0) lines.push(`shape(sale-${i}, pill, W3-Z4, "small pill badge for the toy sale", fill:#ffd43b)`);
   else
     for (const [j, subject] of SUBJECTS.slice(0, kind === 1 ? 3 : 2).entries())
       lines.push(`shape(pic-${i}-${j}, rect, ${100 + j * 300} 300 240 240, "a framed picture of a ${subject} on the home page", stroke:none)`, `drawing(pic-${i}-${j}, "${subject}")`);
@@ -143,7 +144,10 @@ export async function fakeLoop({ port, slots = 2 }) {
     const calls = json(join(p.run("bootstrap"), "cases", id, "A", "replies.json"));
     const banked = calls.map((c) => {
       roles.add(c.role);
-      const src = c.cacheFile ? json(p.reply(c.cacheFile.replace(/\.json$/, ""))) : { text: "", chunks: [], doneMs: 30, stats: {}, request: {} };
+      // Jev's yes/no calls (the resolver, the add hint) have no stand-in: an empty answer (no one is a yes), the add hint's
+      // 600 ms late, so draw.addWaitMs is a pure schedule change (the scheduling tweak below).
+      const slow = c.role === "draw-add" ? 600 : 30;
+      const src = c.cacheFile ? json(p.reply(c.cacheFile.replace(/\.json$/, ""))) : { text: "{}", chunks: [{ ms: slow, text: "{}" }], doneMs: slow + 10, stats: {}, request: {} };
       put(p.reply(c.reqHash), { ...src, reqHash: c.reqHash, run: "bank", role: c.role });
       return { ...c, cacheFile: `${c.reqHash}.json`, offsets: src.chunks.map((x) => x.ms) };
     });
@@ -183,7 +187,7 @@ if (import.meta.main) {
   const fork = (run, id) => json(join(caseDir(run, id), "fork.json"));
   const card = (o = {}) => ({ id: "t15", component: "draw", kind: "knob", change: "t15", knobs: o.knobs ?? {}, goal: "fidelity", classGuess: o.classGuess ?? "Q", dialogue: !!o.dialogue, predicts: "",
     ...(o.overuse ? { overuseDetector: o.overuse } : {}), isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] });
-  const STATE = { latencyDebt: false, qualityDebt: false, costVsAnchor: 1 };
+  const STATE = { latencyDebt: false, qualityDebt: false };
   const arm = (tuning) => ({ ...champ, tuning });
   const base = { arms: { A: champ, B: champ }, seed: "t15", loadWaitMs: 0 };
   /** A judge that always prefers `arm`, written the way judge.ts writes a verdict. */
@@ -193,12 +197,15 @@ if (import.meta.main) {
     },
     flips: () => ({ audited: 0, flipped: 0 }),
   });
-  check(["draw-refs", "draw", "picture"].every((r) => L.roles.includes(r)), `the bank's sends made roles ${L.roles.join(", ")} (want draw-refs, draw, picture)`);
+  check(["draw-refs-jev", "draw-add", "draw", "picture"].every((r) => L.roles.includes(r)), `the bank's sends made roles ${L.roles.join(", ")} (want draw-refs-jev, draw-add, draw, picture)`);
   check((await calls()) === 0 && api.requests.length === 0, "building the bank made a call");
 
   // ---- 1. An identical candidate is N at 0 calls; its rows carry over-use per arm and the first arm.
   const n = await scan(rig, { ...base, run: "scan-n", cases: L.tuning, card: card({ overuse: "extra-shapes" }) });
-  check(n.class === "N" && n.timed && (n.affected.tuning ?? []).length === 0, `an identical candidate is ${n.class} (affected ${n.affected.tuning?.length ?? 0}, timed ${JSON.stringify(n.timed?.ttd)})`);
+  const timed = (t) => JSON.stringify({ ttfd: t?.ttfd?.est, render: t?.render?.est, tails: Object.fromEntries(Object.entries(t?.tails ?? {}).map(([k, r]) => [k, r.est])) });
+  check(n.class === "N" && n.timed && (n.affected.tuning ?? []).length === 0, `an identical candidate is ${n.class} (affected ${n.affected.tuning?.length ?? 0}, timed ${timed(n.timed)})`);
+  if (process.env.T15_DEBUG) for (const x of readRows("scan-n")) console.error(`scan-n ${x.case} first ${x.firstArm} ttfd ${JSON.stringify(x.ttfd)} ttfc ${JSON.stringify(x.ttfc)}`);
+  if (process.env.T15_DEBUG) for (const x of readRows(n.timed.run)) console.error(`render ${x.case} ${JSON.stringify(x.render)} ttfd ${JSON.stringify(x.ttfd)} engine ${["A", "B"].map((a) => JSON.stringify(json(join(caseDir(n.timed.run, x.case), a, "timing.json")).engine)).join(" ")}`);
   const nHits = readFileSync(p.calls, "utf8").split("\n").filter((l) => l.includes('"run":"scan-n"'));
   check(nHits.length > 0 && nHits.every((l) => JSON.parse(l).scan === "hit"), "the identical scan wasn't served by exact hits only (the bank doesn't resolve)");
   const nRows = readRows("scan-n");
@@ -210,21 +217,26 @@ if (import.meta.main) {
   check(nRows.every((r) => r.firstArm === fork("scan-n", r.case).order[0]), "a row's firstArm isn't the recorded dispatch order");
 
   // ---- 2–4. A parser tweak is R on exactly the cases it changes; a request tweak Q; a scheduling tweak S.
-  const r = await scan(rig, { ...base, arms: { A: champ, B: arm({ "ops.minDescriptionWords": 9 }) }, run: "scan-r", cases: L.tuning, card: card({ classGuess: "R" }) });
+  const r = await scan(rig, { ...base, arms: { A: champ, B: arm({ "ops.cellPx": 35 }) }, run: "scan-r", cases: L.tuning, card: card({ classGuess: "R" }) });
   const want = L.tuning.filter((id) => L.kindOf(id) === 0).sort();
   check(r.class === "R" && JSON.stringify([...(r.affected.tuning ?? [])].sort()) === JSON.stringify(want), `the parser tweak is ${r.class} on ${r.affected.tuning?.join(",")} (want R on ${want.join(",")})`);
   check(r.cases.every((c) => !c.requests.length), "the parser tweak changed a request");
   const q = await scan(rig, { ...base, arms: { A: champ, B: arm({ "draw.sendMarks": 0 }) }, run: "scan-q", cases: [...L.tuning, ...L.gate], card: card() });
   check(q.class === "Q" && q.cases.some((c) => c.requests.includes("draw")) && (q.affected["heldout-gate"] ?? []).length > 0, `the request tweak is ${q.class} (draw differs on ${q.cases.filter((c) => c.requests.includes("draw")).length})`);
-  const s = await scan(rig, { ...base, arms: { A: champ, B: arm({ "picture.parallel": 1 }) }, run: "scan-s", cases: L.tuning, card: card({ classGuess: "S" }) });
-  check(s.class === "S" && s.cases.every((c) => !c.scene && !c.svg && !c.requests.length) && s.timed?.ttd?.est > 1.03, `the scheduling tweak is ${s.class} (scenes identical: ${s.cases.every((c) => !c.scene)}, timed TTD ×${s.timed?.ttd?.est?.toFixed(3)})`);
+  // Drawing starts without waiting for a late add hint (the bank's comes at 600 ms, with nothing to add): first drawing moves.
+  const s = await scan(rig, { ...base, arms: { A: champ, B: arm({ "draw.addWaitMs": 100 }) }, run: "scan-s", cases: L.tuning, card: card({ classGuess: "S" }) });
+  check(s.class === "S" && s.cases.every((c) => !c.scene && !c.svg && !c.requests.length) && s.timed?.ttfd?.est < 0.9, `the scheduling tweak is ${s.class} (scenes identical: ${s.cases.every((c) => !c.scene)}, requests identical: ${s.cases.every((c) => !c.requests.length)}, timed ${timed(s.timed)})`);
+  // Pictures one at a time only make the send end later: time to done decides nothing (LOOP-V2.md), so it's no effect.
+  const tdOnly = await scan(rig, { ...base, arms: { A: champ, B: arm({ "picture.parallel": 1 }) }, run: "scan-ttd", cases: L.tuning, card: card({ classGuess: "S" }) });
+  check(tdOnly.class === "N" && tdOnly.timed?.ttd?.est > 1.03, `pictures one at a time are ${tdOnly.class} (want N: TTD ×${tdOnly.timed?.ttd?.est?.toFixed(3)} alone, timed ${timed(tdOnly.timed)})`);
   check(n.mismatch && !r.mismatch && !s.mismatch && json(runFile("scan-n", "scan.json")).declared === "Q", "the card's declared class isn't logged against the scan's in scan.json");
   check((await calls()) === 0 && api.requests.length === 0, `the scans and timed replays made ${await calls()} calls`);
 
-  // ---- 5. The shared A/A in timed replay (the identical candidate's: the champion against itself): paired TTFC 1.00 ± 0.03, 0 calls.
+  // ---- 5. The shared A/A in timed replay (the identical candidate's: the champion against itself): paired first drawing and render 1.00 ± 0.03, 0 calls.
   const aa = readRows(n.timed.run);
-  const aaTtfc = pairedRatio(aa, "ttfc");
-  check(aa.length === 16 && aaTtfc && Math.abs(aaTtfc.est - 1) <= 0.03 && aa.every((x) => !x.void), `shared A/A TTFC ×${aaTtfc?.est?.toFixed(3)} on ${aa.length} (want 1.00 ± 0.03 on 16), voids ${aa.filter((x) => x.void).map((x) => x.void).join("; ")}`);
+  const [aaTtfd, aaRender] = [pairedRatio(aa, "ttfd"), pairedRatio(aa, "render")];
+  check(aa.length === 16 && aaTtfd && Math.abs(aaTtfd.est - 1) <= 0.03 && aaRender && Math.abs(aaRender.est - 1) <= 0.03 && aa.every((x) => !x.void),
+    `shared A/A first drawing ×${aaTtfd?.est?.toFixed(3)}, render ×${aaRender?.est?.toFixed(3)} on ${aa.length} (want 1.00 ± 0.03 on 16), voids ${aa.filter((x) => x.void).map((x) => x.void).join("; ")}`);
 
   // ---- 7, 11. Dispatch order: seeded, alternated, recorded; every case on a freshly reloaded page.
   const orders = n.cases.map((c) => fork("scan-n", c.case).order[0]);
@@ -297,12 +309,13 @@ if (import.meta.main) {
   check(JSON.stringify(ck.rows.map((x) => x.case).sort()) === JSON.stringify([...b1].sort()), `the checkpoint ran ${ck.rows.map((x) => x.case).join(",")} (want B1's ${b1.join(",")})`);
   check(ckLines.length > 0 && ckLines.every((l) => l.shared === "-" && l.mode === "live"), `the checkpoint shared or cached a product call (${[...new Set(ckLines.map((l) => `${l.mode}/${l.shared}`))].join(", ")})`);
   // Each slot's first case went out first as a warm-up scan: every timed call took a process that had finished starting.
-  const cold = ckLines.filter((l) => l.readyAtTake !== true);
+  const cold = ckLines.filter((l) => l.readyAtTake !== true && !/^jev-/.test(l.model)); // a Jev call takes no process
   check(!cold.length, `${cold.length} of the checkpoint's ${ckLines.length} product calls waited on a starting process (${cold.map((l) => `${l.arm} ${l.role} ${l.case}`).slice(0, 4).join(", ")})`);
   check(readFileSync(p.calls, "utf8").split("\n").some((l) => l.includes('"run":"ck-0~warm"') && JSON.parse(l).mode === "scan"), "the checkpoint's warm-up sends weren't scans under ck-0~warm");
   check(ck.rows.every((x) => x.void || (existsSync(join(caseDir("ck-0", x.case), "judge", "fidelity-1.json")) && existsSync(join(caseDir("ck-0", x.case), "judge", "craft.json")))), "a checkpoint case wasn't judged by fidelity and craft");
   check(ck.rows.filter((x) => !x.void).length >= 6, `the checkpoint voided ${ck.rows.filter((x) => x.void).map((x) => x.void).join("; ")}`);
   const a = aaPass(ck.rows);
+  if (process.env.T15_DEBUG) for (const x of ck.rows) console.error(`ck ${x.case} s ${x.s} void ${x.void ?? "-"} identical ${fork("ck-0", x.case).identicalAfter} judge ${JSON.stringify(["fidelity-1.json", "fidelity-2.json"].map((f) => { try { return json(join(caseDir("ck-0", x.case), "judge", f)).winner; } catch { return "-"; } }))}`);
   const tests = Object.entries(a.tests);
   check(tests.length === 4 && tests.every(([, t]) => [t.est, t.lo, t.hi, t.halfWidth].every(Number.isFinite) && t.halfWidth > 0) && typeof a.pass === "boolean" && a.ci === 0.99,
     `the unshared A/A doesn't report four 99% CR1 intervals with half-widths (${JSON.stringify(a.tests)})`);

@@ -1,6 +1,7 @@
 // Free checks for a real-use case (evals/real/README.md): code that reads a result board and says whether it
 // did a thing triage saw it fail at, so a case can fail without a judge call. Gold picks them from CHECK_MENU;
 // each is about what the person asked for, never about how gold itself drew it.
+import { sceneDiff } from "../core/diff.ts";
 import type { SceneJSON } from "../loop/types.ts";
 
 type Shape = SceneJSON["shapes"][number];
@@ -89,6 +90,15 @@ export function runCheck(c: Check, after: SceneJSON, before: SceneJSON): { pass:
       return r(ratio / c.ratio <= 1.35 && c.ratio / ratio <= 1.35, `${s.id} is ${ratio.toFixed(2)}, wanted ${c.ratio}`);
     }
   }
+}
+
+/**
+ * Every check on one result. A send that changed nothing fails them all (LOOP-V2.md A5): most checks say what a
+ * result must not do (no red, no parts), and doing nothing does none of it, so a no-op would otherwise pass.
+ */
+export function runChecks(checks: Check[], after: SceneJSON, before: SceneJSON): { check: Check; pass: boolean; why: string }[] {
+  const idle = sceneDiff(before, after).empty;
+  return checks.map((check) => ({ check, ...(idle ? { pass: false, why: "the send changed nothing" } : runCheck(check, after, before)) }));
 }
 
 /** Reads gold's <checks> JSON, keeping only well-formed checks. */

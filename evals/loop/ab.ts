@@ -30,13 +30,62 @@ import { type ArmServer, serveArm } from "./servers.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
 import type {
-  Arm, CallLog, CaseInfo, CaseInput, DecisionClass, Fork, HypothesisCard, Readings, RecordedReply, Row, RunKind, SceneJSON, SendOutcome,
+  Arm, CallLog, CaseInfo, CaseInput, DecisionClass, Engine, Fork, HypothesisCard, Readings, RecordedReply, Row, RunKind, Same, SceneJSON, SendOutcome,
 } from "./types.ts";
 
 /** The first arm server's port; each further tree takes the next (spec §7.2: 5300 + 2k, 5301 + 2k). */
 const PORT = 5300;
 /** How often a slot sitting out a busy machine checks the load gate again. */
 const SIT_OUT_POLL_MS = 1000;
+/** How often a run waiting out the budget's pause reads the gateway's pace again. */
+const PACE_POLL_MS = 5 * 60_000;
+/** Wall-clock time every run in this process has waited out the budget's pause, counted once however many slots wait. */
+let pausedMs = 0, waiters = 0, pauseStart = 0;
+/** Milliseconds waited out the budget's pause so far: a decision's own clock leaves them out. */
+export const budgetPausedMs = () => pausedMs + (waiters ? Date.now() - pauseStart : 0);
+
+/**
+ * The budget before each paying step (LOOP-V2.md A4), not only between steps: a case sent live or judged, a top-up
+ * session, a continuation send. Every token slot past LOOP.fiveHourPauseAt of its five-hour window waits here for the
+ * earliest reset, so a decision started at 59% can't run on to 85%; a stop (the week) ends the run, and the card is
+ * decided again when the loop resumes (calls paid so far are cached). True when it waited.
+ */
+export async function budgetGate(gateway: string, runId: string): Promise<boolean> {
+  let waited = false;
+  try {
+    for (;;) {
+      const { pace } = (await gatewayStatus(gateway)) as { pace: { ok: boolean; stop?: string; pauseUntil?: number } };
+      if (pace.ok) return waited;
+      if (pace.stop) throw new Error(`budget: ${pace.stop}`);
+      if (!waited) {
+        appendLine(runFile(runId, "budget-pause.jsonl"), { at: new Date().toISOString(), until: pace.pauseUntil ? new Date(pace.pauseUntil).toISOString() : undefined });
+        if (!waiters++) pauseStart = Date.now();
+        waited = true;
+      }
+      await new Promise((r) => setTimeout(r, Math.min(PACE_POLL_MS, Math.max(1000, (pace.pauseUntil ?? 0) - Date.now()))));
+    }
+  } finally {
+    if (waited && !--waiters) pausedMs += Date.now() - pauseStart;
+  }
+}
+
+/**
+ * What of each board two arms' engine timings share (LOOP-V2.md A2): a board both engines loaded alike (the board
+ * hash) compares on paint, and on apply too when both applied as many of its lines; one an engine failed on, or loaded
+ * differently, not at all. A new op leaves the board that uses it its paint; a new shape kind, nothing of that board.
+ */
+export function sameContent(A: Engine, B: Engine): { A: { own: Same; other: Same }; B: { own: Same; other: Same }; why: string[] } {
+  const why: string[] = [];
+  const of = (name: Arm, own: Engine, theirs: Engine["other"], by: Arm): Same => {
+    if (!theirs) return (why.push(`${by}'s engine has no timing on ${name}'s board`), "none");
+    if (own.board !== theirs.board) return (why.push(`${by}'s engine loaded ${name}'s board differently`), "none");
+    if (own.applied !== theirs.applied) return (why.push(`${by}'s engine applied ${theirs.applied} of ${name}'s ${own.ops} lines, ${name}'s ${own.applied}`), "paint");
+    return "all";
+  };
+  const a = of("A", A, B.other, "B"), b = of("B", B, A.other, "A");
+  return { A: { own: a, other: b }, B: { own: b, other: a }, why };
+}
+
 /** The case files a run copies when a case's inputs aren't the bank's (the yardstick's bench copies). */
 export const INPUT_FILES = ["case.json", "input.json", "before.scene.json", "meant.json", "expectation.json", "readings.json", "before-ink.jpg"];
 
@@ -130,6 +179,8 @@ export type RunSpec = {
   share: boolean;
   /** Request hashes the diffscan found in both arms: served from the bank on their recorded clock in a live run. */
   cached?: string[];
+  /** A scan whose replies come on their recorded clock (a class R decision: its first drawing is timed, at 0 calls). */
+  timed?: boolean;
   seed: string;
   card?: HypothesisCard;
   judge?: Judge;
@@ -218,7 +269,7 @@ export function begin(rig: Rig, s: RunSpec) {
   const warmRun = `${s.run}~warm`;
   const warmed = new Set<number>();
   const ready = Promise.all([
-    setMode(s.run, s.mode, { share: s.share, cached: s.cached }, rig.gateway),
+    setMode(s.run, s.mode, { share: s.share, cached: s.cached, ...(s.timed ? { timed: true } : {}) }, rig.gateway),
     s.mode === "live" ? setMode(warmRun, "scan", { warm: true }, rig.gateway) : {},
   ]).then((rs) => {
     for (const r of rs) if (r.error) throw new Error(`gateway: ${r.error}`);
@@ -265,10 +316,11 @@ export function begin(rig: Rig, s: RunSpec) {
     await s.faults?.afterSend?.(id);
     const end = (await endCase(s.run, id, rig.gateway)) as { loopP99Ms: number; calls: Record<string, RecordedReply[]> };
     const lines = meter().slice(from).filter((c) => c.case === id);
+    const failedArms = ARMS.filter((_, k) => settled[k].status === "rejected");
     const failed = settled.flatMap((x, k) => (x.status === "rejected" ? [`${ARMS[k]}'s page failed: ${String(x.reason).split("\n")[0]}`] : []));
     const transport = lines.filter((c) => c.apiError && product(c));
     const out = failed.length ? undefined : { A: (settled[0] as PromiseFulfilledResult<SendOutcome>).value, B: (settled[1] as PromiseFulfilledResult<SendOutcome>).value };
-    return { out, failed, transport, end, lines, origin, sceneHash };
+    return { out, failed, failedArms, transport, end, lines, origin, sceneHash };
   }
 
   /** Sends one case (on its slot) and returns its judging and row, which run off the slot. */
@@ -283,10 +335,10 @@ export function begin(rig: Rig, s: RunSpec) {
     const first = firstArm(s.seed, i);
     const sendOf = (a: Arm) => s.faults?.input?.(id, a, { words: input.words, strokes: input.strokes }) ?? { words: input.words, strokes: input.strokes };
     const payload = { A: sendOf("A"), B: sendOf("B") };
-    const row = (lines: CallLog[], o: { void?: string; overuse?: [boolean, boolean]; sent?: boolean } = {}) => {
+    const row = (lines: CallLog[], o: { void?: string; lost?: Row["lost"]; overuse?: [boolean, boolean]; sent?: boolean } = {}) => {
       // The scan's classes read both arms' recorded calls: a case whose page failed has none.
       const cls = (o.sent && s.classify?.(id)) || { affected: true, class: s.cls ?? "Q" };
-      const r = rowOf(s.run, { case: id, cluster: info.originSession, affected: cls.affected, class: cls.class, overuse: o.overuse ?? [false, false], ask: info.ask, beat: info.beat, firstArm: first, void: o.void }, lines);
+      const r = rowOf(s.run, { case: id, cluster: info.originSession, affected: cls.affected, class: cls.class, overuse: o.overuse ?? [false, false], ask: info.ask, beat: info.beat, firstArm: first, void: o.void, lost: o.lost }, lines);
       appendRow(s.run, r);
       return r;
     };
@@ -299,8 +351,9 @@ export function begin(rig: Rig, s: RunSpec) {
     let x = await sendBoth(id, slot, tabs, input, before, first, payload);
     if (x.transport.length || x.failed.length) x = await sendBoth(id, slot, tabs, input, before, first, payload);
     const { out, end, lines } = x;
-    // A page that itself failed (the harness's bridge, Chrome): nothing to judge or record, a harness void.
-    if (!out) return async () => row(lines, { void: x.failed.join("; ") });
+    // A page that failed: nothing to judge or record. One arm's alone is that arm's loss (a candidate that crashes on its
+    // worst cases must not drop them); both arms' is a harness void.
+    if (!out) return async () => row(lines, x.failedArms.length === 1 ? { lost: { arm: x.failedArms[0], why: x.failed.join("; ") } } : { void: x.failed.join("; ") });
     const enterAt = { A: x.origin.A + out.A.timing.enterAt, B: x.origin.B + out.B.timing.enterAt };
     const offset = Math.round((enterAt[first === "A" ? "B" : "A"] - enterAt[first]) * 10) / 10;
     const svg = {} as Record<Arm, string>;
@@ -309,6 +362,25 @@ export function begin(rig: Rig, s: RunSpec) {
     // the after captures alone hid such edits from the judge and the owner's labels.
     const frame = changeFrame(before, [out.A.after, out.B.after], out.A.camera.w / out.A.camera.h);
     const offScreen = !!frame && ARMS.some((a) => hidden(before, out[a].after, out[a].camera));
+    // Each arm's engine on both arms' boards, both sends done, one arm after the other in dispatch order, in the case's
+    // view (LOOP-V2.md A2): the same content in both, so a change that draws more isn't read as a slower engine. An
+    // engine that fails on its own board is that arm's loss; content the two engines don't hold alike has no render.
+    const engine = {} as Record<Arm, Engine | undefined>;
+    const engineFailed: [Arm, string][] = [];
+    const applied = (a: Arm) => out[a].ops.filter((o) => o.ok && !/^\s*camera\(/.test(o.line)).map((o) => o.line);
+    for (const a of first === "A" ? ARMS : (["B", "A"] as Arm[])) {
+      const b: Arm = a === "A" ? "B" : "A";
+      const board = (x: Arm) => ({ ops: applied(x), after: out[x].after });
+      engine[a] = await tabs[a].page
+        .eval<Engine>(`rtEval.engine(${js({ before, view: input.camera, own: board(a), other: board(b) })})`)
+        .catch((err) => void engineFailed.push([a, `${a}'s engine failed on its own board: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`]));
+    }
+    if (engineFailed.length) {
+      const why = engineFailed.map(([, w]) => w).join("; ");
+      return async () => row(lines, engineFailed.length === 1 ? { lost: { arm: engineFailed[0][0], why } } : { void: why });
+    }
+    const same = sameContent(engine.A!, engine.B!);
+    for (const a of ARMS) engine[a] = { ...engine[a]!, same: same[a], ...(same.why.length ? { skew: same.why.join("; ") } : {}) };
     for (const a of ARMS) {
       const o = out[a];
       const calls = lines.filter((c) => c.arm === a && product(c));
@@ -326,7 +398,7 @@ export function begin(rig: Rig, s: RunSpec) {
           calls: calls.map((c) => ({ role: c.role, reqHash: c.reqHash, shared: c.shared, mode: c.mode, ms: c.ms, firstMs: c.firstMs, waitMs: c.waitMs, readyAtTake: c.readyAtTake, thinkingTokens: c.thinkingTokens })),
         },
         "timing.json": {
-          ...o.timing, firstTextMs: role(/^draw$/)?.firstMs, resolverMs: role(/refs|resolve/)?.ms, picturesMs: o.pics?.ms, quiescedAt: Date.now(), gatewayLoopP99Ms: end.loopP99Ms,
+          ...o.timing, ...(engine[a] ? { engine: engine[a] } : {}), firstTextMs: role(/^draw$/)?.firstMs, resolverMs: role(/refs|resolve/)?.ms, picturesMs: o.pics?.ms, quiescedAt: Date.now(), gatewayLoopP99Ms: end.loopP99Ms,
         },
         "spans.json": o.spans, "after.scene.json": o.after, "after.jpg": shot.jpeg, "changed.jpg": changed,
       }, before, [input.camera, o.camera]);
@@ -353,8 +425,9 @@ export function begin(rig: Rig, s: RunSpec) {
     for (const a of blank) why.push(`a blank capture of ${a}'s result (twice)`);
     for (const w of why) invariants.push({ case: id, why: w, timing: TIMING.test(w) });
     if (why.length) appendLine(runFile(s.run, "invariants.jsonl"), { case: id, why });
-    // Still failing after the re-send: the case is void, counted only toward the void rate (§1.4 item 9).
+    // Still failing after the re-send: one arm's calls alone are its loss, both arms' a void counted toward the void rate (§1.4 item 9).
     const transport = x.transport.length ? `V7: ${x.transport.length} product calls failed twice (${x.transport[0].role}: ${x.transport[0].apiError})` : undefined;
+    const transportArms = [...new Set(x.transport.map((c) => c.arm))];
 
     // Over-use (§1.4 item 8): the card's named detector on each arm's send.
     const det = s.card?.overuseDetector ? OVERUSE[s.card.overuseDetector] : undefined;
@@ -364,6 +437,10 @@ export function begin(rig: Rig, s: RunSpec) {
     const overuse = ARMS.map((a) => !!det?.({ before, after: out[a].after, ops: out[a].ops, cameras: [input.camera, out[a].camera], pointed })) as [boolean, boolean];
 
     return async () => {
+      if (!why.length && transport && transportArms.length === 1 && transportArms[0]) {
+        runCaseDone(s.run, id);
+        return row(lines, { lost: { arm: transportArms[0], why: transport }, overuse, sent: true });
+      }
       const voided = why.length ? why.join("; ") : transport ?? (s.judge ? await judgedOnce(s.judge, id, positionsFor(order, s.seed).get(id)!) : undefined);
       runCaseDone(s.run, id);
       return row(lines, { void: voided, overuse, sent: true });
@@ -393,6 +470,17 @@ export function begin(rig: Rig, s: RunSpec) {
             continue;
           }
           if (next >= ids.length || stop) return;
+          // A paying case waits out the budget's pause (a scan is 0 product calls, but its judging isn't); warm processes
+          // don't outlive hours.
+          if (s.mode !== "scan" || s.judge) {
+            try {
+              if (await budgetGate(rig.gateway, s.run)) warmed.clear();
+            } catch (err) {
+              stop ??= err;
+              return;
+            }
+            if (next >= ids.length || stop) return;
+          }
           const j = next++;
           try {
             const finish = await fork(ids[j], at[j], k);
@@ -547,7 +635,7 @@ export function benchCases(): { id: string; bench: "B1" | "U1"; set: string; dir
  * A checkpoint run (§5.2): the current anchor (A) against the champion (B) on the yardstick only, both live
  * and unshared, judged by fidelity and craft on every case. Checkpoint 0 passes the anchor as both arms.
  */
-export async function checkpointRun(rig: Rig, o: { run: string; anchor: ArmSpec; champion: ArmSpec; seed: string; judge: Judge }): Promise<ABResult> {
+export async function checkpointRun(rig: Rig, o: { run: string; anchor: ArmSpec; champion: ArmSpec; seed: string; judge?: Judge }): Promise<ABResult> {
   const bench = benchCases();
   if (!bench.some((c) => c.bench === "B1")) throw new Error("no yardstick: run `bench freeze` first (bench/B1 in the history worktree)");
   const dirs = new Map(bench.map((c) => [c.id, c.dir]));

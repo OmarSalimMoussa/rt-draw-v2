@@ -9,7 +9,7 @@ import { readReply } from "./cache.ts";
 import { listUsd } from "./meter.ts";
 import { paths } from "./paths.ts";
 import { appendLine, caseDir, runFile } from "./record.ts";
-import type { Arm, ArmResult, ArmTiming, CallLog, Judged, Row, SceneJSON } from "./types.ts";
+import type { Arm, ArmResult, ArmTiming, CallLog, Engine, EngineRun, Judged, Row, Same, SceneJSON } from "./types.ts";
 
 /** Roles that aren't the product's (§7.3): their calls never count toward an arm's cost. */
 const EVAL_ROLES = new Set(["driver", "judge", "craft", "expectation", "miss", "failure", "probe"]);
@@ -18,9 +18,25 @@ const THINKS = /^(draw|resolve)/;
 
 const json = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
 const maybe = <T>(file: string): T | undefined => (existsSync(file) ? json<T>(file) : undefined);
+/**
+ * A send's render (LOOP-V2.md A2): one paint plus one op's apply, the mean over both arms' boards when the engine was
+ * timed on both, so the two arms' engines are compared on the same content: of each board, only what both engines'
+ * timings share (Engine.same: paint and apply, paint alone, or nothing); none when they share nothing.
+ */
+const renderOf = (e: Engine) => {
+  const cost = (x: EngineRun | undefined, s: Same = "all") => (!x || s === "none" ? undefined : x.paintMs + (s === "all" ? x.applyMs / Math.max(1, x.ops) : 0));
+  if (!e.same && e.skew) return null;
+  const xs = [cost(e, e.same?.own), cost(e.other, e.same?.other)].filter((x): x is number => x !== undefined);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+};
 
 export type ArmMetrics = {
   ttfc: number | null; ttd: number; ttlo?: number;
+  /**
+   * The deciding latencies (LOOP-V2.md): time to first drawing, and render: the engine's time from an op landing to it
+   * on screen on this send's board (one op's apply, the send's average, plus one paint), measured idle; null before them.
+   */
+  ttfd: number | null; render: number | null; deferred: boolean; renderSame: Same;
   firstTextMs?: number; resolverMs?: number; picturesMs?: number; waitMs?: number;
   thought: boolean; work: number; empty: boolean; usd: number;
   opsFailed: number; picsDrawn: number; picsFailed: number; maxTokens: number;
@@ -67,7 +83,7 @@ export function armMetrics(runId: string, caseId: string, arm: Arm, before: Scen
     .reduce((a, c) => a + (c.mode === "replay" ? recordedUsd(c) : c.shared === "follower" && !c.listUsd ? (mine.find((l) => l.reqHash === c.reqHash && l.shared === "leader")?.listUsd ?? 0) : c.listUsd), 0);
   const waits = product.map((c) => c.waitMs).filter((w): w is number => w !== undefined);
   return {
-    ttfc: timing.ttfcMs ?? null, ttd: timing.ttdMs, ttlo: timing.ttloMs,
+    ttfc: timing.ttfcMs ?? null, ttd: timing.ttdMs, ttlo: timing.ttloMs, ttfd: timing.ttfdMs ?? null, render: timing.engine ? renderOf(timing.engine) : null, deferred: !!timing.engine?.deferred, renderSame: timing.engine?.same?.own ?? "all",
     // With copies, the one that streamed (a dropped copy has no first text).
     firstTextMs: product.find((c) => c.role === "draw" && c.firstMs !== undefined)?.firstMs,
     resolverMs: product.find((c) => /resolve|refs/.test(c.role))?.ms,
@@ -108,21 +124,27 @@ function scores(runId: string, caseId: string) {
 }
 
 /** What a row records but no metric computes: the runner's facts about the case. */
-export type RowFacts = Pick<Row, "case" | "cluster" | "affected" | "class" | "overuse" | "ask" | "beat" | "firstArm" | "void">;
+export type RowFacts = Pick<Row, "case" | "cluster" | "affected" | "class" | "overuse" | "ask" | "beat" | "firstArm" | "void" | "lost">;
 
 /** A case's rows.jsonl line: the runner's facts plus every metric, from the raw files (a void row has no metrics). */
 export function rowOf(runId: string, f: RowFacts, calls: CallLog[]): Row {
   const head = { case: f.case, cluster: f.cluster, affected: f.affected, class: f.class };
   const tail = { overuse: f.overuse, ask: f.ask, ...(f.beat ? { beat: f.beat } : {}), firstArm: f.firstArm };
   if (f.void)
-    return { ...head, s: 0, ttfc: [null, null], ttd: [0, 0], work: [0, 0], usd: [0, 0], thought: [false, false], pics: [[0, 0], [0, 0]], ...tail, void: f.void };
+    return { ...head, s: 0, ttfc: [null, null], ttd: [0, 0], ttfd: [null, null], render: [null, null], work: [0, 0], usd: [0, 0], thought: [false, false], pics: [[0, 0], [0, 0]], ...tail, void: f.void };
+  if (f.lost) {
+    const s = f.lost.arm === "B" ? -1 : 1;
+    return { ...head, s, sCraft: s, ttfc: [null, null], ttd: [0, 0], ttfd: [null, null], render: [null, null], work: f.lost.arm === "B" ? [1, 0] : [0, 1], usd: [0, 0], thought: [false, false], pics: [[0, 0], [0, 0]], ...tail, lost: f.lost };
+  }
   const m = caseMetrics(runId, f.case, calls);
   const { s, sCraft } = scores(runId, f.case);
   const pair = <T>(k: (x: ArmMetrics) => T): [T, T] => [k(m.A), k(m.B)];
   return {
     ...head, s, ...(sCraft !== undefined ? { sCraft } : {}),
-    ttfc: pair((x) => x.ttfc), ttd: pair((x) => x.ttd), work: pair((x) => x.work), usd: pair((x) => x.usd), thought: pair((x) => x.thought),
+    ttfc: pair((x) => x.ttfc), ttd: pair((x) => x.ttd), ttfd: pair((x) => x.ttfd), render: pair((x) => x.render), work: pair((x) => x.work), usd: pair((x) => x.usd), thought: pair((x) => x.thought),
     pics: pair((x): [number, number] => [x.picsDrawn, x.picsFailed]),
+    ...(m.A.deferred || m.B.deferred ? { deferred: pair((x) => x.deferred) } : {}),
+    ...(m.A.renderSame !== "all" || m.B.renderSame !== "all" ? { renderSame: pair((x) => x.renderSame) } : {}),
     ...tail,
   };
 }

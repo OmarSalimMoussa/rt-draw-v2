@@ -10,6 +10,7 @@ import rough from "roughjs";
 import type { Options } from "roughjs/bin/core";
 import { type ModelStats, callModel, modelOf, warmModel } from "./model.ts";
 import { promptOf, thinkingOf } from "./prompts.ts";
+import type { Stroke } from "./ink.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type TraceContext, span } from "./trace.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
@@ -105,10 +106,13 @@ function extent(el: El): { x0: number; y0: number; x1: number; y1: number } {
   return xs.length ? { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } : { x0: 0, y0: 0, x1: 0, y1: 0 };
 }
 
+/** The picture prompts that leave the default outline out (prompts.ts' pictureRulesShort): the renderer supplies it. */
+const OUTLINED = ["short-stroke", "matched"];
+
 /**
  * Reads a reply (whole or partial) into a doodle under the knobs: sanitized
  * elements, cut at picture.maxPaths, colors beyond picture.colors mapped to the
- * nearest kept one.
+ * nearest kept one. A knob at 0 caps nothing.
  */
 export function readPicture(reply: string, subject: string, w: number, h: number, t: Tuning = DEFAULTS): Omit<Picture, "features"> & { features: Omit<PictureFeatures, "ms" | "firstMs"> } {
   const els: El[] = [];
@@ -122,7 +126,7 @@ export function readPicture(reply: string, subject: string, w: number, h: number
       if (!/^<\s*(svg|g)\b/i.test(raw)) refused++;
       continue;
     }
-    if (els.length >= t["picture.maxPaths"]) dropped++;
+    if (t["picture.maxPaths"] && els.length >= t["picture.maxPaths"]) dropped++;
     else els.push(s.el);
   }
   // Palette: the first picture.colors distinct colors stay; later ones take the nearest of those.
@@ -133,7 +137,7 @@ export function readPicture(reply: string, subject: string, w: number, h: number
       const c = el.attrs[k]?.toLowerCase();
       if (!c || c === "none") continue;
       if (kept.includes(c)) continue;
-      if (kept.length < t["picture.colors"]) kept.push(c);
+      if (!t["picture.colors"] || kept.length < t["picture.colors"]) kept.push(c);
       else {
         const rgb = hexRgb(c);
         const near = kept.reduce((best, x) => (dist3(hexRgb(x), rgb) < dist3(hexRgb(best), rgb) ? x : best));
@@ -150,17 +154,63 @@ export function readPicture(reply: string, subject: string, w: number, h: number
 
 const dist3 = (a: number[], b: number[]) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
 
+/** What the send gave that a picture may follow (picture.context): their words without ink markers, and the ink read as sketches. */
+export type SendContext = { said: string; sketches: Stroke[] };
+
+const near = (n: number) => Math.round(n);
+/**
+ * The lines a picture's prompt gets after its own (picture.context): at 1, what they said and the colors of the
+ * board's shapes, so the picture fits the request and the page; at 2, also their sketches inside the shape's box
+ * (marks read as sketches, never pointing), in the picture's own coordinates and at most picture.contextPoints points
+ * in all, so a sketch turned real keeps its pose and layout without a long prompt slowing the first stroke. Empty when
+ * there's nothing to say. Only the user text varies: the system prompt stays one text per tuning, so a waiting
+ * process serves it.
+ */
+export function contextLines(shape: Shape, scene: Scene, c: SendContext | undefined, w: number, h: number, t: Tuning): string {
+  const level = t["picture.context"];
+  if (!level || !c) return "";
+  const out: string[] = [];
+  if (c.said.trim()) out.push(`They asked: ${c.said.trim()}`);
+  const counts = new Map<string, number>();
+  const count = (x: string | undefined) => x && /^#[0-9a-f]{3,6}$/i.test(x) && counts.set(x.toLowerCase(), (counts.get(x.toLowerCase()) ?? 0) + 1);
+  // The shapes' own colors only: a detailed picture's palette would pull every later picture toward it.
+  for (const s of scene.stacked()) {
+    if (s.id === shape.id) continue;
+    count(s.style.fill);
+    count(s.style.stroke);
+  }
+  const colors = [...counts].sort((a, b) => b[1] - a[1]).map(([x]) => x);
+  if (colors.length) out.push(`Colors already on the board, most used first: ${colors.slice(0, t["picture.contextColors"]).join(", ")}`);
+  if (level >= 2) {
+    const b = shape.box;
+    const inBox = (p: Stroke["points"][number]) => p[0] >= b.x && p[0] <= b.x + b.w && p[1] >= b.y && p[1] <= b.y + b.h;
+    // Their sketches mostly inside the box, as polylines in the w × h picture (clamped to it): every k-th point, the
+    // budget shared between the strokes.
+    const strokes = c.sketches.filter((s) => s.points.length > 1 && s.points.filter(inBox).length >= s.points.length / 2);
+    const each = Math.max(2, Math.floor(t["picture.contextPoints"] / Math.max(1, strokes.length)));
+    const clamp = (v: number, max: number) => Math.min(max, Math.max(0, near(v)));
+    const lines = strokes.map((s) => {
+      const k = Math.max(1, Math.ceil(s.points.length / each));
+      const pts = s.points.filter((_, i) => i % k === 0 || i === s.points.length - 1);
+      return `<polyline points="${pts.map((p) => `${clamp(((p[0] - b.x) * w) / b.w, w)},${clamp(((p[1] - b.y) * h) / b.h, h)}`).join(" ")}"/>`;
+    });
+    if (lines.length) out.push(`Their sketch in this box, in the picture's coordinates (follow its pose and layout):\n${lines.join("\n")}`);
+  }
+  return out.length ? `\n\nContext (fit the picture to it; draw only the subject):\n${out.join("\n")}` : "";
+}
+
 /**
  * Asks the model for a doodle of `subject` filling a w × h box. `onEls` gets the
  * elements so far each time one more completes, so the picture can fill in live.
+ * `context` (contextLines) goes after the prompt's own user text.
  */
-export async function drawPicture(subject: string, w: number, h: number, t: Tuning = DEFAULTS, onEls?: (els: El[]) => void, signal?: AbortSignal, parent?: TraceContext): Promise<{ picture: Picture; stats: ModelStats }> {
+export async function drawPicture(subject: string, w: number, h: number, t: Tuning = DEFAULTS, onEls?: (els: El[]) => void, signal?: AbortSignal, parent?: TraceContext, context = ""): Promise<{ picture: Picture; stats: ModelStats }> {
   let shown = 0;
   const prompt = promptOf("picture", t);
   // A stuck call gives up after picture.timeoutMs: its shape stays a placeholder and the send can end.
   const timeout = AbortSignal.timeout(t["picture.timeoutMs"]);
   const { text, stats } = await callModel(
-    { model: modelOf(t["picture.model"]), system: prompt.system(t), user: prompt.user(subject, w, h, t), from: "picture", warm: t["picture.parallel"] * t["picture.copies"], copies: t["picture.copies"], copyAfterMs: t["picture.copyAfterMs"], ...thinkingOf("picture", t) },
+    { model: modelOf(t["picture.model"]), system: prompt.system(t), user: prompt.user(subject, w, h, t) + context, from: "picture", warm: t["picture.parallel"] * t["picture.copies"], copies: t["picture.copies"], copyAfterMs: t["picture.copyAfterMs"], ...thinkingOf("picture", t) },
     (_chunk, soFar) => {
       const { els } = readPicture(soFar, subject, w, h, t);
       if (els.length > shown) {
@@ -178,6 +228,14 @@ export async function drawPicture(subject: string, w: number, h: number, t: Tuni
 
 const NS = "http://www.w3.org/2000/svg";
 let clipN = 0;
+/**
+ * rough.js's output per element, by everything that shapes it (tag, attributes, seed, options). The board repaints
+ * every frame while pictures stream in, and a picture's elements only ever append, so without it every paint redrew
+ * every element again: about 0.09 ms each, 18 ms for a 200-element picture, on every frame (render time is the owner's
+ * latency). A clone of the cached node is the same SVG, so the eval's clock sees no difference.
+ */
+const roughCache = new Map<string, SVGGElement>();
+const ROUGH_CACHE_MAX = 5000;
 
 /**
  * Draws a doodle into `parent` (an <svg> or a group in one) at box x, y, w, h,
@@ -204,20 +262,25 @@ export function renderPicture(parent: SVGElement, els: El[], box: { x: number; y
     const a = el.attrs;
     const n = (k: string) => Number(a[k] ?? 0);
     const fill = a.fill && a.fill !== "none" ? a.fill : undefined;
-    // Under the short-stroke prompt every element is outlined (filled ones too) unless it says otherwise.
-    const outlined = promptOf("picture", t).name === "short-stroke";
+    // Under the short-stroke prompts (short-stroke, matched) every element is outlined (filled ones too) unless it says otherwise.
+    const outlined = OUTLINED.includes(promptOf("picture", t).name);
     const opts: Options = { seed: i + 1, roughness: t["picture.roughness"], stroke: a.stroke ?? (fill && !outlined ? "none" : "#1e1e1e"), strokeWidth: a["stroke-width"] ? Number(a["stroke-width"]) : outlined ? t["picture.strokeWidth"] : 2, fill, fillStyle: "solid" };
     if (opts.stroke === "none") opts.strokeWidth = 0;
     const pts = () => (a.points.match(/-?\d*\.?\d+/g) ?? []).map(Number).reduce<[number, number][]>((acc, v, j, arr) => (j % 2 ? acc : [...acc, [v, arr[j + 1] ?? 0]]), []);
-    let node: SVGGElement;
-    if (el.tag === "path") node = rc.path(a.d, opts);
-    else if (el.tag === "circle") node = rc.circle(n("cx"), n("cy"), n("r") * 2, opts);
-    else if (el.tag === "ellipse") node = rc.ellipse(n("cx"), n("cy"), n("rx") * 2, n("ry") * 2, opts);
-    else if (el.tag === "rect") node = rc.rectangle(n("x"), n("y"), n("width"), n("height"), opts);
-    else if (el.tag === "line") node = rc.line(n("x1"), n("y1"), n("x2"), n("y2"), opts);
-    else if (el.tag === "polygon") node = rc.polygon(pts(), opts);
-    else node = rc.linearPath(pts(), opts);
-    inner.append(node);
+    const key = `${el.tag} ${JSON.stringify(a)} ${JSON.stringify(opts)}`;
+    let node = roughCache.get(key);
+    if (!node) {
+      if (el.tag === "path") node = rc.path(a.d, opts);
+      else if (el.tag === "circle") node = rc.circle(n("cx"), n("cy"), n("r") * 2, opts);
+      else if (el.tag === "ellipse") node = rc.ellipse(n("cx"), n("cy"), n("rx") * 2, n("ry") * 2, opts);
+      else if (el.tag === "rect") node = rc.rectangle(n("x"), n("y"), n("width"), n("height"), opts);
+      else if (el.tag === "line") node = rc.line(n("x1"), n("y1"), n("x2"), n("y2"), opts);
+      else if (el.tag === "polygon") node = rc.polygon(pts(), opts);
+      else node = rc.linearPath(pts(), opts);
+      if (roughCache.size >= ROUGH_CACHE_MAX) roughCache.clear();
+      roughCache.set(key, node);
+    }
+    inner.append(node.cloneNode(true));
   });
   parent.append(g);
   return g;
@@ -241,7 +304,7 @@ export type PictureFiller = {
  * shape and fills in live (onUpdate after each element). A failed one stays a
  * placeholder.
  */
-export function pictureFiller(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext): PictureFiller {
+export function pictureFiller(scene: Scene, t: Tuning, onUpdate: () => void, signal?: AbortSignal, parent?: TraceContext, context?: SendContext): PictureFiller {
   const model = modelOf(t["picture.model"]);
   // With the system prompt and thinking the picture calls will use: a process started with others can't serve them.
   warmModel(model, promptOf("picture", t).system(t), t["picture.parallel"] * t["picture.copies"], thinkingOf("picture", t));
@@ -268,7 +331,7 @@ export function pictureFiller(scene: Scene, t: Tuning, onUpdate: () => void, sig
           if (shape.drawing !== subject) return;
           shape.picture = { subject, w, h, els, done: false };
           onUpdate();
-        }, signal, pctx),
+        }, signal, pctx, contextLines(shape, scene, context, w, h, t)),
       );
       if (shape.picture?.subject === subject) shape.picture.done = true;
       drawn++;

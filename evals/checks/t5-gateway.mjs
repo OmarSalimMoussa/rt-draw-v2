@@ -204,7 +204,42 @@ const t8 = performance.now();
 const heldCopy = await fetch(`${gw.url}/api/model`, { method: "POST", headers: { "content-type": "application/json", "x-rt-run": "cp2", "x-rt-case": "bank-c1", "x-rt-arm": "B", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: U1, from: "draw", copy: 2 }), signal: drop.signal }).then((r) => r.text(), (e) => e.name);
 check(heldCopy === "AbortError" && performance.now() - t8 >= 290 && upstream() === n8, `a scan's copy: ${heldCopy} after ${Math.round(performance.now() - t8)} ms, ${upstream() - n8} upstream (want held until dropped, 0)`);
 
-// ---- Rotation end to end: off a slot at five-hour 0.90 and on a 429, at the next case boundary.
+// A live call its page drops before it's sent (a losing copy, a speculation that missed) is the product's choice: metered
+// as dropped, never as an API error, which ab.ts would read as a transport failure and the arm's loss.
+await setMode("dr1", "live");
+api.set({ mode: "slow", slowMs: 400, chunkMs: 400 });
+const drop2 = new AbortController();
+const n9 = upstream();
+const dropped = fetch(`${gw.url}/api/model`, { method: "POST", signal: drop2.signal, headers: { "content-type": "application/json", "x-rt-run": "dr1", "x-rt-case": "d1", "x-rt-arm": "B", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: `${tag("dr1")} a copy that loses`, from: "draw", warm: 0 }) }).then((r) => r.text(), (e) => e.name);
+await sleep(150);
+drop2.abort();
+await dropped;
+const dropLineOf = () => readFileSync(p.calls, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.run === "dr1");
+for (let k = 0; k < 100 && !dropLineOf(); k++) await sleep(100);
+api.set({ mode: "ok" });
+const dropLine = dropLineOf();
+// It never reached the API: the request count below allows for it.
+const neverSent = upstream() === n9 ? 1 : 0;
+// Dropped mid-stream (the query ends cleanly, cut short): metered dropped, never cached or followed, so the other arm's
+// identical request makes its own call and banks the whole reply.
+await setMode("dr2", "live");
+api.set({ mode: "slow", slowMs: 200, chunkMs: 200 });
+const drop3 = new AbortController();
+const cut = fetch(`${gw.url}/api/model`, { method: "POST", signal: drop3.signal, headers: { "content-type": "application/json", "x-rt-run": "dr2", "x-rt-case": "d2", "x-rt-arm": "A", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: `${tag("dr2")} cut short`, from: "draw", warm: 0 }) }).then((r) => r.text()).catch((e) => e.name);
+await sleep(700);
+drop3.abort();
+await cut;
+await sleep(500);
+const whole = await product({ run: "dr2", case: "d2", arm: "B", slot: 0 }, { model: "sonnet", system: DRAW, user: `${tag("dr2")} cut short`, from: "draw", warm: 0 });
+api.set({ mode: "ok" });
+await sleep(200);
+const dr2 = readFileSync(p.calls, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.run === "dr2");
+const bankedDr2 = JSON.parse(readFileSync(p.reply(dr2[0]?.reqHash ?? "none"), "utf8"));
+check(dr2.find((l) => l.arm === "A")?.dropped === true && !dr2.find((l) => l.arm === "A")?.apiError && whole.done?.shared === "-" && whole.text === LONG && bankedDr2.text === LONG,
+  `a call cut short mid-stream: A ${JSON.stringify(dr2.find((l) => l.arm === "A") && { dropped: dr2.find((l) => l.arm === "A").dropped, apiError: dr2.find((l) => l.arm === "A").apiError })}, B ${whole.done?.shared} ${JSON.stringify(whole.text.slice(0, 30))}, banked ${JSON.stringify(bankedDr2.text.slice(0, 30))} (want dropped; B its own call; the whole reply banked)`);
+check(dropLine?.dropped === true && !dropLine.apiError, `a call its page dropped was metered as ${JSON.stringify(dropLine && { dropped: dropLine.dropped, apiError: dropLine.apiError, ms: dropLine.ms, outTokens: dropLine.outTokens, stopReason: dropLine.stopReason, mode: dropLine.mode })} (want dropped, no error)`);
+
+// ---- Rotation end to end: off a slot past five-hour LOOP.fiveHourPauseAt (0.60) and on a 429, at the next case boundary.
 api.set({ util5h: 0.95 });
 await product({ run: "rot", case: "rot1", arm: "A", slot: 0 }, { model: "haiku", system: "rot", user: tag("rot-1"), warm: 0 });
 api.set({ util5h: 0.42, mode: "limit" });
@@ -228,12 +263,22 @@ const sw = new Slots([1], undefined, () => now);
 sw.record(1, { usd: 0.0001, rateLimit: { status: "allowed_warning", fiveHour: 0.09, sevenDay: 0.94 } });
 check(sw.status()[0].windowUsd === 170 && !sw.status()[0].calibrated, `the week's warning set the five-hour window to $${sw.status()[0].windowUsd}`);
 const s2 = new Slots([1, 2], undefined, () => now);
-s2.record(1, { usd: 150 });
-check(!s2.why(1), "slot 1 is off at $150 of $170");
-s2.record(1, { usd: 3.01 });
-check(/five-hour/.test(s2.why(1) ?? "") && s2.boundary() === 2, `the list-$ estimate at 0.90 doesn't rotate: ${s2.why(1)}`);
+// The token is shared with testers on prod: new work stops at 0.60 of the five-hour window (LOOP.fiveHourPauseAt).
+s2.record(1, { usd: 100 });
+check(!s2.why(1), "slot 1 is off at $100 of $170");
+s2.record(1, { usd: 2.01 });
+check(/five-hour/.test(s2.why(1) ?? "") && s2.boundary() === 2, `the list-$ estimate at 0.60 doesn't pause: ${s2.why(1)}`);
+const s2r = new Slots([1, 2], undefined, () => now);
+s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.59 } });
+const under = s2r.why(1);
+s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.61 } });
+check(!under && /five-hour/.test(s2r.why(1) ?? ""), `the server's five-hour reading doesn't pause at 0.60: ${under} / ${s2r.why(1)}`);
 const s3 = new Slots([1, 2, 3], undefined, () => now);
-s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.41 } });
+// The loop's week stops at half the account's (LOOP.weekSevenDayMax 0.50): 0.49 runs, 0.51 parks.
+const s3w = new Slots([1], undefined, () => now);
+s3w.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.49 } });
+check(!s3w.why(1), `a week at 0.49 is parked: ${s3w.why(1)}`);
+s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.51 } });
 for (let h = 0; h < 6; h++) {
   now += 3600_000 * 5.5; // across windows: only the week adds up
   s3.record(2, { usd: 100 });
@@ -246,9 +291,12 @@ check(JSON.stringify(s3.sameAccount()) === "[2,3]", `equal resetsAt isn't one ac
 check(JSON.stringify(s3.stale()) === "[1,2]", `slots parked on a 33-hour-old reading (1) and on no reading (2) aren't due a re-read: ${JSON.stringify(s3.stale())}`);
 s3.record(1, { usd: 0, rateLimit: { status: "allowed", sevenDay: 0.2 } });
 check(JSON.stringify(s3.stale()) === "[2]" && !s3.why(1) && s3.status()[0].sevenDayAt === now, `a fresh reading under the stop didn't bring slot 1 back: ${JSON.stringify(s3.stale())}, ${s3.why(1)}`);
-const s4 = new Slots([1], undefined, () => now);
-s4.record(1, { usd: 0.5 * 170 });
-check(s4.pace(0.5).ok === false && s4.pace(1.2).ok === true, "the night cap doesn't stop at 0.5 windows");
+let clock4 = now;
+const s4 = new Slots([1], undefined, () => clock4);
+// The night cap is the loop's rule between steps (state.ts, t21), never the gateway's: half a window in each of three
+// five-hour windows (1.5 windows in a night, past the default 1.2) doesn't pause it.
+for (let k = 0; k < 3; k++, clock4 += 6 * 3600_000) s4.record(1, { usd: 0.5 * 170 });
+check(s4.pace().ok === true, `the gateway paused on a night's spend: ${JSON.stringify(s4.pace())}`);
 const home4 = mkdtempSync(join(tmpdir(), "rt-t5-same-"));
 mkdirSync(join(home4, "meter"));
 writeFileSync(join(home4, "meter", "slots.json"), JSON.stringify([1, 2].map((slot) => ({ slot, resetsAt: Math.floor(Date.now() / 1000) + 3000, usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {} }))));
@@ -327,7 +375,7 @@ const byRole = rollup(meterLines(), (l) => l.role);
 check(byRole.judge?.calls === 12 && byRole.judge.usd > 0 && byRole.judge.write1h === 0 && byRole.draw?.calls >= 3, `rollup by role: ${JSON.stringify(byRole.judge)}`);
 const live = meterLines().filter((l) => l.mode === "live" && l.shared !== "follower");
 check(live.length === statuses[0].calls, `gateway 1: ${live.length} live meter lines, ${statuses[0].calls} calls`);
-const gatewayCalls = statuses.reduce((a, x) => a + x.calls, 0);
+const gatewayCalls = statuses.reduce((a, x) => a + x.calls, 0) - neverSent;
 check(api.requests.length === gatewayCalls, `the fake API got ${api.requests.length} requests, the gateways made ${gatewayCalls} calls`);
 for (const g of gws) await g.close();
 await sleep(300);

@@ -194,26 +194,50 @@ function chainedQ(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
 function latency(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   const host = card("latency", true);
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
-  const ms = [...cks.flatMap((c) => [c.latency.champion.ttfcP50, c.latency.champion.ttfcP75, c.latency.champion.ttdP50, c.latency.anchor.ttfcP50]), ...d.smokes.flatMap((s) => [s.ttfcP50, s.ttdP50].filter((v): v is number => v !== undefined))];
-  const ratios = cks.map((c) => c.latency.chainedTtfc);
-  const f = frame(host, { title: "Latency: TTFC and TTD in ms (log), chained TTFC ratio against A0 on the right", height: 280, x: x.range, y: [Math.min(GOAL_TTFC_MS, ...ms) * 0.8, Math.max(...ms, 2000) * 1.25], log: true, y2: [0, Math.max(1.2, ...ratios)], xTicks: x.ticks, yFormat: (v) => (v >= 1000 ? `${v / 1000}s` : `${v}`), y2Format: (v) => `×${v.toFixed(1)}` });
-  f.hline(GOAL_TTFC_MS, "goal: TTFC 1.0 s (display only)", { goal: "ttfc" });
+  type K = "ttfc" | "ttd" | "ttfd" | "render";
+  type Line = [string, (c: CheckpointRow) => number | undefined, string, K, { dash?: boolean; faint?: boolean; right?: boolean }];
+  // Time to first drawing and render decide (LOOP-V2.md); TTFC and TTD stay, faint, for the points before them.
+  const lines: Line[] = [
+    ["first drawing p50", (c) => c.latency.champion.ttfdP50, INK, "ttfd", {}],
+    ["first drawing p75", (c) => c.latency.champion.ttfdP75, INK, "ttfd", { dash: true }],
+    ["anchor first drawing p50, same run", (c) => c.latency.anchor.ttfdP50, "#868e96", "ttfd", { faint: true }],
+    ["TTFC p50 (before first drawing)", (c) => c.latency.champion.ttfcP50, "#adb5bd", "ttfc", { faint: true }],
+    ["TTD p50 (reported)", (c) => c.latency.champion.ttdP50, "#74c0fc", "ttd", { faint: true }],
+    ["chained first-drawing ratio", (c) => c.latency.chainedTtfd, "#5f3dc4", "ttfd", { dash: true, right: true }],
+  ];
+  const known = (v: number | undefined): v is number => v !== undefined && v > 0;
+  const ms = [...cks.flatMap((c) => lines.filter((l) => !l[4].right).map(([, get]) => get(c))), ...d.smokes.flatMap((s) => [s.ttfdP50, s.ttfcP50])].filter(known);
+  const ratios = cks.map((c) => c.latency.chainedTtfd).filter(known);
+  const f = frame(host, { title: "Latency: time to first drawing in ms (log), chained against the first checkpoint that measured it on the right", height: 280, x: x.range, y: [Math.min(GOAL_TTFC_MS, ...ms) * 0.8, Math.max(...ms, 2000) * 1.25], log: true, y2: [0, Math.max(1.2, ...ratios)], xTicks: x.ticks, yFormat: (v) => (v >= 1000 ? `${v / 1000}s` : `${v}`), y2Format: (v) => `×${v.toFixed(1)}` });
+  f.hline(GOAL_TTFC_MS, "goal: first drawing 1.0 s (display only)", { goal: "ttfc" });
   debt(f, cks, x, (c) => c.latency.debt, "latency debt", "latency");
   // Laptop points are hollow too: only the PGX's latency is trusted.
   const trusted = cks.filter((c) => c.trust === "green" && c.machine !== "laptop");
-  const step = (k: "ttfc" | "ttd") => (e: Ev, y: number) => (e.kind === "anchor" ? undefined : e.era?.bridge ? y * e.era.bridge.step[k] : y);
-  const lines: [string, (c: CheckpointRow) => number, string, "ttfc" | "ttd", { dash?: boolean; faint?: boolean; right?: boolean }][] = [
-    ["TTFC p50", (c) => c.latency.champion.ttfcP50, INK, "ttfc", {}],
-    ["TTFC p75", (c) => c.latency.champion.ttfcP75, INK, "ttfc", { dash: true }],
-    ["TTD p50", (c) => c.latency.champion.ttdP50, "#1971c2", "ttd", {}],
-    ["anchor TTFC p50, same run", (c) => c.latency.anchor.ttfcP50, "#868e96", "ttfc", { faint: true }],
-    ["chained TTFC ratio vs A0", (c) => c.latency.chainedTtfc, "#5f3dc4", "ttfc", { dash: true, right: true }],
-  ];
-  lines.forEach(([name, get, color, k, s], i) => stepped(f, trusted.map((c) => ({ x: x.at(c.at), y: get(c), id: c.id })), evs, step(k), { color, width: i ? 1.5 : 2.5, ...s, data: { series: name } }, i === 0));
-  f.dots(cks.map((c) => ({ x: x.at(c.at), y: c.latency.champion.ttfcP50, id: c.id, hollow: c.trust === "amber" || c.machine === "laptop" })), INK);
-  for (const s of d.smokes) for (const [k, v] of [["TTFC", s.ttfcP50], ["TTD", s.ttdP50]] as const) if (v !== undefined) f.point(x.at(s.at), v, `smoke ${k} p50 ${(v / 1000).toFixed(1)} s`, { point: "smoke" });
+  const step = (k: K) => (e: Ev, y: number) => (e.kind === "anchor" ? undefined : e.era?.bridge ? y * (e.era.bridge.step[k] ?? 1) : y);
+  // Steps are labelled once, on first drawing's main line; the render chart steps the same way, unlabelled.
+  const draw = (f: Frame, ls: Line[], label: boolean) =>
+    ls.forEach(([name, get, color, k, st], i) => stepped(f, trusted.flatMap((c) => (known(get(c)) ? [{ x: x.at(c.at), y: get(c)!, id: c.id }] : [])), evs, step(k), { color, width: i ? 1.5 : 2.5, ...st, data: { series: name } }, label && i === 0));
+  draw(f, lines, true);
+  f.dots(cks.flatMap((c) => (known(c.latency.champion.ttfdP50) ? [{ x: x.at(c.at), y: c.latency.champion.ttfdP50, id: c.id, hollow: c.trust === "amber" || c.machine === "laptop" }] : [])), INK);
+  for (const s of d.smokes) for (const [k, v] of [["first drawing", s.ttfdP50], ["TTFC", s.ttfcP50]] as const) if (v !== undefined) f.point(x.at(s.at), v, `smoke ${k} p50 ${(v / 1000).toFixed(1)} s`, { point: "smoke" });
   ticks(f, d, x);
-  legend(host, lines.map(([n, , c, , s]) => [n, c, s.dash]));
+  legend(host, lines.map(([n, , c, , st]) => [n, c, st.dash]));
+
+  // Render: the engine's time from an op landing to it on screen (one op's apply plus one frame), per send, measured idle
+  // on both arms' boards; its median over the checkpoint's sends.
+  const paint: Line[] = [
+    ["render p50", (c) => c.latency.champion.renderP50, INK, "render", {}],
+    ["render p75", (c) => c.latency.champion.renderP75, INK, "render", { dash: true }],
+    ["anchor render p50, same run", (c) => c.latency.anchor.renderP50, "#868e96", "render", { faint: true }],
+    ["chained render ratio", (c) => c.latency.chainedRender, "#5f3dc4", "render", { dash: true, right: true }],
+  ];
+  const rms = cks.flatMap((c) => paint.filter((l) => !l[4].right).map(([, get]) => get(c))).filter(known);
+  const rr = cks.map((c) => c.latency.chainedRender).filter(known);
+  const g = frame(host, { title: "Render: an op's apply plus one frame, in ms, chained ratio on the right", height: 180, x: x.range, y: [0, Math.max(16, ...rms) * 1.2], y2: [0, Math.max(1.2, ...rr)], xTicks: x.ticks, yFormat: (v) => `${v}`, y2Format: (v) => `×${v.toFixed(1)}` });
+  g.hline(16.7, "one frame at 60 Hz", { goal: "render" });
+  if (rms.length) draw(g, paint, false);
+  else host.insertAdjacentHTML("beforeend", `<div class="stat muted">No checkpoint has measured render yet.</div>`);
+  legend(host, paint.map(([n, , c, , st]) => [n, c, st.dash]));
 }
 
 function cost(d: Data, x: ReturnType<typeof xAxis>) {
@@ -282,9 +306,9 @@ function decisions(d: Data) {
   const trustColor = { green: "ok", amber: "", void: "bad" };
   const rows = [...d.decisions].reverse().map((r) => {
     const n = r.counts.wins + r.counts.losses + r.counts.ties;
-    return `<tr data-decision="${esc(r.id)}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${r.latency.ttfc.est.toFixed(2)}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
+    return `<tr data-decision="${esc(r.id)}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
   });
-  host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>TTFC</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="12" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
+  host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="12" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
   host.addEventListener("click", (e) => {
     const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-decision]");
     if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions.find((r) => r.id === tr.dataset.decision)!);
@@ -351,8 +375,8 @@ async function drill(dec: DecisionRow) {
   const one = m.body.querySelector<HTMLElement>("[data-shown]")!;
   const r = await fetch(fileUrl({ run: dec.run, f: "rows.jsonl" }));
   if (!r.ok) return void (list.innerHTML = `<p class="muted">No raw run ${esc(dec.run)} on this machine: raw runs stay where they ran.</p>`);
-  const rows = rowsOf<{ case: string; s: number; ttfc: [number, number]; void?: string }>(await r.text());
-  list.innerHTML = `<div class="stat">${rows.length} cases in ${esc(dec.run)}</div>${rows.map((x) => `<button data-case="${esc(x.case)}" style="display:block;width:100%;text-align:left;margin:3px 0;font-size:12px"><b>${esc(x.case)}</b><br><span class="muted">${x.void ? `void: ${esc(x.void)}` : x.s > 0 ? "B better" : x.s < 0 ? "A better" : "tie"} · TTFC ${x.ttfc?.map((v) => Math.round(v)).join(" / ") ?? "-"} ms</span></button>`).join("")}`;
+  const rows = rowsOf<{ case: string; s: number; ttfc: [number, number]; ttfd?: [number, number]; void?: string }>(await r.text());
+  list.innerHTML = `<div class="stat">${rows.length} cases in ${esc(dec.run)}</div>${rows.map((x) => `<button data-case="${esc(x.case)}" style="display:block;width:100%;text-align:left;margin:3px 0;font-size:12px"><b>${esc(x.case)}</b><br><span class="muted">${x.void ? `void: ${esc(x.void)}` : x.s > 0 ? "B better" : x.s < 0 ? "A better" : "tie"} · ${x.ttfd ? "first drawing" : "TTFC"} ${(x.ttfd ?? x.ttfc)?.map((v) => Math.round(v)).join(" / ") ?? "-"} ms</span></button>`).join("")}`;
   list.addEventListener("click", async (e) => {
     const kase = (e.target as HTMLElement).closest<HTMLElement>("[data-case]")?.dataset.case;
     if (!kase) return;

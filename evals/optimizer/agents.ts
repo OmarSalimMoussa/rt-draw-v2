@@ -9,6 +9,7 @@ import { basename, join, resolve, sep } from "node:path";
 import { type CanUseTool, type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import { MODEL_IDS, type MockApi, type RateLimit, childEnv } from "../../dev/claude.ts";
 import { ask, gatewayStatus, recordSpend } from "../loop/client.ts";
+import { LOOP } from "../loop/config.ts";
 import { listUsd, meterAgent } from "../loop/meter.ts";
 import { paths } from "../loop/paths.ts";
 import { put } from "../loop/record.ts";
@@ -226,7 +227,7 @@ export async function championFailures(sha: string, run: string, checkpoint?: Ch
 /** A non-empty array of objects: what a list of cards or notes is. */
 const objects = (v: unknown) => Array.isArray(v) && v.length > 0 && v.every((x) => x !== null && typeof x === "object" && !Array.isArray(x));
 
-const KINDS = ["knob", "variant", "code", "op", "newknob"];
+const KINDS = ["knob", "variant", "code", "op", "newknob", "sweep", "combo"];
 const GOALS = ["fidelity", "craft", "latency"];
 /** What's wrong with a card the critic wrote, if anything. */
 function cardFault(c: Partial<HypothesisCard>): string | undefined {
@@ -239,17 +240,28 @@ function cardFault(c: Partial<HypothesisCard>): string | undefined {
   if (c.overuseDetector && !(c.overuseDetector in OVERUSE)) return `unknown detector ${c.overuseDetector}`;
   if (c.knobs && Object.values(c.knobs).some((v) => typeof v !== "number")) return "a knob value isn't a number";
   if (c.kind === "knob" && !Object.keys(c.knobs ?? {}).length) return "a knob card without knobs";
+  if (c.kind === "sweep") {
+    const v = c.sweep?.values;
+    if (typeof c.sweep?.knob !== "string" || !Array.isArray(v) || !v.length || v.some((x) => typeof x !== "number")) return "a sweep without a knob and its values";
+    if (v.length > LOOP.search.sweepMax) return `a sweep of ${v.length} values (at most ${LOOP.search.sweepMax})`;
+  }
+  if (c.kind === "combo") {
+    const ids = c.combines;
+    if (!Array.isArray(ids) || ids.length < 2 || ids.some((x) => typeof x !== "string")) return "a combo without two tried ids";
+    if (ids.length > LOOP.search.comboMax) return `a combo of ${ids.length} (at most ${LOOP.search.comboMax})`;
+  }
 }
 
-/** At most 3 well-formed cards, knob cards first; the rest with why they were dropped. */
+/** At most LOOP.search.cards well-formed cards, knob and sweep cards first (no engineer); the rest with why they were dropped. */
 export function readCards(text: string): { cards: HypothesisCard[]; dropped: string[] } {
   // A list of cards, else an empty list (no card worth running): never an array the prose quotes ("the cap [24]").
   const all = jsonIn<Partial<HypothesisCard>[]>(text, "[", objects) ?? jsonIn<[]>(text, "[", (v) => Array.isArray(v) && !v.length);
   if (!Array.isArray(all)) return { cards: [], dropped: ["no JSON array of cards in the critic's answer"] };
   const dropped = all.flatMap((c) => (cardFault(c) ? [`${c.id ?? "?"}: ${cardFault(c)}`] : []));
   const ok = all.filter((c) => !cardFault(c)) as HypothesisCard[];
-  const cards = [...ok.filter((c) => c.kind === "knob"), ...ok.filter((c) => c.kind !== "knob")].slice(0, 3);
-  return { cards, dropped: [...dropped, ...ok.filter((c) => !cards.includes(c)).map((c) => `${c.id}: over the 3-card limit`)] };
+  const free = (c: HypothesisCard) => c.kind === "knob" || c.kind === "sweep";
+  const cards = [...ok.filter(free), ...ok.filter((c) => !free(c))].slice(0, LOOP.search.cards);
+  return { cards, dropped: [...dropped, ...ok.filter((c) => !cards.includes(c)).map((c) => `${c.id}: over the ${LOOP.search.cards}-card limit`)] };
 }
 
 type Session = { run: string; token: Token; mockApi?: MockApi; caps?: Caps };

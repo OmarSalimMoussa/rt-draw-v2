@@ -16,7 +16,7 @@ import { ask } from "../loop/client.ts";
 import { historyWrite } from "../loop/history.ts";
 import { paths } from "../loop/paths.ts";
 import type { CaseInput, Meant, SceneJSON } from "../loop/types.ts";
-import { type Check, runCheck } from "./checks.ts";
+import { type Check, runChecks } from "./checks.ts";
 import { type Gold, applyGold, boardOps, ownChecks, readGold } from "./gold.ts";
 import { GOLD_SYSTEM, TRIAGE_SYSTEM, goldUser, triageTurns } from "./prompts.ts";
 import { type RealSend, type Session, afterOf, beforeOf, ingest } from "./sessions.ts";
@@ -26,7 +26,7 @@ export const OPUS = { model: "opus", effort: "high" } as const;
 /** Sends judged per triage call: two images each. */
 const TRIAGE_WINDOW = 11;
 const ASPECT = SCREEN.w / SCREEN.h;
-/** R-hold's share of sessions: a whole session is in one split, as a cluster. */
+/** R-hold's share of cases: a whole person is in one split, as a cluster (splitByPerson). */
 const HOLD_SHARE = 1 / 3;
 
 export type TriageRow = { n: number; meant: string; landed: "yes" | "partly" | "no"; categories: string[]; evidence: string; gold: boolean };
@@ -255,7 +255,7 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   put(join(out, "gold.scene.json"), built.after);
   const own = ownChecks(g, built.after, before);
   const kept = { ...g, checks: own.checks };
-  const on = (scene: SceneJSON) => kept.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
+  const on = (scene: SceneJSON) => runChecks(kept.checks, scene, before);
   const gc: GoldCase = { ...base, gold: kept, problems: [...built.problems, ...own.dropped], appChecks: on(after), goldChecks: on(built.after) };
   put(join(out, "gold.json"), gc);
   return gc;
@@ -279,7 +279,7 @@ export function rebuildGold(): number {
     const built = applyGold(before, read);
     const own = ownChecks(read, built.after, before);
     const kept = { ...read, checks: own.checks };
-    const on = (scene: SceneJSON) => kept.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
+    const on = (scene: SceneJSON) => runChecks(kept.checks, scene, before);
     const { verdict: _, note: __, ...stored } = g;
     put(join(out, "gold.json"), { ...stored, gold: kept, problems: [...built.problems, ...own.dropped], appChecks: on(afterOf(ss.dir, x)), goldChecks: on(built.after) } satisfies GoldCase);
     if (js(maybe(join(out, "gold.scene.json"))) !== js(built.after)) {
@@ -389,7 +389,31 @@ export function serveReview(host: string, port: number): Promise<string> {
 // ---- freeze
 
 const benchDir = () => join(realHome(), "bench", "R1");
-const splitOf = (session: string): "tune" | "hold" => (parseInt(sha(`R1|${session}`).slice(0, 8), 16) / 2 ** 32 < HOLD_SHARE ? "hold" : "tune");
+/** Who made a send, for R1's split and clusters: the owner is one person wherever they worked (live or local). */
+const whoOf = (s: Session) => (s.admin ? "owner" : s.person);
+/** A send's input with its board, for merging duplicates: the same words and ink on the same board ask the same thing. */
+const inputKey = (x: RealSend, before: SceneJSON) =>
+  sha(js([typeof x.words === "string" ? x.words : x.words.map((w) => w.word).join(" "), x.strokes.map((k) => k.points), before.shapes]));
+
+/**
+ * R1's split by person (LOOP-V2.md A5), so no one is on both sides: the owner's sends tune (there are many, and the
+ * owner can make more), and testers go to R-hold until it holds HOLD_SHARE of the cases, in a fixed order (by the hash
+ * of their pseudonym), each to whichever side is further below its share. R-hold is then people the loop never tuned on.
+ */
+function splitByPerson(counts: Map<string, number>): Map<string, "tune" | "hold"> {
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  const out = new Map<string, "tune" | "hold">();
+  let hold = 0, tune = counts.get("owner") ?? 0;
+  if (counts.has("owner")) out.set("owner", "tune");
+  const testers = [...counts.keys()].filter((k) => k !== "owner").sort((a, b) => sha(`R1|${a}`).localeCompare(sha(`R1|${b}`)));
+  for (const t of testers) {
+    const n = counts.get(t)!;
+    const side = hold / (HOLD_SHARE * total) <= tune / ((1 - HOLD_SHARE) * total) ? "hold" : "tune";
+    out.set(t, side);
+    side === "hold" ? (hold += n) : (tune += n);
+  }
+  return out;
+}
 
 /** R1's files by sha256 and the hash over them, as checkpoint.ts' manifests are made. */
 function manifest(root: string) {
@@ -401,17 +425,24 @@ function manifest(root: string) {
 
 /**
  * R1 from every accepted gold case that replays (from the send log, or typed words; a send whose ink is lost
- * waits for synthesized ink): real/bench/R1/<case>/, rebuilt whole each time. History gets R1.json: the
- * hash, the counts and the case ids, nothing a tester said or drew.
+ * waits for synthesized ink): real/bench/R1/<case>/, rebuilt whole each time. A send that repeats an earlier one
+ * (the same words and ink on the same board) is merged into it. Cases split by person (splitByPerson) and cluster
+ * by person (case.json's originSession is the person): one person's sends move together. History gets R1.json:
+ * the hash, the counts and the case ids, nothing a tester said or drew.
  */
-export function freezeReal(): { cases: number; tune: number; hold: number; inkWaiting: number; hash: string } {
+/** Cases today's champion already does right (shadow.ts' realBaseline): a later commit fixed them, so they're no case (LOOP-V2.md A5). */
+export const fixedFile = () => join(realHome(), "fixed.json");
+
+export function freezeReal(): { cases: number; tune: number; hold: number; inkWaiting: number; merged: number; fixed: number; people: { tune: number; hold: number }; hash: string } {
   const root = benchDir();
+  const fixed = new Set(existsSync(fixedFile()) ? (JSON.parse(readFileSync(fixedFile(), "utf8")) as { ids: string[] }).ids : []);
   rmSync(root, { recursive: true, force: true });
   mkdirSync(root, { recursive: true });
   const sessions = new Map(readSessions().map((x) => [x.s.id, x]));
-  let inkWaiting = 0;
-  const ids: Record<string, string> = {};
-  for (const g of goldCases().filter(accepted)) {
+  let inkWaiting = 0, merged = 0, fixedN = 0;
+  const seen = new Set<string>();
+  const picked: { g: GoldCase; ss: { dir: string; s: Session }; x: RealSend; before: SceneJSON; who: string }[] = [];
+  for (const g of goldCases().filter(accepted).sort((a, b) => (a.key < b.key ? -1 : 1))) {
     const ss = sessions.get(g.session);
     const x = ss?.s.sends[g.n - 1];
     if (!ss || !x || x.key !== g.key) continue;
@@ -419,12 +450,30 @@ export function freezeReal(): { cases: number; tune: number; hold: number; inkWa
       inkWaiting++;
       continue;
     }
+    const before = beforeOf(ss.dir, x);
+    const k = inputKey(x, before);
+    if (seen.has(k)) {
+      merged++;
+      continue;
+    }
+    seen.add(k);
+    // After the repeat check: a fixed case's repeats are the same input, and stay out with it.
+    if (fixed.has(g.key.replace("#", "-"))) {
+      fixedN++;
+      continue;
+    }
+    picked.push({ g, ss, x, before, who: whoOf(ss.s) });
+  }
+  const counts = new Map<string, number>();
+  for (const c of picked) counts.set(c.who, (counts.get(c.who) ?? 0) + 1);
+  const sides = splitByPerson(counts);
+  const ids: Record<string, string> = {};
+  for (const { g, ss, x, before, who } of picked) {
     const id = g.key.replace("#", "-");
     const d = join(root, id);
-    const before = beforeOf(ss.dir, x);
     const camera = cameraOf(x, before);
-    const split = splitOf(ss.s.id);
-    put(join(d, "case.json"), { id, set: "real", split, originSession: ss.s.id, send: g.n, recordedAt: x.at, replay: x.replay, source: ss.s.source, admin: ss.s.admin, categories: g.categories, hedged: false, beatDone: false });
+    const split = sides.get(who)!;
+    put(join(d, "case.json"), { id, set: "real", split, originSession: who, session: ss.s.id, send: g.n, recordedAt: x.at, replay: x.replay, source: ss.s.source, admin: ss.s.admin, categories: g.categories, hedged: false, beatDone: false });
     put(join(d, "input.json"), { camera, words: x.words, strokes: x.strokes, enterAtMs: x.enterAtMs, inputHash: sha(js([camera, x.words, x.strokes])) } satisfies CaseInput);
     put(join(d, "before.scene.json"), before);
     put(join(d, "meant.json"), { meant: g.meant, hedged: false } satisfies Meant);
@@ -438,7 +487,8 @@ export function freezeReal(): { cases: number; tune: number; hold: number; inkWa
   const m = manifest(root);
   put(join(root, "manifest.json"), m);
   const tune = Object.values(ids).filter((s) => s === "tune").length;
-  const r = { cases: Object.keys(ids).length, tune, hold: Object.keys(ids).length - tune, inkWaiting, hash: m.hash };
+  const people = { tune: [...sides.values()].filter((s) => s === "tune").length, hold: [...sides.values()].filter((s) => s === "hold").length };
+  const r = { cases: Object.keys(ids).length, tune, hold: Object.keys(ids).length - tune, inkWaiting, merged, fixed: fixedN, people, hash: m.hash };
   historyWrite("bench/R1.json", { ...r, at: new Date().toISOString(), splits: ids });
   return r;
 }

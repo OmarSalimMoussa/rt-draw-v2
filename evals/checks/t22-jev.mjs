@@ -114,8 +114,11 @@ async function resolved(knobs, jev) {
   return { r, c0, jev: jevReqs().slice(j0), claude: claudeReqs().length - c0 };
 }
 
-const def = await resolved({}, {});
-check(def.r.via === "model" && !def.jev.length && def.claude === 1 && def.r.ids.join() === B, `the default resolver: via ${def.r.via}, ${def.jev.length} Jev calls, ${def.claude} Claude, ids ${def.r.ids}`);
+// Claude's resolver (resolve.engine 0, the default until 4420f45 made Jev alone the default, kept as e23-h1).
+const claude = await resolved({ "resolve.engine": 0, "resolve.jevHints": 0 }, {});
+check(claude.r.via === "model" && !claude.jev.length && claude.claude === 1 && claude.r.ids.join() === B, `Claude's resolver: via ${claude.r.via}, ${claude.jev.length} Jev calls, ${claude.claude} Claude, ids ${claude.r.ids}`);
+const def = await resolved({}, { [A]: 0.9 });
+check(def.r.via === "jev" && def.jev.length === 1 && def.claude === 0 && def.r.ids.join() === A, `the default resolver (Jev alone): via ${def.r.via}, ${def.jev.length} Jev calls, ${def.claude} Claude, ids ${def.r.ids}`);
 
 const one = await resolved({ "resolve.engine": 1 }, { [A]: 0.9 });
 const q = one.jev[0];
@@ -154,11 +157,14 @@ const deep = await buildPrompt(scene, [], typed, off);
 check(deep.thinking === undefined && deep.features.thinkP === 0.8, `the think router on a big ask: ${deep.thinking}, p ${deep.features.thinkP}`);
 const j1 = jevReqs().length;
 const plain = await buildPrompt(scene, [], typed, tune({ "draw.sendScreenshot": 0, "draw.sendRefs": 0 }));
-check(plain.thinking === undefined && plain.features.thinkP === undefined && jevReqs().length === j1, "the default asked Jev about thinking");
+// The default asks Jev one thing beside the resolver, the add hint (draw.addHint, 4f0de87), never whether to think.
+const asked = jevReqs().slice(j1).map((r) => r.questions.join());
+check(plain.thinking === undefined && plain.features.thinkP === undefined && !asked.includes("think"), `the default asked Jev about thinking (${asked.join(" | ")})`);
 
 // ---- resolve.speculate: the drawing call starts on Jev's guess, its ops held until the resolver answers; the same
 // prompt lets them land (one drawing call), another drops that call and draws again on the answer.
-const spec = tune({ "resolve.speculate": 1, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
+// Speculation guesses only for Claude's resolver (resolve.engine 0): Jev alone has nothing to wait for.
+const spec = tune({ "resolve.speculate": 1, "resolve.engine": 0, "resolve.jevHints": 0, "draw.addHint": 0, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
 const fresh = () => runScript(asPage(readFileSync(join(ROOT, "src/fixtures/clowns.ops.txt"), "utf8"), "page", "Home")).scene;
 const said = "make the clown with the balloon bigger";
 const draws = () => api.requests.filter((r) => r.role === "draw").length;

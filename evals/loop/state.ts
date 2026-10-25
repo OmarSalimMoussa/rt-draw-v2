@@ -15,9 +15,13 @@ export type CardState = {
   cand?: string; verdict?: string;
   /** The run its decision was read from (the next analyst's digest). */
   run?: string;
+  /** One value of a sweep card (LOOP-V2.md D3): the sweep's id, and the value's side of the champion's and distance from it. */
+  sweep?: { of: string; side: number; distance: number };
 };
 /** A decision as the stop rules see it. */
-export type Decided = { id: string; verdict: string; component: string; at: string; overrun?: boolean; v9?: boolean };
+export type Decided = { id: string; verdict: string; component: string; at: string; overrun?: boolean; v9?: boolean;
+  /** One value of this sweep (LOOP-V2.md D3): the dry well counts a sweep once. */
+  sweep?: string };
 export type State = {
   epoch: number;
   /** The epoch's run-id prefix (2026-10-17T03-12): its runs are <stamp>-e<E>-h<n>-<stage>. */
@@ -28,6 +32,8 @@ export type State = {
   /** The last epoch this loop runs (--epochs), kept so --resume stops where the first start would have. */
   until?: number;
   keepsSinceCheckpoint: number; keepsSinceRefresh: number; refreshes: number;
+  /** Epochs ended since the last checkpoint: in latency debt with no keep, LOOP.debtCheckpointEpochs of them call one. */
+  epochsSinceCheckpoint?: number;
   recent: Decided[];
   /** Components the dry-well rule paused, until the next checkpoint. */
   paused: string[];
@@ -92,7 +98,8 @@ export function lock(): { stale: boolean; release(): void } {
 
 /** §6.2's measuring $ per case by class (D's continuation and top-up sends at a live fork send's): the overrun rule's yardstick. */
 export const CASE_USD: Record<DecisionClass, number> = { N: 0, S: 0.059, R: 0.014, Q: 0.074, D: 0.089 };
-export const RULES = { decisionMaxMin: 30, overrunsPerNight: 3, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 6, componentRevertsInRow: 3, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
+// The dry well scales with the search (LOOP-V2.md D1): two epochs' cards in a row reverted, or one epoch's on a component.
+export const RULES = { decisionMaxMin: 30, overrunsPerNight: 3, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 2 * LOOP.search.cards, componentRevertsInRow: LOOP.search.cards, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
 /** The ladder's slots §6's 30 minutes assume (the PGX's). */
 const SLOTS_30MIN = 8;
 /**
@@ -131,8 +138,9 @@ export function rules(f: Facts): Action[] {
   const last = (n: number, xs: Decided[] = f.recent) => (xs.length >= n ? xs.slice(-n) : undefined);
   // Budget: the gateway's slots, and the night cap counted here (--night-windows).
   if (f.pace.stop) out.push({ do: "stop", why: `budget: ${f.pace.stop}` });
-  if (f.nightUsd >= f.nightCapUsd) out.push({ do: "stop", why: `budget: the night cap is reached ($${f.nightUsd.toFixed(2)} of $${f.nightCapUsd.toFixed(2)})` });
-  if (!f.pace.stop && f.pace.pauseUntil) out.push({ do: "pause", why: "every slot is past its five-hour 0.90", until: f.pace.pauseUntil });
+  // The night cap paces the loop to the next night; it never needs the owner to resume (LOOP-V2.md A4).
+  if (f.nightUsd >= f.nightCapUsd) out.push({ do: "pause", why: `budget: the night cap is reached ($${f.nightUsd.toFixed(2)} of $${f.nightCapUsd.toFixed(2)}): until the next night`, until: f.nightStart + 24 * 3600_000 });
+  if (!f.pace.stop && f.pace.pauseUntil) out.push({ do: "pause", why: `every slot is past ${Math.round(LOOP.fiveHourPauseAt * 100)}% of its five-hour window`, until: f.pace.pauseUntil });
   // Harness suspects.
   if (f.recent.filter((d) => d.overrun && Date.parse(d.at) >= f.nightStart).length >= RULES.overrunsPerNight) out.push({ do: "stop", why: `${RULES.overrunsPerNight} decisions overran their budget tonight (harness suspect)` });
   if (last(RULES.voidsInRow, f.recent.filter((d) => Date.parse(d.at) >= (f.ownerStepAt ?? 0)))?.every((d) => d.verdict === "void")) out.push({ do: "stop", why: `${RULES.voidsInRow} void decisions in a row` });
@@ -145,8 +153,13 @@ export function rules(f: Facts): Action[] {
   if (f.error && /requested|\/api\/(tts|stt)/.test(f.error)) out.push({ do: "stop", why: `aborted: ${f.error}` });
   if (f.blocked) out.push({ do: "stop", why: `paused for the owner: ${f.blocked}` });
   if ((f.emptyEpochs ?? 0) >= RULES.emptyEpochs) out.push({ do: "stop", why: `${f.emptyEpochs} epochs in a row decided nothing: the critic's cards were missing or all dropped (paused, --quality-only, owner-only)` });
-  // A dry well: the optimizer keeps proposing what doesn't work.
-  const since = f.recent.filter((d) => Date.parse(d.at) >= (f.checkpointAt ?? 0));
+  // A dry well: the optimizer keeps proposing what doesn't work. A sweep's values are one try: kept if any value kept.
+  const since = f.recent.filter((d) => Date.parse(d.at) >= (f.checkpointAt ?? 0)).reduce<Decided[]>((acc, d) => {
+    const prev = acc.at(-1);
+    if (d.sweep && prev?.sweep === d.sweep) acc[acc.length - 1] = { ...d, verdict: prev.verdict === "keep" ? "keep" : d.verdict };
+    else acc.push(d);
+    return acc;
+  }, []);
   if (last(RULES.revertsInRow, since)?.every((d) => d.verdict === "revert")) out.push({ do: "owner", why: `dry well: ${RULES.revertsInRow} reverts in a row` });
   for (const c of new Set(since.map((d) => d.component)))
     if (last(RULES.componentRevertsInRow, since.filter((d) => d.component === c))?.every((d) => d.verdict === "revert"))
@@ -170,7 +183,7 @@ export type Notice = { key: string; kind: "soon" | "reached" | "checkpoint" | "s
 
 /**
  * The owner's notices due on these facts and not yet `sent` (by key): a heads-up as each step of `every` comes near (its
- * `soon` share) and a notice when it's reached; one per checkpoint; and two before the night cap, which stops the loop.
+ * `soon` share) and a notice when it's reached; one per checkpoint; and two before the night cap, which pauses the loop until the next night.
  * None of them stops anything.
  */
 export function notices(f: NoticeFacts, sent: Set<string>): Notice[] {
@@ -188,6 +201,6 @@ export function notices(f: NoticeFacts, sent: Set<string>): Notice[] {
   if (f.every.checkpoint > 0) for (const id of f.leg.checkpoints) add(`checkpoint:${id}`, "checkpoint", `checkpoint ${id} ran`);
   for (const share of [f.every.soon, 0.95])
     if (share > 0 && f.nightCapUsd > 0 && f.nightUsd >= share * f.nightCapUsd && f.nightUsd < f.nightCapUsd)
-      add(`night:${share}`, "soon", `the night cap is ${Math.round((100 * f.nightUsd) / f.nightCapUsd)}% spent ($${f.nightUsd.toFixed(2)} of $${f.nightCapUsd.toFixed(2)}): the loop stops there`);
+      add(`night:${share}`, "soon", `the night cap is ${Math.round((100 * f.nightUsd) / f.nightCapUsd)}% spent ($${f.nightUsd.toFixed(2)} of $${f.nightCapUsd.toFixed(2)}): the loop pauses there until the next night`);
   return out;
 }

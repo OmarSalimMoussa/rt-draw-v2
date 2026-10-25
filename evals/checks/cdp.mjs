@@ -24,6 +24,17 @@ export function chromeCount(dir) {
 export const modelReply = (text, stats = {}) =>
   [...(text.match(/[\s\S]{1,40}/g) ?? []).map((t) => JSON.stringify({ text: t })), JSON.stringify({ done: true, model: "haiku", ms: 1, ...stats })].join("\n") + "\n";
 
+/** Jev's model names (src/core/model.ts' JEV_VERSIONS): the product's yes/no calls go to /api/model under these. */
+export const JEV_MODELS = ["jev-1.13.0", "jev-latest"];
+/**
+ * A Jev request's reply (src/core/decide.ts): each question's probability of yes, `yes[id]` or `no` (0.02) when not
+ * given. The resolver asks one question per candidate shape id, the add hint "add", the think router "think".
+ */
+export function jevReply(request, yes = {}, no = 0.02) {
+  const ids = Object.keys(JSON.parse(request.user).questions ?? {});
+  return modelReply(JSON.stringify(Object.fromEntries(ids.map((id) => [id, { noul: yes[id] ?? no }]))));
+}
+
 /**
  * Starts Chrome with one page (call tempHome() first: the profile lives under RT_EVAL_HOME).
  * stubs: { "/api/model": (req) => body | { status, body, type } }, sync or async, where

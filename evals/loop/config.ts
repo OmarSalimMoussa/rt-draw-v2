@@ -8,25 +8,47 @@ export const LOOP = {
   looks: [16, 32, 48, 80], keepZ: [Infinity, 2.3, 1.8, 1.4], revertZ: [-0.2, 0.3, 0.7, 1.4], minDecisive: [10, 20, 30, 0],
   rareMin: 32, topUpMaxSends: 48,
   // latency and craft goals (§1.3)
-  latFutility16: 1.0, latKeepHi90: 1.0, latRevert48: 0.98, qualityFloorZ: -1.0, workFloorZ: -0.5,
+  latFutility16: 1.0, latKeepP: 0.10, latRevert48: 0.98, qualityFloorZ: -1.0, workFloorZ: -0.5,
   // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on
   latFloorZ: [Infinity, 0, -0.5, -1.0], latFutilityZ: -1.25,
   // the slow sends too (the owner, 2026-10-19): a latency keep may come from the p90 or p95 send (both arms' quantile,
-  // B/A) as well as the median paired ratio: a tail keeps on its 95% bound under latTailKeepHi95, at least
+  // B/A) as well as the median paired ratio: a tail keeps when surely under latTailKeepHi95 (swap test p < latTailKeepP), at least
   // latTailKeepEst faster, once it holds latTailMinSends sends (p90 from look 32, p95 at 80). Simulated on thinking's
   // two humps (a third of the sends ×2.5): a no-effect card is kept 18% of the time (median alone 14%; every tail at
   // every look 24%), a fix of the thinking sends to ×0.4 / ×0.6 / ×0.75 100% / 95% / 85% (median alone 84 / 75 / 54%).
   // Every one of them must be past latFutility16 or latRevert48 to stop a card early, and none surely slower (latVeto).
-  latTails: [0.90, 0.95], latTailKeepHi95: 0.95, latTailKeepEst: 0.90, latTailMinSends: 3,
+  latTails: [0.90, 0.95], latTailKeepHi95: 0.95, latTailKeepP: 0.05, latTailKeepEst: 0.90, latTailMinSends: 3,
+  // The latencies that decide (the owner, 2026-10-24, LOOP-V2.md): time to first drawing, and render: the engine's time
+  // from an op landing to it on screen on the send's board (one op's apply plus the paint of the frame that brings the
+  // board's last change, measured idle after the send: bridge/main.ts engine()). Never slower on either, at the median or
+  // a tail: the veto has no allowance; surely slower is the session-swap test's p < latVeto.p (stats.ts swapTest, exact
+  // at any number of sessions). A render under renderFloorMs reads as renderFloorMs in both arms, so sub-millisecond
+  // jitter is no ratio. TTFC, TTD and $ are reported. At 48 cases in ~10 sessions (t13's simulation) the veto reverts
+  // 10.7% of changes that cost no latency, 29% of +5% slowdowns and 61% of +10% ones; the latency debt (latDebtLo90 1.0,
+  // confirmed in one same-run check) catches what single decisions miss.
+  latGated: ["ttfd", "render"], renderFloorMs: 1,
   // vetoes and trust (§1.4)
-  latVeto: { lo95: 1.0, est: 1.08 }, latDebtLo90: 1.05, qualDebtHi90: 0.5, qualDebtFloorZ: 0,
-  heldoutVetoZ: -1.0, heldoutMax: 32,
-  workMin: 0.85, emptyRiseMax: 0.02, failedPicRiseMax: 0.02, costMax: 1.2, costCumMax: 1.2,
+  // Latency debt starts on two checkpoints in a row surely slower; in debt with no keep for debtCheckpointEpochs epochs, a
+  // checkpoint runs anyway, so a false alarm can clear.
+  latVeto: { p: 0.05 }, latDebtLo90: 1.0, debtCheckpointEpochs: 2, qualDebtHi90: 0.5, qualDebtFloorZ: 0,
+  // G3 confirms in direction (held-out fidelity or craft Z above 0, a latency card's metric faster) once it has
+  // heldoutConfirmMin affected cases; with fewer it can only veto.
+  heldoutVetoZ: -1.0, heldoutMax: 32, heldoutConfirmMin: 8,
+  // The latency veto on G2's cases and again on G3's (false), or once on both together at G3 (true): the owner's call.
+  latVetoPooled: false,
+  // The search (LOOP-V2.md D1, D3, D4): the analyst's hypotheses an epoch, the critic's cards (a sweep is one card of up
+  // to sweepMax values, a combo one card of up to comboMax tried patches), and the near wins the digest lists.
+  // A sweep's k values share one card's error (D3): each keeps past keepZ raised by z(1 − sweepAlpha/k) − z(1 − sweepAlpha),
+  // sweepAlpha being Rule F's one-sided pass rate for a no-op at G2 (5.5% simulated), and a latency value on a p k times smaller.
+  search: { hypotheses: [8, 16], cards: 6, sweepMax: 4, comboMax: 3, nearWins: 8, pruneZ: -1.0, sweepAlpha: 0.055 },
+  // renderUnmeasuredMax: past this share of a keep's cases without a render both engines could compare (a new shape
+  // kind), the render veto can't speak for it: the owner's.
+  workMin: 0.85, emptyRiseMax: 0.02, failedPicRiseMax: 0.02, renderUnmeasuredMax: 0.25,
   voidMax: 0.10, flipAlarm: 0.30, dispatchBand: [0.4, 0.6], coldAsymMax: 0.10,
   cont: { cases: 20, sends: 2, vetoZ: -1.0 }, overuse: { max: 0.25, overA: 0.10 },
   // classes (§1.2); nTimingBand is also R8's shared timed-replay A/A band
   nTimingBand: 0.03, nTimedCases: 48, sConfirmCases: 24,
-  // unshared A/A (checkpoint 0, §7.6): each of 4 intervals (TTFC, TTD, dispatch order, share) is mean ± t(G−1)·CR1 SE
+  // unshared A/A (checkpoint 0, §7.6): each of 4 intervals (TTFD, render, dispatch order, share) is mean ± t(G−1)·CR1 SE
   aa: { ci: 0.99, latNull: 1.0, shareNull: 0.5 },
   // judges (§4)
   judgePx: 640, judgeQuality: 0.8, auditShare: 0.2, lowConfidence: 1, flipFallbackAfter: 16, craftShare: 0.25,
@@ -41,9 +63,11 @@ export const LOOP = {
   bench: { heldout: 32, tuning: 32 },
   // owner steps (§8.6)
   sync: { minHours: 24, sceneFailMax: 0.10 },
-  // budget (§6.7)
-  rotateAt: 0.90, windowUsdStart: 170, nightWindows: 1.2, firstNightWindows: 0.5,
-  weekSevenDayMax: 0.40, weekWindowsPerToken: 3, decisionOverrun: 2.0, epochMaxMin: 60,
+  // budget (§6.7). The token is shared with testers on prod (the owner, 2026-10-24): new work pauses at fiveHourPauseAt of
+  // the five-hour window and stops at weekSevenDayMax of the week, both the server's reading of the whole account. rotateAt
+  // is the CLI's own warning, which calibrates a window's $ size.
+  rotateAt: 0.90, fiveHourPauseAt: 0.60, windowUsdStart: 170, nightWindows: 1.2, firstNightWindows: 0.5,
+  weekSevenDayMax: 0.50, weekWindowsPerToken: 3, decisionOverrun: 2.0, epochMaxMin: 60,
   // machine (§7); the per-machine dispatch limit is the ladder's p99 at the knee (machine.json), capped here
   loadMax: 0.6, psiMax: 0.10, sendTimeoutMs: 120_000, quiesceMs: 500, suspendGapMs: 10_000,
   dispatchOffsetCapMs: 25, eventLoopP99MaxMs: 20, heapGrowMaxMb: 20, diskOwnerGb: 20, diskPauseGb: 10,

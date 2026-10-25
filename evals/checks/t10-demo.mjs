@@ -7,7 +7,7 @@
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "vite";
-import { modelReply, openChrome } from "./cdp.mjs";
+import { JEV_MODELS, jevReply, modelReply, openChrome } from "./cdp.mjs";
 import { ROOT, check, fail, finish, tempHome } from "./lib.mjs";
 
 const home = tempHome();
@@ -44,6 +44,7 @@ const c = await openChrome({
         const turn = TURNS[driver.length - 1] ?? fail(`driver call ${driver.length}: the session should have ended`);
         return modelReply(JSON.stringify(turn));
       }
+      if (JEV_MODELS.includes(r.model)) return jevReply(r); // the resolver, the add hint, the think router: no to all
       return REPLIES[r.from] !== undefined ? modelReply(REPLIES[r.from]) : fail(`an unexpected model call from ${r.from}`);
     },
     "/api/tts": () => (voice.push("tts"), { status: 403, body: '{"error":"no voice in checks"}', type: "application/json" }),

@@ -147,10 +147,11 @@ flowchart TD
     ENG --> G0["G0 free gates: allowed files, no new magic numbers, typecheck"]
     G0 --> G1["G1 diffscan at 0 calls: which banked cases change?"]
     G1 --> AB["A/B on affected cases: same moment, live calls, timed and judged in looks of 16 to 80"]
-    AB --> V{"Verdict"}
-    V -->|"faster or better, nothing worse"| KEEP["Keep: commit to loop/champion"]
+    AB --> G3["G3 on held-out cases: may only veto"]
+    G3 --> V{"Verdict"}
+    V -->|"better or faster, never slower"| KEEP["Keep: commit to loop/champion"]
     V -->|"no clear win"| REV["Revert: patch saved to tried/"]
-    V -->|"costs more, the look, a model switch"| OWN["Owner list"]
+    V -->|"the look, a patch, a model switch"| OWN["Owner list"]
     V -->|"unfair measurement"| VOID["Void"]
   end
   setup --> rounds
@@ -177,8 +178,9 @@ decision pays for a driver. Cases are split three ways: **tuning** (the only one
 
 Each round, the **analyst** (one call) reads digests of at most 40k tokens built by frozen code from the bank and the
 runs (`optimizer/digest.ts`): where the champion itself fails first, then slow traces. The **critic** (a read-only
-Agent SDK session) turns that into up to three **cards**, each one change with its goal (latency, fidelity or craft),
-what it predicts and its risk. An **engineer** (an Agent SDK session) implements a card in its own git worktree. A
+Agent SDK session) turns that into up to six **cards**, each one change with its goal (latency, fidelity or craft),
+what it predicts and its risk. A sweep (one knob at several values, stopping at the first keep) and a combination of
+near wins (reverted changes that leaned the right way) are one card each (`LOOP-V2.md`, D). An **engineer** (an Agent SDK session) implements a card in its own git worktree. A
 candidate may only change `src/core/`, minus speech; every new number in it must become a named knob in `tuning.ts`.
 A person's cards go through the same queue: the seed cards (`optimizer/seed-cards.json`) start the first rounds, and
 `--seed-cards` adds more to a running loop.
@@ -193,23 +195,34 @@ A person's cards go through the same queue: the seed cards (`optimizer/seed-card
    affected cases are ever paid for. The scan also classifies the change: N (no effect), S (speed only, from a timed
    replay), Q (a request differs), R (a render differs) or D (dialogue: state only a later send reads).
 3. **G2, the A/B** (`loop/ab.ts`): both versions start from the same fork point on freshly reloaded pages and get the
-   case at the same moment, in a seeded, alternating order, with live model calls. Every case is timed (first change
-   and done) and, for quality cards, judged.
-4. **G3 and G4**: a keep must also hold on the affected H-gate cases, and a dialogue change on continuation sends.
+   case at the same moment, in a seeded, alternating order, with live model calls. Every case is timed (time to first
+   drawing, and the engine's render time; first change and done are reported) and, for quality cards, judged. First
+   drawing counts only visible ink: a shape already on the board once it visibly changed, a shape with a picture once
+   an element of its final picture or its final words show. Render times both engines on both arms' boards, in one view, each
+   frame on content no earlier run painted, keeping of each board only what both engines load and apply alike.
+4. **G3 and G4**: every keep, whatever its class, must also hold on the affected H-gate cases, on fidelity and on both
+   deciding latencies, and a dialogue change on continuation sends.
 
 ### Deciding
 
 All of it is in `loop/verdict.ts`, with frozen numbers in `loop/config.ts`. Statistics treat the driver session as the
-unit, since sends from one session are alike (`loop/stats.ts`: clustered standard errors and session bootstraps).
+unit, since sends from one session are alike (`loop/stats.ts`: clustered standard errors, and for latency a test
+that swaps the arms of whole sessions, exact at any number of sessions; session bootstraps are reported only).
 
 - **Quality cards (Rule F).** The judge's verdicts are checked in looks at 16, 32, 48 and 80 affected cases. Keep when
   the clustered Z reaches 2.3, 1.8 or 1.4 at looks 32, 48 or 80; revert as soon as it falls under -0.2, 0.3, 0.7 or 1.4.
   A clear result stops early, so a dud costs 16 cases, not 80.
-- **Latency cards.** Keep when the 90% upper bound of the median paired ratio is under 1.0, or a slow-send tail (p90,
-  p95) is surely at least 10% faster, and fidelity holds: Z of at least 0 at look 32, -0.5 at 48, -1.0 at 80. A
+- **Latency cards.** Keep when the median paired ratio (time to first drawing, or render) is surely under 1.0 (the
+  swap test's p under 0.10), or a slow-send tail (p90, p95) is surely under 0.95 and at least 10% faster, the other
+  latency isn't surely slower, and
+  fidelity holds: Z of at least 0 at look 32, -0.5 at 48, -1.0 at 80. A
   fidelity Z of -1.25 or worse ends it: the speed costs fidelity.
-- **Vetoes.** Surely slower on any measure, losing on held-out cases, or more empty or failed pictures. A cost over
-  ×1.2 per request, alone or added up since the original, sends the change to the owner list instead.
+- **Vetoes.** Surely slower at all on time to first drawing or render, at the median or a tail, on the A/B's cases
+  or the held-out ones (the swap test's p under 0.05); losing on held-out cases; more empty sends or failed pictures; a
+  render() that leaves work for after it returns. A case only one arm failed is that arm's loss (not an empty send).
+  Cost is reported, never a veto (`LOOP-V2.md`).
+- **Sweeps and combos.** A sweep's values, or a combo's near-wins, share one card's chance of a false keep: each needs
+  a higher Z, or a smaller p.
 - **Void.** A case that trips an invariant (a timing stall, unequal cold starts, an arm dispatched first too often)
   is never a product result, and too many voids void the decision.
 
@@ -243,8 +256,9 @@ stops at the cap instead of burning a usage window.
 
 ### Guard rails
 
-The loop stops itself on a night cap, the weekly allowance, two voids in a row, a broken invariant, failed readiness or
-calibration, or a merge conflict, and pauses while every token is past 90% of its window. After three reverts in a row
+The loop stops itself on the weekly allowance (50%), two voids in a row, a broken invariant, failed readiness or
+calibration, or a merge conflict. It pauses, before any paying case, while every token is past 60% of its five-hour
+window (and before every top-up or continuation send), and until the next night once the night cap is spent. After six reverts in a row (an epoch's cards)
 in one area it rests that area until the next checkpoint. Everything it can't decide lands in `owner-list.md`.
 
 ### Why it's built this way: v1 cost too much

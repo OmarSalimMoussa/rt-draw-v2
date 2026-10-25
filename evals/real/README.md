@@ -6,7 +6,7 @@ what each clear miss should have made, and those cases become bench **R1**, so a
 measured on whether it fixes what testers actually hit.
 
 ```
-pull.sh (laptop)  →  rte real ingest  →  rte real render  →  rte real triage  →  rte real gold  →  rte real review  →  rte real freeze
+pull.sh (laptop)  →  rte real ingest  →  rte real render  →  rte real triage  →  rte real gold  →  rte real review  →  rte real freeze  →  rte real baseline  →  rte real freeze
  box + laptop data    sessions            images, 0 calls     Opus per session    Opus per miss     owner approves      bench R1
 ```
 
@@ -18,7 +18,8 @@ pull.sh (laptop)  →  rte real ingest  →  rte real render  →  rte real tria
 | `rte real triage --cap n` | Opus reads each session (11 sends per call, the whole session's words as context) and says, per send, what the person meant, whether it landed, the failure kinds (`prompts.ts` `CATEGORIES`) and whether a good result could be drawn for it | 1 per session (more past 11 sends) |
 | `rte real gold --cap n` | For each send triage marked for gold: Opus writes the product's own ops and draws every picture (up to 60 elements), plus a rubric (should / must not) and free checks (`checks.ts`). The ops run on the before board with the product's `runScript`, the pictures go through `readPicture` (`gold.ts`), and gold is shot like a result | 1 per send |
 | `rte real review --host <tailscale ip>` | A page showing before, the app's result and gold side by side, with Approve and Reject (`review.ts`), on port 5182 | 0 |
-| `rte real freeze` | Accepted gold cases that replay become `real/bench/R1/<case>/`, split R-tune / R-hold by session | 0 |
+| `rte real freeze` | Accepted gold cases that replay become `real/bench/R1/<case>/`, one per distinct input (repeats merged), split R-tune / R-hold by person: the owner's sends tune, testers go to R-hold toward a third. Cases listed in `real/fixed.json` are left out | 0 |
+| `rte real baseline --cap n` | R1 on the champion twice, live and unshared, no judge: the cases where both runs pass every check are ones a later commit already fixed, listed in `real/fixed.json` for the next freeze; also R1's own A/A noise on first drawing and render | 2 sends per case |
 
 Local sessions (the owner's dev server) count from `--since` (default 2026-10-22, when testers started on
 the hosted app); live ones always count. `--only <session>` runs one session.

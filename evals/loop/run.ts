@@ -9,7 +9,7 @@
 // --port n (the first arm server's, default 5300) and --fakes <module> (checks: a canned critic, engineer, judge).
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { arch } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,18 +30,19 @@ import { startFakeApi } from "../mock/fake-api.ts";
 import type { Label, PairRef } from "../pages/plugin.ts";
 import * as agents from "../optimizer/agents.ts";
 import { analystDigest, failureDigest, writeLossDigest, writeMissDigest } from "../optimizer/digest.ts";
-import { bankedScenes, cardOwnerReasons, diffOf, g0, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
-import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, harnessTag, judgedOnce, openRig, product, runAB } from "./ab.ts";
+import { OWNER_KNOBS, bankedScenes, cardOwnerReasons, diffOf, g0, modelShifts, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
+import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, budgetGate, budgetPausedMs, harnessTag, judgedOnce, openRig, product, runAB } from "./ab.ts";
 import { bake } from "./bake.ts";
 import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, topUp } from "./bank.ts";
+import { readReply } from "./cache.ts";
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
 import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
 import { DRIVE_VIEW, LOOP, NOTIFY, WEEK_CHECK, configId } from "./config.ts";
-import { type ScanResult, compareCase, scan } from "./diffscan.ts";
+import { type ScanResult, compareCase, sameOnTheClock, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
 import { closedPort } from "./gateway.ts";
-import { commitHistory, decisionRow, historyAdd, historyRead, historyRows, openHistory, ownerItem, recordDecision, recordMachine, triedIndex } from "./history.ts";
+import { commitHistory, decisionRow, historyAdd, historyRead, historyRows, openHistory, ownerItem, realLine, recordDecision, recordMachine, triedIndex } from "./history.ts";
 import { type Shot, freezeHuman, pageShot } from "./human.ts";
 import { pairedRatio } from "./latency.ts";
 import { type Machine, type WaveSend, heartbeat, ladder, onAC, refuseFactorySlice, sampleLoad } from "./load.ts";
@@ -52,24 +53,26 @@ import { ready } from "./ready.ts";
 import { appendLine, caseDir, put, putImage, runFile, voidCase } from "./record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "./probe.ts";
 import { remetric } from "./remetric.ts";
+import { applyKnobs, applyTried, cardStates, nearWins, sweepSkip } from "./search.ts";
 import { CASE_USD, type CardState, type Decided, type Facts, type Notice, type State, lock, newState, notices, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { stubPictures } from "./stubs.ts";
 import { type SlotN, type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
-import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Judged, Row, SceneJSON, SendOutcome } from "./types.ts";
+import type { AgentLog, Arm, CaseInfo, DecisionRow, EpochRow, Fork, HypothesisCard, Judged, Ratio, Row, SceneJSON, SendOutcome } from "./types.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
 import * as real from "../real/real.ts";
+import { realBaseline, realShadow } from "../real/shadow.ts";
 
 const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/RUNBOOK.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
-  probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
+  probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway) | bank rerecord --cap n (replies on today's champion)
   aa --shared --cases n                bench freeze                         human freeze
-  real ingest [--raw stamp] | render | triage --cap n | gold --cap n | review [--host ip] [--review-port n] | freeze
+  real ingest [--raw stamp] | render | triage --cap n | gold --cap n | review [--host ip] [--review-port n] | freeze | baseline --cap n
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
-  sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfc|ttd] [--owner-ok] --cap n
+  sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render] [--owner-ok] --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
        [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
@@ -399,10 +402,13 @@ async function aa(n: number): Promise<{ ok: boolean; detail: string }> {
     const run = `aa-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     const { rows } = await runAB(rig, { run, kind: "aa", arms: { A: champ, B: champ }, mode: "replay", share: true, seed: run, cases: ids });
     const same = ids.filter((id) => !compareCase(run, id).affected).length;
-    const ttfc = pairedRatio(rows, "ttfc");
+    // The deciding latencies both within the band (LOOP-V2.md); TTFC is reported.
+    const [ttfd, render, ttfc] = (["ttfd", "render", "ttfc"] as const).map((m) => pairedRatio(rows, m));
     const calls = (await gatewayStatus(gw)).calls as number;
-    const ok = same === n && calls === 0 && !!ttfc && Math.abs(ttfc.est - 1) <= LOOP.nTimingBand;
-    return { ok, detail: `${same} of ${n} cases identical, paired TTFC ×${ttfc?.est.toFixed(3) ?? "?"}, ${calls} calls (${run})` };
+    const flat = (r?: Ratio) => !!r && Math.abs(r.est - 1) <= LOOP.nTimingBand;
+    const ok = same === n && calls === 0 && flat(ttfd) && flat(render);
+    const x = (r?: Ratio) => `×${r?.est.toFixed(3) ?? "?"}`;
+    return { ok, detail: `${same} of ${n} cases identical, paired TTFD ${x(ttfd)}, render ${x(render)} (TTFC ${x(ttfc)}), ${calls} calls (${run})` };
   }), true);
 }
 async function aaCmd() {
@@ -433,11 +439,13 @@ export function recordSmoke(run: string, pass: boolean, started: number, ended =
   const live = smokeCalls(run);
   const rows = readRows(`${run}-ab`).filter((r) => !r.void);
   const p50 = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : undefined);
+  const known = (p?: (number | null)[]) => (p ?? []).filter((v): v is number => v !== null);
   openHistory();
   historyAdd("smoke.jsonl", {
     at: new Date(ended).toISOString(), run, pass, calls: live.length, listUsd: live.reduce((a, l) => a + l.listUsd, 0), minutes: (ended - started) / 60_000, cases: rows.length,
     share: rows.length ? rows.reduce((a, r) => a + (r.s + 1) / 2, 0) / rows.length : undefined,
     ttfcP50: p50(rows.flatMap((r) => r.ttfc.filter((v): v is number => v !== null))), ttdP50: p50(rows.flatMap((r) => r.ttd)),
+    ttfdP50: p50(rows.flatMap((r) => known(r.ttfd))), renderP50: p50(rows.flatMap((r) => known(r.render))),
   });
   commitHistory(`smoke: ${pass ? "ok" : "FAIL"}, ${live.length} calls`);
 }
@@ -548,7 +556,8 @@ function needBank() {
 
 async function bankCmd() {
   if (o.pos[1] === "accept") return say(`bank: accepted although it fails ${acceptBank().join("; ")}`);
-  if (o.pos[1] !== "build") throw new Error("bank build --tuning n --heldout-gate n --heldout-chart n --cap n | bank accept");
+  if (o.pos[1] === "rerecord") return rerecord();
+  if (o.pos[1] !== "build") throw new Error("bank build --tuning n --heldout-gate n --heldout-chart n --cap n | bank rerecord --cap n | bank accept");
   needCap("bank build");
   const sets: BankSet[] = (["tuning", "heldout-gate", "heldout-chart"] as const).map((set) => ({ set, sessions: num(set) ?? 0 })).filter((s) => s.sessions);
   const champ = championArm();
@@ -560,6 +569,36 @@ async function bankCmd() {
     const r = await buildBank(ctx, slots, { bank: "b1", sets });
     say(`bank: ${r.cases.length} cases; ${r.fails.length ? `REFUSED: ${r.fails.join("; ")}` : "every §2.3 gate passes"}`);
     return r.fails.length ? 1 : 0;
+  }));
+}
+
+/**
+ * Every banked case's replies recorded again on today's champion: the diffscan's stand-ins and the timed replays' clocks
+ * are then what the product makes now (illustration lines, say), so a change to that reads as affected, never as no
+ * effect (LOOP-V2.md A6). One live A/A with sharing, each call paid once; a case's old replies.json stays beside the new
+ * one as replies.<run>.json. The frozen bench holds no replies, so its hash doesn't move.
+ */
+async function rerecord() {
+  needCap("bank rerecord");
+  const champ = championArm();
+  const run = `rerecord-${stampNow()}`;
+  const ids = banked(["tuning", "fresh", "heldout-gate", "heldout-chart"]);
+  return withGateway((gw) => withRig(gw, [champ.tree, champ.tree], async (rig) => {
+    const { rows } = await runAB(rig, { run, kind: "ab", arms: { A: champ, B: champ }, mode: "live", share: true, seed: run, cases: ids });
+    let n = 0;
+    for (const r of rows) {
+      const from = join(caseDir(run, r.case), "A", "replies.json");
+      if (r.void || r.lost || !existsSync(from)) continue;
+      // Crash-safe: the old file copied aside, the new one copied beside it, then one rename over it, so the case
+      // always holds a whole replies.json.
+      const to = join(paths().bankCase(r.case), "replies.json"), tmp = `${to}.${run}.tmp`;
+      if (existsSync(to)) copyFileSync(to, join(paths().bankCase(r.case), `replies.${run}.json`));
+      copyFileSync(from, tmp);
+      renameSync(tmp, to);
+      n++;
+    }
+    say(`bank rerecord: ${n} of ${ids.length} cases recorded again on ${champ.sha.slice(0, 12)} (${run}); ${ids.length - n ? "the rest keep their old replies" : "every case"}`);
+    return n === ids.length ? 0 : 1;
   }));
 }
 
@@ -616,7 +655,8 @@ async function realCmd() {
         const t = await real.triageSession(dir, s, run);
         if (t === "kept") return void kept++;
         made++;
-        say(`real triage: ${s.id} (${s.project.name.slice(0, 30)}): ${t.sends.filter((x) => x.landed !== "yes").length} of ${t.sends.length} missed, ${t.sends.filter((x) => x.gold).length} for gold`);
+        // Ids and counts only: a project's name stays under real/ (testers' data never reaches the run log).
+        say(`real triage: ${s.id}: ${t.sends.filter((x) => x.landed !== "yes").length} of ${t.sends.length} missed, ${t.sends.filter((x) => x.gold).length} for gold`);
       } catch (e) {
         failed++;
         say(`real triage: ${s.id} failed: ${msg(e)}`);
@@ -651,8 +691,17 @@ async function realCmd() {
     openHistory();
     const r = real.freezeReal();
     commitHistory(`real freeze: R1 = ${r.cases} cases (${r.tune} tune, ${r.hold} hold), ${r.hash.slice(0, 12)}`);
-    say(`real freeze: R1, ${r.cases} cases (${r.tune} R-tune, ${r.hold} R-hold), ${r.inkWaiting} waiting for synthesized ink, hash ${r.hash.slice(0, 12)}`);
-  } else throw new Error("real ingest | render | triage | gold | review | freeze");
+    say(`real freeze: R1, ${r.cases} cases (${r.tune} R-tune from ${r.people.tune} people, ${r.hold} R-hold from ${r.people.hold}), ${r.merged} repeats merged, ${r.fixed} already fixed (real/fixed.json), ${r.inkWaiting} waiting for synthesized ink, hash ${r.hash.slice(0, 12)}`);
+  } else if (step === "baseline") {
+    // R1 on the champion twice, live and unshared: what it already does right is no case (LOOP-V2.md A5).
+    needCap("real baseline");
+    const champ = championArm();
+    const run = `real-baseline-${stampNow()}`;
+    // The tree listed twice: each arm its own Vite, as every A/A (openRig: one Vite for both puts B behind A).
+    const r = await withGateway((gw) => withRig(gw, [champ.tree, champ.tree], (rig) => realBaseline(rig, { run, arms: { A: champ, B: champ }, seed: run, champion: champ.sha })));
+    const x = (v?: Ratio) => (v ? `×${v.est.toFixed(3)} (${v.lo95.toFixed(3)}–${(v.hi95 ?? v.hi90).toFixed(3)})` : "-");
+    say(`real baseline: ${r.found.length} of ${r.cases} R1 cases the champion already does right (both runs pass every check), ${r.ids.length} listed in all${r.void ? `, ${r.void} void` : ""}; A/A first drawing ${x(r.ttfd)}, render ${x(r.render)} (${run}); the next rte real freeze leaves them out`);
+  } else throw new Error("real ingest | render | triage | gold | review | freeze | baseline");
 }
 
 /** A checkpoint of today's champion (an owner step for `sync`), then the champion-miss digest from its losses. */
@@ -866,14 +915,13 @@ const hasU1 = () => benchCases().some((c) => c.bench === "U1");
 /** Machine suspends the heartbeat saw (V10): a decision in flight through one is void. */
 const suspends: number[] = [];
 
-/** The last checkpoint's debts and cost against the anchor, for the vetoes (§1.4 items 3, 4, 6). */
+/** The last checkpoint's debts, for the vetoes (§1.4 items 3, 4). */
 function loopState(): LoopState {
   const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
-  const u = last?.productUsdPerSend;
-  return { latencyDebt: !!last?.debts.latency.debt, qualityDebt: !!last?.debts.quality.debt, costVsAnchor: u && u.anchor > 0 ? u.champion / u.anchor : 1 };
+  return { latencyDebt: !!last?.debts.latency.debt, qualityDebt: !!last?.debts.quality.debt };
 }
 /** Request hashes this run already paid for: a resumed run gets them from the cache (§6.5's resume cache). */
-const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError).map((c) => c.reqHash);
+const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError && !c.dropped).map((c) => c.reqHash);
 /** A decision's live $ so far, the candidate arm's product calls left out: what the candidate itself costs is the cost veto's (usdRatio), never a harness overrun. */
 const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" && l.arm !== "B" ? l.listUsd : 0), 0);
 
@@ -893,7 +941,9 @@ async function forkedRows(run: string, ids: string[], judge: Judge, o: { seed: s
 /** Each case slot's pages of both arms and the driver's context, for live fork sends in a decision run. */
 async function forkCtx(rig: Rig, arms: Arms, run: string): Promise<{ ctx: DriveCtx; slots: Pages[] }> {
   const slots = await Promise.all(Array.from({ length: rig.slots }, async (_, k): Promise<Pages> => ({ A: (await rig.tab(k, "A", arms.A.tree)).page, B: (await rig.tab(k, "B", arms.B.tree)).page })));
-  return { slots, ctx: { run, arms: { A: { sha: arms.A.sha, tuningId: await tuningIdOf(slots[0].A) }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag() } };
+  // Every send waits out the budget's pause first (LOOP-V2.md A4): a top-up session or a continuation is paying work too.
+  const hook = async () => void (await budgetGate(rig.gateway, run));
+  return { slots, ctx: { run, arms: { A: { sha: arms.A.sha, tuningId: await tuningIdOf(slots[0].A) }, B: { sha: arms.B.sha, tuningId: "", tuning: arms.B.tuning } }, harnessTag: harnessTag(), hook } };
 }
 
 /** G4 (class D): the driver continues on B's result; each send is forked, judged and made a row (a veto only). */
@@ -937,12 +987,15 @@ async function toppedUp(run: string, banked: string[], judge: Judge, cls: Row["c
   return { sends: ids.length, rows: readRows(run).filter((r) => own.has(r.case)) };
 }
 
-/** What a decision teaches the next analyst: its candidate-loss digest and one failure-analyst call on its losses. */
-async function lessons(run: string, rows: Row[]) {
+/**
+ * What a decision teaches the next analyst: its candidate-loss digest and one failure-analyst call on its losses, unless
+ * the budget is paused (the digest alone then).
+ */
+async function lessons(gw: string, run: string, rows: Row[]) {
   if (!existsSync(runFile(run, "rows.jsonl"))) return;
   writeLossDigest(run);
-  const lost = rows.filter((r) => !r.void && r.s < 0).slice(0, 12);
-  if (lost.length) put(runFile(run, "failures.json"), await agents.failureAnalyst(failureDigest(lost.map((r) => ({ case: r.case, run }))), run).catch(() => []));
+  const lost = rows.filter((r) => !r.void && !r.lost && r.s < 0).slice(0, 12);
+  if (lost.length && ((await gatewayStatus(gw)) as { pace: { ok: boolean } }).pace.ok) put(runFile(run, "failures.json"), await agents.failureAnalyst(failureDigest(lost.map((r) => ({ case: r.case, run }))), run).catch(() => []));
 }
 
 /** One card through G0 → G1 → G2 (→ G3, G4) → vetoes; a keep fast-forwards loop/champion. Recorded either way. */
@@ -952,7 +1005,7 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
   const run = (stage: string) => `${st.stamp}-${id}-${stage}`;
   const base = championSha();
   const cand = c.cand!;
-  const t0 = Date.now();
+  const t0 = Date.now(), paused0 = budgetPausedMs();
   const affected = { tuning: 0, of: 0, topUp: 0 };
   const record = (d: Decision, at: string, result: Omit<ABResult, "invariants"> = { rows: [] }, owner: string[] = []) => {
     const row = decisionRow({ id, epoch: st.epoch, card: c.card, candSha: cand, baseSha: base, run: at, judgeId: judgeId("fidelity", lastServed(), variants().fidelity), result: { ...result, decision: d }, affected });
@@ -964,7 +1017,8 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
   };
   // The card is done in state.json at once: a stop before lessons() and the rig's close would otherwise re-decide a keep
   // on resume as "no change was made" (its candidate is the champion by then).
-  const settle = (d: Decided): Decided => {
+  const settle = (decided: Decided): Decided => {
+    const d = c.sweep ? { ...decided, sweep: c.sweep.of } : decided;
     if (!st.cards.includes(c)) return d; // rte decide: no epoch's card
     Object.assign(c, { status: "done", verdict: d.verdict });
     st.recent = [...st.recent, d].slice(-50);
@@ -980,7 +1034,8 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
   };
   // More than 2× its class's $ per measured case (the candidate's calls aside), or past 30 min of measuring at 8 slots: harness suspect (§6.7).
   const overBy = (cls: Decision["class"], measured: number, slots: number) => {
-    const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0) / 60_000;
+    // Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
+    const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0 - (budgetPausedMs() - paused0)) / 60_000;
     return overrun(cls, usd, measured, minutes, slots) ? `overran: $${usd.toFixed(2)} (the candidate's calls aside) for ${measured} measured cases in ${minutes.toFixed(0)} min (class ${cls}: $${CASE_USD[cls]} a case)` : undefined;
   };
 
@@ -994,9 +1049,16 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     if (err instanceof LockfileDiffers) return gate("owner", [err.message]);
     throw err;
   }
-  const g = g0({ diff: diffOf(p.repo, base, cand), tree, ownerOk: c.card.ownerOk });
+  const diff = diffOf(p.repo, base, cand);
+  const g = g0({ diff, tree, ownerOk: c.card.ownerOk });
+  // Model switches by what the change does to tuning.ts, whatever kind of card made it (a combo or a code card too);
+  // what the arms called says the rest (modelShifts, at the keep).
+  const models = [...new Set([...diff.matchAll(/^\+.*\b(?:K|B)\("([\w.]+?(?:[mM]odel|\.engine))",/gm)].map((m) => m[1]))];
   if (g.waived) say(`${id}: the owner waived ${g.waived.length} owner finding${g.waived.length > 1 ? "s" : ""}: ${g.waived.join("; ").slice(0, 300)}`);
   if (g.verdict !== "pass") return gate(g.verdict === "owner" ? "owner" : "revert", g.reasons);
+  // An owner's knob moved by any card (a code card or a combo too, not only a knob card).
+  const ownerKnobs = OWNER_KNOBS.filter((k) => new RegExp(`^\\+.*\\b(?:K|B)\\("${k.replace(/\./g, "\\.")}",`, "m").test(diff));
+  if (ownerKnobs.length) return gate("owner", [`an owner's knob: ${ownerKnobs.join(", ")}`]);
 
   // A knob card is one tree with two tunings (§7.2).
   const champ: ArmSpec = { sha: base, tree: treeOf(base) };
@@ -1026,13 +1088,25 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
       const sets = new Map(sc.cases.map((x) => [x.case, x.set]));
       const rows = readRows(at).filter((r) => sets.get(r.case) !== "heldout-gate").map((r) => ({ ...r, class: sc.class, affected: sc.class === "S" }));
       result = { rows, decision: decide({ tuning: rows, exhausted: true }, c.card, loopState()), invariants: [] };
+      // G3 for a schedule change (LOOP-V2.md D2): the H-gate cases replayed too, at 0 calls, and they can only veto.
+      if (result.decision!.pending?.includes("heldout")) {
+        const gate = sc.cases.filter((x) => x.set === "heldout-gate").map((x) => x.case).slice(0, LOOP.heldoutMax);
+        const h = await runAB(rig, { run: `${at}-heldout`, kind: "scan", mode: "replay", arms, share: true, seed: `${at} heldout`, cases: gate, cls: "S", classify: () => ({ affected: true, class: "S" }) });
+        const heldout = h.rows.map((r) => ({ ...r, class: sc.class, affected: true }));
+        result = { rows, heldout, decision: decide({ tuning: rows, heldout, exhausted: true }, c.card, loopState()), invariants: h.invariants };
+        // A schedule change draws the same on the held-out cases too, or it isn't one (diffscan.ts sameOnTheClock).
+        if (result.decision!.verdict === "keep" && !sameOnTheClock(`${at}-heldout`, h.rows))
+          result.decision = { ...result.decision!, verdict: "revert", vetoes: [...result.decision!.vetoes, "held-out: a schedule change drew differently on the recorded clock: only the judged path keeps that"] };
+      }
       put(runFile(at, "verdict.json"), result.decision!);
     } else {
       // G2 (+ G3, G4): only the affected cases, live (R: on the banked replies), identical calls shared and cached.
       at = run("ab");
       const judge = fakes.judge?.(at, c.card) ?? judging(at, { seed: at, craft: c.card.goal === "craft" ? "all" : "sampled" });
       result = await runAB(rig, {
-        run: at, kind: "ab", arms, mode: sc.class === "R" ? "scan" : "live", share: true, cached: [...sc.cached, ...paid(at)], seed: at, card: c.card, judge, cases: tuning,
+        // R runs on the banked replies at 0 calls, on their recorded clock: instant replies would hide a change that
+        // makes the first drawing wait (the owner's latency).
+        run: at, kind: "ab", arms, mode: sc.class === "R" ? "scan" : "live", ...(sc.class === "R" ? { timed: true } : {}), share: true, cached: [...sc.cached, ...paid(at)], seed: at, card: c.card, judge, cases: tuning,
         cls: sc.class,
       }, {
         card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined,
@@ -1049,14 +1123,26 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     // rerunning it would pay G2 again on the harness it suspects, and hide it from the night's overrun count.
     if (d.verdict === "void" && !attempt && !v9 && !result.overrun) {
       record(d, at, result);
-      st.recent.push({ id, verdict: "void", component: c.card.component, at: new Date().toISOString() });
+      st.recent.push({ id, verdict: "void", component: c.card.component, at: new Date().toISOString(), ...(c.sweep ? { sweep: c.sweep.of } : {}) });
       return "rerun" as const;
     }
     if (d.verdict === "void") owner.push(`void: ${d.reasons.join("; ")}`);
     if (d.ownerList) owner.push(`too rare to measure: ${result.rows.filter((r) => !r.void).length} affected cases`);
     if (d.verdict === "owner") owner.push(...d.vetoes);
     if (d.verdict === "keep") {
-      const hold = [...cardOwnerReasons(c.card, { u1: hasU1() }), ...(c.card.goal === "craft" && !variants().craftCalibrated ? ["a craft keep before craft calibration passed"] : [])];
+      // What each arm called, every live run of this decision: a switch written any way shows (LOOP-V2.md C3). Only a knob
+      // card on picture.model alone runs the champion's code, so only there are its role labels trusted, to leave its
+      // picture calls out.
+      const pictureKnob = c.card.kind === "knob" && models.join() === "picture.model";
+      // A replay meters no tokens: it gets what was recorded, so a champion call served from the bank isn't read as gone.
+      const recorded = (l: MeterCall) => (l.mode === "replay" ? { ...l, outTokens: Number(readReply(p, l.reqHash, l.run, false)?.stats.outTokens ?? 0) } : l);
+      const shifts = modelShifts(readMeter(p.calls).filter((l): l is MeterCall => !("agent" in l) && l.run.startsWith(`${st.stamp}-${id}-`) && product(l) && !(pictureKnob && l.role === "picture")).map(recorded));
+      const hold = [...new Set([
+        ...cardOwnerReasons(c.card, { u1: hasU1() }),
+        ...(c.card.goal === "craft" && !variants().craftCalibrated ? ["a craft keep before craft calibration passed"] : []),
+        ...(models.includes("picture.model") && !variants().illustrationsCalibrated ? ["a picture model switch before the judge is calibrated on illustrations"] : []),
+        ...(models.some((m) => m !== "picture.model") || shifts.length ? [`model switch: needs calibration evidence${shifts.length ? ` (${shifts.join("; ")})` : ""}`] : []),
+      ])];
       if (hold.length) (d = { ...d, verdict: "owner", vetoes: [...d.vetoes, ...hold] }), owner.push(...hold);
     }
     // The whole path's measuring against its class budget per case (§6.7): void, harness suspect.
@@ -1065,9 +1151,17 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     // the decision past them, so the timed replay's live calls (a champion whose prompts the bank doesn't hold) don't overrun it.
     const over = result.overrun ?? (d.verdict === "void" || d.class === "N" ? undefined : overBy(d.class, measured, rig.slots));
     if (over && !result.overrun) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
+    // Testers' real sends beside a keep (LOOP-V2.md A5): reported, never deciding, so a failure here never loses the keep.
+    // After the budget check and under a run name outside the decision's ($ and minutes are R1's own, not the class's).
+    if (d.verdict === "keep" && !fakes.judge && !((await gatewayStatus(gw)) as { pace: { ok: boolean } }).pace.ok) say(`${id}: R1 skipped: the budget is paused or stopped`);
+    else if (d.verdict === "keep" && !fakes.judge) {
+      const r1 = `real-r1-${st.stamp}-${id}`;
+      const shadow = await realShadow(rig, { run: r1, arms, seed: r1, judge: judging(r1, { seed: r1, craft: "none" }) }).catch((err) => (say(`${id}: R1 failed: ${err instanceof Error ? err.message : String(err)}`), undefined));
+      if (shadow) (d = { ...d, real: shadow }), say(`${id}: ${realLine(shadow)}`);
+    }
     record(d, at, { ...result, decision: d }, owner);
     const done = settle({ id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: !!over, v9 });
-    await lessons(at, result.rows);
+    await lessons(gw, at, result.rows);
     return done;
   });
   return decided === "rerun" ? decideCard(gw, st, c, "r") : decided;
@@ -1076,22 +1170,20 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
 // ---- Building cards: knob cards by script, code cards by engineers
 
 /** A knob card's commit: the defaults in tuning.ts set to the card's values, within each knob's range. */
-function applyKnobs(wt: string, knobs: Record<string, number>) {
-  const file = join(wt, "src/core/tuning.ts");
-  let src = readFileSync(file, "utf8");
-  for (const [key, v] of Object.entries(knobs)) {
-    const k = key.replace(/\./g, "\\.");
-    const lit = new RegExp(`(\\b(K|B)\\("${k}",\\s*)(-?[\\d.]+)(,\\s*(-?[\\d.]+),\\s*(-?[\\d.]+))?`).exec(src);
-    const role = /^(\w+)\.prompt$/.exec(key)?.[1];
-    const variant = role && new RegExp(`\\{ \\.\\.\\.P\\("${role}"\\), value: [\\d.]+ \\}|\\bP\\("${role}"\\)`).exec(src);
-    if (lit) {
-      const [min, max] = lit[2] === "B" ? [0, 1] : [Number(lit[5]), Number(lit[6])];
-      if (!(v >= min && v <= max)) throw new Error(`knob ${key} = ${v} is outside its range ${min}–${max}`);
-      src = src.replace(lit[0], `${lit[1]}${v}${lit[4] ?? ""}`);
-    } else if (variant) src = src.replace(variant[0], `{ ...P("${role}"), value: ${v} }`);
-    else throw new Error(`no knob ${key} with a literal default in src/core/tuning.ts`);
+/**
+ * A token for an engineer session once a slot is under the five-hour pause (LOOP.fiveHourPauseAt): builds run beside
+ * the decisions, so a pause waits here for the reset instead of dropping the card. Undefined when the budget stops the loop.
+ */
+async function freeSlot(gw: string): Promise<Token | undefined> {
+  for (;;) {
+    const s = (await gatewayStatus(gw)) as { pace: Facts["pace"] };
+    if (s.pace.stop) return undefined;
+    try {
+      return await agents.slotToken(tokens(), gw);
+    } catch {
+      await sleep(Math.max(60_000, (s.pace.pauseUntil ?? 0) - Date.now()));
+    }
   }
-  writeFileSync(file, src);
 }
 
 /** Builds a card on its branch (cand/e<E>-h<n>, off the champion): a commit, or the champion itself when nothing changed. */
@@ -1101,7 +1193,13 @@ async function build(gw: string, st: State, c: CardState) {
     if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
     if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
       if (c.card.kind === "knob") applyKnobs(wt, c.card.knobs ?? {});
-      else await engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token: await agents.slotToken(tokens(), gw), mockApi: await agentMock() });
+      else if (c.card.kind === "combo") applyTried(wt, c.card.combines ?? [], paths().history, join(paths().home, "tmp"));
+      else {
+        const token = await freeSlot(gw);
+        // The budget stopped the loop: the card stays to build when it resumes.
+        if (!token) return void say(`${c.id}: not built now: the budget stopped the loop`);
+        await engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token, mockApi: await agentMock() });
+      }
       if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     }
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
@@ -1213,6 +1311,8 @@ type SlotStatus = { slot: SlotN; fiveHour?: number; sevenDay?: number; sevenDayA
 
 async function facts(gw: string, st: State, error?: string): Promise<Facts> {
   const s = (await gatewayStatus(gw)) as { pace: Facts["pace"]; slots: SlotStatus[]; cap?: number; capReached: boolean };
+  // A night is 24 h: the night cap's pause ends with it, and the count starts again.
+  if (Date.now() - Date.parse(st.nightStart) >= DAY) (st.nightStart = new Date().toISOString()), saveState(st);
   const W = s.slots.reduce((a, x) => a + x.windowUsd, 0) / s.slots.length;
   const nightStart = Date.parse(st.nightStart);
   const lines = readMeter(paths().calls);
@@ -1277,9 +1377,9 @@ async function halt(gw: string, st: State, error?: string): Promise<boolean> {
   }
 }
 
-/** ≤ 3 cards: queued seed cards first, else digests → analyst → critic (§8.2). */
+/** ≤ LOOP.search.cards cards: queued seed cards first, else digests → analyst → critic (§8.2). */
 async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
-  if (st.queue.length) return st.queue.splice(0, 3);
+  if (st.queue.length) return st.queue.splice(0, LOOP.search.cards);
   const sha = championSha();
   const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
   const ck = last && { run: last.run, champion: "B" as Arm };
@@ -1290,11 +1390,12 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
     ...(st.paused.length ? [`paused until the next checkpoint (dry well): cards on ${st.paused.join(", ")}`] : []),
     ...(o.f["quality-only"] ? ["latency-goal cards: this run is --quality-only (they wait for the PGX)"] : []),
     ...(!hasU1() ? ["cards on the ink readers (marks, arrow, hit, link): no U1 set to check them on, they go to the owner"] : []),
-    "patch knobs, cost-raising changes, frozen areas and model switches: they go to the owner unmeasured",
+    "patch knobs, frozen areas and model switches other than picture.model: they go to the owner unmeasured",
+    ...(!variants().illustrationsCalibrated ? ["a picture.model keep: held for the owner until the judge is calibrated on illustrations"] : []),
   ];
   const digest = analystDigest({
     championSha: sha, checkpoint: ck, runs: st.lastRuns, wont, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
-    ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(),
+    ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(), nearWins: nearWins(historyRows("decisions.jsonl") as DecisionRow[]), debt: debtLines(),
   });
   const analysis = await engine().analyst(digest, run);
   const criticRun = `${st.stamp}-e${st.epoch}-critic`;
@@ -1302,12 +1403,31 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
   // Its answer as written, so a dropped or empty epoch can be read back.
   put(runFile(criticRun, "critic.json"), { text: r.result?.text ?? "", cards: r.cards.map((c) => c.id), dropped: r.dropped });
   if (r.dropped.length) say(`critic: dropped ${r.dropped.join("; ")}`);
-  return r.cards.slice(0, 3);
+  return r.cards.slice(0, LOOP.search.cards);
+}
+
+/**
+ * In latency debt (confirmed by a same-run check, checkpoint.ts): how much slower than at L, and the keeps since L with
+ * their own latency, so the analyst can repay it: a faster change, or a card that reverts a keep that cost time
+ * (LOOP-V2.md D2). Every keep in debt must be faster anyway (verdict.ts).
+ */
+function debtLines(): string[] {
+  const cks = historyRows("checkpoints.jsonl") as StoredCheckpoint[], last = cks.at(-1);
+  if (!last?.debts.latency.debt) return [];
+  const L = cks.find((c) => c.id === last.debts.latency.L);
+  const vs = last.latency.vsLatencyCheckpoint;
+  const x = (r?: Ratio) => (r ? `×${r.est.toFixed(3)}` : "-");
+  const keeps = (historyRows("decisions.jsonl") as DecisionRow[]).filter((d) => d.kind === "card" && d.verdict === "keep" && d.epoch >= (L?.epoch ?? 0));
+  return [
+    `The champion is surely slower than at ${last.debts.latency.L} (first drawing ${x(vs.ttfd)}, render ${x(vs.render)}; checked in ${last.debtCheck?.run ?? "the chain"}). Only a faster change is kept until it clears.`,
+    `Keeps since then (a code card reverting one, git revert of its commit, is a latency card like any other):`,
+    ...keeps.map((d) => `- ${d.id} ${d.candSha.slice(0, 12)} (${d.card?.component}) ${d.card?.change}: first drawing ${x(d.latency.ttfd)}, render ${x(d.latency.render)}`),
+  ];
 }
 
 async function loopCheckpoint(gw: string, st: State): Promise<string> {
   const ck = await runCheckpoint(gw, st.epoch);
-  Object.assign(st, { keepsSinceCheckpoint: 0, paused: [] });
+  Object.assign(st, { keepsSinceCheckpoint: 0, epochsSinceCheckpoint: 0, paused: [] });
   saveState(st);
   return ck.id;
 }
@@ -1351,14 +1471,15 @@ async function between(gw: string, st: State) {
 async function epoch(gw: string, st: State): Promise<boolean> {
   const started = Date.now();
   if (!st.cards.length) {
-    const cards = await propose(gw, st);
-    st.cards = cards.map((card, i) => ({ id: `e${st.epoch}-h${i + 1}`, card, branch: `cand/e${st.epoch}-h${i + 1}`, status: "todo" }));
+    const proposed = cardStates(st.epoch, await propose(gw, st), readFileSync(join(treeOf(championSha()), "src/core/tuning.ts"), "utf8"));
+    for (const why of proposed.dropped) say(`not run: ${why}`);
+    st.cards = proposed.cards;
     saveState(st);
     say(`epoch ${st.epoch}: ${st.cards.map((c) => `${c.id} ${c.card.kind} ${c.card.component}: ${c.card.change}`).join(" | ") || "no cards"}`);
   }
   // Card rules that need no evidence (§8.4) send a card to the owner before anything is built.
   for (const c of st.cards.filter((x) => x.status === "todo")) {
-    const why = cardOwnerReasons(c.card, { u1: hasU1() }).filter((w) => !/patch|cost/.test(w));
+    const why = cardOwnerReasons(c.card, { u1: hasU1() }).filter((w) => !/patch/.test(w));
     const skip = st.paused.includes(c.card.component) ? `${c.card.component} is paused (dry well)` : o.f["quality-only"] && c.card.goal === "latency" ? "a latency-goal card waits for the PGX (--quality-only)" : undefined;
     if (why.length) ownerItem(`${c.id}: ${c.card.change}: ${why.join("; ")}`), commitHistory(`owner list: ${c.id}`);
     if (why.length || skip) (c.status = "dropped"), say(`${c.id}: not run: ${[...why, skip].filter(Boolean).join("; ")}`);
@@ -1369,6 +1490,12 @@ async function epoch(gw: string, st: State): Promise<boolean> {
   let stopped = false;
   for (const [i, c] of st.cards.entries()) {
     await built[i];
+    const skip = c.status === "built" ? sweepSkip(st.cards, c, historyRows("decisions.jsonl") as DecisionRow[]) : undefined;
+    if (skip) {
+      c.status = "dropped";
+      saveState(st);
+      say(`${c.id}: not run: ${skip}`);
+    }
     // decideCard marks the card done in state.json itself, right as it is recorded.
     if (c.status === "built" && !stopped && !(stopped = await halt(gw, st)) && (await rebased(gw, st, c))) {
       try {
@@ -1384,6 +1511,10 @@ async function epoch(gw: string, st: State): Promise<boolean> {
     if (!stopped && st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps && !(stopped = await halt(gw, st))) ck = await loopCheckpoint(gw, st);
   }
   await Promise.allSettled(built);
+  // In latency debt every keep that isn't faster reverts, so keeps (and the checkpoints they bring) may not come: after
+  // LOOP.debtCheckpointEpochs epochs with none, a checkpoint runs anyway, and a false alarm can clear.
+  st.epochsSinceCheckpoint = ck ? 0 : (st.epochsSinceCheckpoint ?? 0) + 1;
+  if (!stopped && !ck && loopState().latencyDebt && st.keepsSinceCheckpoint === 0 && st.epochsSinceCheckpoint >= LOOP.debtCheckpointEpochs && !(stopped = await halt(gw, st))) ck = await loopCheckpoint(gw, st);
   if (stopped) return false;
   // An epoch that decided nothing (no well-formed card, or every one dropped) pays the analyst and critic again for the
   // same digest: §6.7's rules stop the loop after RULES.emptyEpochs of them in a row.
@@ -1397,7 +1528,8 @@ async function epoch(gw: string, st: State): Promise<boolean> {
 
 /** epochs.jsonl and budget.jsonl (§5.3) from the meter, one commit. */
 async function epochRecord(gw: string, st: State, started: number, ck?: string): Promise<EpochRow> {
-  const lines = readMeter(paths().calls).filter((l) => l.run.startsWith(`${st.stamp}-e${st.epoch}-`) || (ck !== undefined && l.run.startsWith(ck)));
+  // The epoch's own runs, R1 beside its keeps, and its checkpoint's.
+  const lines = readMeter(paths().calls).filter((l) => l.run.startsWith(`${st.stamp}-e${st.epoch}-`) || l.run.startsWith(`real-r1-${st.stamp}-e${st.epoch}-`) || (ck !== undefined && (l.run.startsWith(ck) || l.run.startsWith(`real-r1-${ck}`))));
   const zero = { calls: 0, usd: 0, agentUsd: 0, in: 0, cacheRead: 0, write5m: 0, write1h: 0, out: 0, thinking: 0 };
   const all = rollup(lines, () => "all").all ?? zero;
   const slots = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots;
@@ -1528,17 +1660,17 @@ async function stopAfterCmd() {
 
 async function decideCmd() {
   const branch = o.pos[1];
-  if (!branch) throw new Error("decide <branch> [--goal latency --metric ttfc|ttd] [--owner-ok] --cap n");
+  if (!branch) throw new Error("decide <branch> [--goal latency --metric ttfd|render] [--owner-ok] --cap n");
   // The owner's own change, judged on what it's for: fidelity by default, or a speed change (one the loop's gates sent
   // to the owner and the owner wants measured) on its metric.
   const goal = str("goal") ?? "fidelity", metric = str("metric");
   if (!["fidelity", "latency"].includes(goal)) throw new Error("decide --goal takes fidelity or latency");
-  if (goal === "latency" && !["ttfc", "ttd"].includes(metric ?? "")) throw new Error("decide --goal latency needs --metric ttfc or ttd");
+  if (goal === "latency" && !["ttfd", "render"].includes(metric ?? "")) throw new Error("decide --goal latency needs --metric ttfd or render");
   needCap("decide");
   needBank();
   openHistory();
   const st = readState() ?? newState(nextEpoch());
-  const card: HypothesisCard = { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: goal as HypothesisCard["goal"], ...(goal === "latency" ? { metric: metric as "ttfc" | "ttd" } : {}), ...(o.f["owner-ok"] ? { ownerOk: true } : {}), classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
+  const card: HypothesisCard = { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: goal as HypothesisCard["goal"], ...(goal === "latency" ? { metric: metric as "ttfd" | "render" } : {}), ...(o.f["owner-ok"] ? { ownerOk: true } : {}), classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
   const c: CardState = { id: `d-${branch.replace(/[^\w-]+/g, "-")}`, card, branch, status: "built", cand: git(paths().repo, "rev-parse", branch) };
   const d = await withGateway(async (gw) => ((await rebased(gw, st, c)) ? decideCard(gw, st, c) : undefined));
   return d?.verdict === "keep" ? 0 : 1;

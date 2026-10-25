@@ -152,7 +152,7 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
           camera: d?.p.camera, marks: d?.p.marks ?? [], refs: d?.p.refs, before: i ? versions[i - 1].n : 0, after: v.n, reply: d?.c.reply,
           pictures: pics.map(({ c }) => {
             const box = /The box is (\d+) wide and (\d+) tall/.exec(c.user!);
-            return { subject: /Doodle: (.*)/.exec(c.user!)?.[1] ?? "", w: box ? +box[1] : 0, h: box ? +box[2] : 0, elements: elements(c.reply ?? "") };
+            return { subject: /(?:Doodle|Picture): (.*)/.exec(c.user!)?.[1] ?? "", w: box ? +box[1] : 0, h: box ? +box[2] : 0, elements: elements(c.reply ?? "") };
           }),
         });
       }
