@@ -9,7 +9,7 @@ import type { RealSend, Session } from "./sessions.ts";
 
 /** Failure kinds seen so far; triage may add one, in a few words, as other:<words>. */
 export const CATEGORIES: Record<string, string> = {
-  "boxy-subject": "a creature, person, plant, object or scene built from boxes, circles and lines instead of one picture",
+  "boxy-subject": "a creature, person, plant, object or scene built from boxes, circles and lines that doesn't read as what they asked for: parts floating apart, a plain box standing in for a body",
   "low-detail": "they asked for more detail or high fidelity and got a simple doodle, or no visible change",
   "split-subject": "one subject drawn as several separate pictures (head, body, legs...) that don't line up",
   "shape-shows-through": "the shape a picture sits on shows behind or around it: a white box, a colored disc, an outline, an old shape",
@@ -34,7 +34,7 @@ ${Object.entries(CATEGORIES).map(([k, v]) => `  ${k}: ${v}`).join("\n")}
 - evidence: what shows it, quoting their words or describing what's on the board.
 - gold: true when the send is a clear failure with a clear intent, so a good result could be drawn for it; false when what they meant is unclear, or the failure is outside drawing (a stop, a network error).
 
-Judge the result as the person would: a cat drawn from circles and rectangles is a miss when they asked for a drawing of a cat, even if every part is there.
+Judge the result as the person would. How a subject is built doesn't matter; whether it reads as what they asked for does. Shapes that come apart, a plain box where a body should be, or a stand-in nobody would recognize is a miss. A simple drawing that looks complete on its own is good enough when they asked for a sketch or a doodle: more detail is only wanted when they ask for it (detailed, realistic, high fidelity).
 
 Reply with JSON only: {"sends": [{"n": 1, "meant": "...", "landed": "yes|partly|no", "categories": [], "evidence": "...", "gold": false}, ...]}`;
 
@@ -75,8 +75,9 @@ Rules for the result:
 - To redo or improve a subject, remove() every shape it was made of and make one new drawing() covering them.
 - The red ink is the person's pen, never a color for the drawing; take colors from the board and the subject.
 - Keep everything they didn't ask to change exactly as it is.
+- Match the detail to what they asked for, never more. "A sketch" or "a drawing" stays simple and clean, about 10 to 25 elements: it only has to read clearly as the subject. Real detail (texture, shading, many parts) only when they ask for it: detailed, realistic, high fidelity. Over-drawing is a fault: it isn't what they asked for, and a bigger picture takes longer to draw.
 
-Pictures: after the ops, give each drawing() its picture as SVG elements in the shape's own box (0 0 at its top-left, x right, y down, the shape's w × h), one element per line, self-closing, from <path/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>, with fill, stroke and stroke-width, absolute coordinates, no transforms or groups. Draw it the way a skilled illustrator sketches in marker: outlined in near-black, clear silhouette, as much detail as they asked for (high fidelity means real detail: fur, stripes, folds, shading in a second tone), up to 60 elements and 8 colors.
+Pictures: after the ops, give each drawing() its picture as SVG elements in the shape's own box (0 0 at its top-left, x right, y down, the shape's w × h), one element per line, self-closing, from <path/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>, with fill, stroke and stroke-width, absolute coordinates, no transforms or groups. Draw it the way a skilled illustrator sketches in marker: outlined in near-black, clear silhouette, exactly as much detail as they asked for (high fidelity means real detail: fur, stripes, folds, shading in a second tone), never more than 60 elements and 8 colors.
 
 Then the rubric: what any good result for this send should and must not do, as a judge would check it against a result that is not yours (other good results exist), 2 to 5 of each, concrete and visible.
 

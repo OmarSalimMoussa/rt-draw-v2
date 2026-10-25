@@ -39,6 +39,8 @@ export type GoldCase = {
   appChecks: { check: Check; pass: boolean; why: string }[]; goldChecks: { check: Check; pass: boolean; why: string }[];
 };
 export type Verdict = { key: string; verdict: "approve" | "reject"; note?: string; at: string };
+/** review/verdicts.jsonl: a verdict (with the note as it was), or a note saved on its own as it's typed. */
+type ReviewRow = { key: string; verdict?: Verdict["verdict"]; note?: string; at: string };
 
 const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
 /** An image file as the gateway takes it. */
@@ -217,12 +219,13 @@ export const nextBatch = () => {
 /** Every triaged send that wants gold and has none current (same prompt). */
 export function wantGold(since: string, only?: string): { dir: string; s: Session; x: RealSend; n: number; t: TriageRow }[] {
   const prompt = sha(GOLD_SYSTEM());
+  const seen = reviewed();
   return chosen(since, only).flatMap(({ dir, s }) => {
     const tr = triageOf(dir);
     if (!tr || tr.keys !== keysOf(s)) return [];
     return tr.sends.filter((t) => t.gold).flatMap((t) => {
       const x = s.sends[t.n - 1];
-      return goldOf(x.key)?.prompt === prompt ? [] : [{ dir, s, x, n: t.n, t }];
+      return seen.has(x.key) || goldOf(x.key)?.prompt === prompt ? [] : [{ dir, s, x, n: t.n, t }];
     });
   });
 }
@@ -309,18 +312,23 @@ export async function shootGold(shot: Shot): Promise<number> {
 // ---- review
 
 /** Every gold case with its latest verdict. */
-export function goldCases(): (GoldCase & { verdict?: Verdict })[] {
+export function goldCases(): (GoldCase & { verdict?: Verdict; note?: string })[] {
   const dir = goldDir();
   const verdicts = new Map<string, Verdict>();
+  const notes = new Map<string, string>();
   if (existsSync(verdictsFile())) for (const l of readFileSync(verdictsFile(), "utf8").split("\n").filter(Boolean)) {
-    const v = JSON.parse(l) as Verdict;
-    verdicts.set(v.key, v);
+    const r = JSON.parse(l) as ReviewRow;
+    if (r.verdict) verdicts.set(r.key, { key: r.key, verdict: r.verdict, at: r.at, ...(r.note !== undefined ? { note: r.note } : {}) });
+    // The latest note wins, sent with a verdict or on its own; a verdict sent without one leaves it.
+    if (r.note !== undefined) notes.set(r.key, r.note);
   }
   return (existsSync(dir) ? readdirSync(dir) : []).sort().flatMap((k) => {
     const g = maybe<GoldCase>(join(dir, k, "gold.json"));
-    return g ? [{ ...g, verdict: verdicts.get(g.key) }] : [];
+    return g ? [{ ...g, verdict: verdicts.get(g.key), note: notes.get(g.key) }] : [];
   });
 }
+/** Keys the owner has looked at: gold for them is never drawn again, whatever the prompt became. */
+const reviewed = () => new Set(goldCases().filter((g) => g.verdict).map((g) => g.key));
 
 /** Whether a gold case goes into R1: the first batch only on the owner's approval, later ones unless rejected. */
 export const accepted = (g: GoldCase & { verdict?: Verdict }) => !!g.gold && !g.error && (g.verdict ? g.verdict.verdict === "approve" : g.batch > 1);
@@ -342,12 +350,22 @@ export function serveReview(host: string, port: number): Promise<string> {
         for await (const chunk of req) body += chunk;
         const v = JSON.parse(body) as Partial<Verdict>;
         if (typeof v.key !== "string" || !goldOf(v.key) || (v.verdict !== "approve" && v.verdict !== "reject")) return send(400, TYPES[".json"], js({ error: "a verdict needs a gold key and approve or reject" }));
-        const row: Verdict = { key: v.key, verdict: v.verdict, ...(v.note ? { note: String(v.note).slice(0, 2000) } : {}), at: new Date().toISOString() };
+        const row: ReviewRow = { key: v.key, verdict: v.verdict, ...(v.note ? { note: String(v.note).slice(0, 2000) } : {}), at: new Date().toISOString() };
         mkdirSync(join(root, "review"), { recursive: true });
         appendFileSync(verdictsFile(), `${js(row)}\n`);
         return send(200, TYPES[".json"], js(row));
       }
-      if (req.method !== "GET") return send(405, "text/plain", "GET or POST /api/verdict");
+      if (req.method === "POST" && url.pathname === "/api/note") {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        const v = JSON.parse(body) as Partial<ReviewRow>;
+        if (typeof v.key !== "string" || !goldOf(v.key) || typeof v.note !== "string") return send(400, TYPES[".json"], js({ error: "a note needs a gold key and its text" }));
+        const row: ReviewRow = { key: v.key, note: v.note.slice(0, 2000), at: new Date().toISOString() };
+        mkdirSync(join(root, "review"), { recursive: true });
+        appendFileSync(verdictsFile(), `${js(row)}\n`);
+        return send(200, TYPES[".json"], js(row));
+      }
+      if (req.method !== "GET") return send(405, "text/plain", "GET, or POST /api/verdict or /api/note");
       if (url.pathname === "/") return send(200, TYPES[".html"], reviewPage(goldCases(), (key) => readSessions().find(({ s }) => s.sends.some((x) => x.key === key))));
       // Images only, from sessions/<id>/img/ and gold/<key>/.
       const rel = normalize(decodeURIComponent(url.pathname.slice(1)));

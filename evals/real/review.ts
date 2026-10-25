@@ -16,7 +16,7 @@ const said = (s: Session, n: number) => {
 const beforeCaption = (x: Session["sends"][number]) =>
   x.strokes.length ? "before, with their ink" : x.replay === "ink" ? "before (their ink wasn't saved: the Ink line above is all that's left)" : "before (no ink)";
 
-function card(g: GoldCase & { verdict?: Verdict }, ss: { dir: string; s: Session } | undefined): string {
+function card(g: GoldCase & { verdict?: Verdict; note?: string }, ss: { dir: string; s: Session } | undefined): string {
   if (!ss) return "";
   const { s } = ss;
   const x = s.sends[g.n - 1];
@@ -48,14 +48,14 @@ function card(g: GoldCase & { verdict?: Verdict }, ss: { dir: string; s: Session
   </dl>
   ${checks ? `<table><thead><tr><th>Free check</th><th>On the app's result</th><th>On gold</th></tr></thead><tbody>${checks}</tbody></table>` : ""}
   <footer>
-    <textarea placeholder="Note (optional): what's wrong with gold">${esc(g.verdict?.note ?? "")}</textarea>
+    <textarea placeholder="Note (optional, saved as you type): what's wrong with gold">${esc(g.note ?? "")}</textarea>
     <button data-v="approve">Approve</button><button data-v="reject">Reject</button>
-    <span class="state">${state === "open" ? "" : state === "auto" ? "goes in unless rejected" : `${esc(state)}d`}</span>
+    <span class="saved"></span><span class="state">${state === "open" ? "" : state === "auto" ? "goes in unless rejected" : `${esc(state)}d`}</span>
   </footer>
 </article>`;
 }
 
-export function reviewPage(cases: (GoldCase & { verdict?: Verdict })[], sessionOf: (key: string) => { dir: string; s: Session } | undefined): string {
+export function reviewPage(cases: (GoldCase & { verdict?: Verdict; note?: string })[], sessionOf: (key: string) => { dir: string; s: Session } | undefined): string {
   const open = cases.filter((g) => !g.verdict && g.batch === 1).length;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gold Review</title>
@@ -81,7 +81,7 @@ code { font-size: 12px; word-break: break-all; } .ok { color: var(--ok); } .bad 
 footer { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 textarea { flex: 1 1 300px; min-height: 36px; font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
 button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
-button[data-v="approve"]:hover { border-color: var(--ok); } button[data-v="reject"]:hover { border-color: var(--bad); } .state { color: var(--muted); }
+.saved { color: var(--muted); font-size: 13px; } button[data-v="approve"]:hover { border-color: var(--ok); } button[data-v="reject"]:hover { border-color: var(--bad); } .state { color: var(--muted); }
 </style></head><body><main>
 <h1>Gold review</h1>
 <div class="top">${cases.length} cases · <b>${open}</b> of batch 1 still to look at · approved cases go into the real-use bench; a rejected one stays out.
@@ -90,6 +90,21 @@ ${cases.map((g) => card(g, sessionOf(g.key))).join("\n")}
 </main>
 <script>
 document.getElementById("hide").addEventListener("change", (e) => document.body.classList.toggle("hide-done", e.target.checked));
+// A note saves on its own, a moment after typing stops and when the box loses focus: never only with a verdict.
+const timers = new WeakMap();
+const saveNote = async (t) => {
+  clearTimeout(timers.get(t));
+  const a = t.closest("article"), s = a.querySelector(".saved");
+  if (t.value === t.dataset.sent) return;
+  const note = t.value;
+  const res = await fetch("/api/note", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: a.dataset.key, note }) }).catch(() => undefined);
+  if (res?.ok) { t.dataset.sent = note; s.textContent = "note saved"; } else s.textContent = "note not saved: try again";
+};
+for (const t of document.querySelectorAll("article textarea")) {
+  t.dataset.sent = t.value;
+  t.addEventListener("input", () => { t.closest("article").querySelector(".saved").textContent = "…"; clearTimeout(timers.get(t)); timers.set(t, setTimeout(() => saveNote(t), 700)); });
+  t.addEventListener("blur", () => saveNote(t));
+}
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-v]"); if (!b) return;
   const a = b.closest("article"); const note = a.querySelector("textarea").value.trim();
@@ -97,6 +112,7 @@ document.addEventListener("click", async (e) => {
   const s = a.querySelector(".state");
   if (!res.ok) { s.textContent = "not saved: " + (await res.text()); return; }
   a.dataset.state = b.dataset.v; s.textContent = b.dataset.v + "d";
+  const t = a.querySelector("textarea"); t.dataset.sent = t.value;
 });
 </script></body></html>`;
 }
