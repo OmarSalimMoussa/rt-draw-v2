@@ -12,6 +12,10 @@ const said = (s: Session, n: number) => {
   return typeof x.words === "string" ? x.words : x.label;
 };
 
+/** Only the send log keeps strokes: an older send's ink survives as the app's reading of it, not on the image. */
+const beforeCaption = (x: Session["sends"][number]) =>
+  x.strokes.length ? "before, with their ink" : x.replay === "ink" ? "before (their ink wasn't saved: the Ink line above is all that's left)" : "before (no ink)";
+
 function card(g: GoldCase & { verdict?: Verdict }, ss: { dir: string; s: Session } | undefined): string {
   if (!ss) return "";
   const { s } = ss;
@@ -33,7 +37,7 @@ function card(g: GoldCase & { verdict?: Verdict }, ss: { dir: string; s: Session
   <header><h2>${esc(s.project.name)} <span>send ${g.n} of ${s.sends.length} · ${s.admin ? "owner" : "tester"} · ${esc(x.replay)}${g.batch > 1 ? ` · batch ${g.batch}` : ""}</span></h2>
   <p class="said">“${esc(said(s, g.n) || "(nothing said)")}”</p>
   ${x.marks.length ? `<p class="marks">Ink: ${esc(x.marks.join("; "))}</p>` : ""}</header>
-  <div class="row">${img(imgs && `sessions/${s.id}/img/${imgs.before}`, "before, with their ink")}${img(imgs && `sessions/${s.id}/img/${imgs.after}`, "what the app made")}${img(g.gold ? `gold/${g.key.replace("#", "-")}/gold.jpg` : undefined, "gold")}</div>
+  <div class="row">${img(imgs && `sessions/${s.id}/img/${imgs.before}`, beforeCaption(x))}${img(imgs && `sessions/${s.id}/img/${imgs.after}`, "what the app made")}${img(g.gold ? `gold/${g.key.replace("#", "-")}/gold.jpg` : undefined, "gold")}</div>
   <dl>
     <dt>Meant</dt><dd>${esc(g.meant)}</dd>
     <dt>Missed</dt><dd><b>${esc(g.categories.join(", "))}</b> ${esc(g.evidence)}</dd>

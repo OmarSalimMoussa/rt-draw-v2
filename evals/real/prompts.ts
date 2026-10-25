@@ -54,6 +54,7 @@ const sendText = (x: RealSend, n: number, image?: number) =>
   (x.refs ? `\nWhat the app took them to mean: ${x.refs}` : "") +
   (x.pictures.length ? `\nPictures it asked for: ${x.pictures.map((p) => `"${p.subject}" in ${p.w}×${p.h} (${p.elements} elements)`).join("; ")}` : "") +
   (x.error ? `\nIt failed: ${x.error}` : x.status && x.status !== "done" ? `\nIt ended: ${x.status}` : "") +
+  (x.replay === "ink" && !x.strokes.length ? "\nTheir ink wasn't saved: the images don't show it, only the reading above does." : "") +
   (x.before === x.after ? "\nThe board didn't change." : "") +
   (image ? `\nImages ${image} and ${image + 1}: the board before, then after.` : "");
 
@@ -105,5 +106,5 @@ ${later ? `What they said next:\n${later}\n` : ""}
 The board before, as op lines (every shape that's on it):
 ${before}
 
-Images: the board before (with their ink when they drew), then the app's result.`;
+Images: the board before${x.strokes.length ? " with their ink on it" : x.marks.length ? " (their ink wasn't saved: only the reading above says where it was)" : ""}, then the app's result.`;
 }
