@@ -66,7 +66,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
   aa --shared --cases n                bench freeze                         human freeze
-  real ingest [--raw stamp] | render | triage --cap n | gold --cap n | review [--host ip] [--port n] | freeze
+  real ingest [--raw stamp] | render | triage --cap n | gold --cap n | review [--host ip] [--review-port n] | freeze
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfc|ttd] [--owner-ok] --cap n
@@ -643,7 +643,8 @@ async function realCmd() {
     await shots(async (shot) => void say(`real gold: batch ${batch}, ${todo.length} sends, ${failed} failed, ${await real.shootGold(shot)} gold images`));
     return failed ? 1 : 0;
   } else if (step === "review") {
-    const url = await real.serveReview(str("host") ?? "127.0.0.1", num("port") ?? 5182);
+    // Its own port flag: --port is the first arm server's.
+    const url = await real.serveReview(str("host") ?? "127.0.0.1", num("review-port") ?? 5182);
     say(`real review: ${url} (Ctrl-C stops it)`);
     await new Promise(() => {});
   } else if (step === "freeze") {
