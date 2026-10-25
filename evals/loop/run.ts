@@ -42,7 +42,7 @@ import { type ScanResult, compareCase, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
 import { closedPort } from "./gateway.ts";
 import { commitHistory, decisionRow, historyAdd, historyRead, historyRows, openHistory, ownerItem, recordDecision, recordMachine, triedIndex } from "./history.ts";
-import { freezeHuman, pageShot } from "./human.ts";
+import { type Shot, freezeHuman, pageShot } from "./human.ts";
 import { pairedRatio } from "./latency.ts";
 import { type Machine, type WaveSend, heartbeat, ladder, onAC, refuseFactorySlice, sampleLoad } from "./load.ts";
 import { type MeterCall, readMeter, rollup } from "./meter.ts";
@@ -59,12 +59,15 @@ import { type SlotN, type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, EpochRow, Fork, HypothesisCard, Judged, Row, SceneJSON, SendOutcome } from "./types.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
+import * as real from "../real/real.ts";
 
 const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/RUNBOOK.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway)
   aa --shared --cases n                bench freeze                         human freeze
+  real ingest [--raw stamp] | render | triage --cap n | gold --cap n | review [--host ip] [--port n] | freeze
+       [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfc|ttd] [--owner-ok] --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
@@ -575,6 +578,79 @@ async function humanCmd() {
     const m = await freezeHuman(pageShot((await rig.tab(0, "A", champ.tree)).page));
     say(`human freeze: U1, ${Object.keys(m.files).length} files, hash ${m.hash.slice(0, 12)}`);
   }, 1), true);
+}
+
+/** Local (the owner's dev server) sessions before this aren't triaged: the hosted app's testers started then. */
+const REAL_SINCE = "2026-10-22";
+/** Opus calls in flight at once in triage and gold (the gateway runs eval roles 6 at a time). */
+const REAL_PARALLEL = 4;
+async function pool<T>(items: T[], n: number, f: (x: T) => Promise<void>) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (next < items.length) await f(items[next++]);
+  }));
+}
+/** The real-use loop (evals/real/README.md): render and shots on a zero-call gateway, triage and gold under --cap. */
+async function realCmd() {
+  const step = o.pos[1];
+  const since = str("since") ?? REAL_SINCE, only = str("only");
+  const shots = (f: (shot: Shot) => Promise<void>) => {
+    const champ = championArm();
+    return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => f(pageShot((await rig.tab(0, "A", champ.tree)).page)), 1), true);
+  };
+  if (step === "ingest") for (const line of real.ingestStep(str("raw"))) say(`real ingest: ${line}`);
+  else if (step === "render") {
+    await shots(async (shot) => {
+      let n = 0;
+      for (const { dir, s } of real.chosen(since, only)) n += await real.renderSession(dir, s, shot);
+      say(`real render: ${n} images made, ${await real.shootGold(shot)} gold images`);
+    });
+  } else if (step === "triage") {
+    needCap("real triage");
+    const run = `real-triage-${stampNow()}`;
+    const todo = real.chosen(since, only);
+    let made = 0, kept = 0, failed = 0;
+    await withGateway(() => pool(todo, REAL_PARALLEL, async ({ dir, s }) => {
+      try {
+        const t = await real.triageSession(dir, s, run);
+        if (t === "kept") return void kept++;
+        made++;
+        say(`real triage: ${s.id} (${s.project.name.slice(0, 30)}): ${t.sends.filter((x) => x.landed !== "yes").length} of ${t.sends.length} missed, ${t.sends.filter((x) => x.gold).length} for gold`);
+      } catch (e) {
+        failed++;
+        say(`real triage: ${s.id} failed: ${msg(e)}`);
+      }
+    }));
+    say(`real triage: ${made} sessions triaged, ${kept} already current, ${failed} failed`);
+    return failed ? 1 : 0;
+  } else if (step === "gold") {
+    needCap("real gold");
+    const run = `real-gold-${stampNow()}`;
+    const todo = real.wantGold(since, only);
+    const batch = real.nextBatch();
+    let failed = 0;
+    await withGateway(() => pool(todo, REAL_PARALLEL, async (c) => {
+      try {
+        const g = await real.goldSend(c, run, batch);
+        say(`real gold: ${c.x.key} ${g.error ? `unreadable: ${g.error}` : `${g.gold!.pictures.length} pictures${g.problems.length ? `, ${g.problems.length} problems` : ""}`}`);
+        if (g.error) failed++;
+      } catch (e) {
+        failed++;
+        say(`real gold: ${c.x.key} failed: ${msg(e)}`);
+      }
+    }));
+    await shots(async (shot) => void say(`real gold: batch ${batch}, ${todo.length} sends, ${failed} failed, ${await real.shootGold(shot)} gold images`));
+    return failed ? 1 : 0;
+  } else if (step === "review") {
+    const url = await real.serveReview(str("host") ?? "127.0.0.1", num("port") ?? 5182);
+    say(`real review: ${url} (Ctrl-C stops it)`);
+    await new Promise(() => {});
+  } else if (step === "freeze") {
+    openHistory();
+    const r = real.freezeReal();
+    commitHistory(`real freeze: R1 = ${r.cases} cases (${r.tune} tune, ${r.hold} hold), ${r.hash.slice(0, 12)}`);
+    say(`real freeze: R1, ${r.cases} cases (${r.tune} R-tune, ${r.hold} R-hold), ${r.inkWaiting} waiting for synthesized ink, hash ${r.hash.slice(0, 12)}`);
+  } else throw new Error("real ingest | render | triage | gold | review | freeze");
 }
 
 /** A checkpoint of today's champion (an owner step for `sync`), then the champion-miss digest from its losses. */
@@ -1480,7 +1556,7 @@ async function gc() {
 }
 
 const COMMANDS: Record<string, () => Promise<number | void>> = {
-  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd,
+  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd, real: realCmd,
   checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, week: weekCmd, status,
   remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc, packets: packetsCmd,
 };
