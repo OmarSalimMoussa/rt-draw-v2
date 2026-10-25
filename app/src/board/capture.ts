@@ -5,7 +5,7 @@
 import type { View } from "../../../src/core/board.ts";
 import type { Stroke } from "../../../src/core/ink.ts";
 import type { Word } from "../../../src/core/link.ts";
-import type { SceneJSON } from "../../../src/core/scene.ts";
+import type { Scene, SceneJSON } from "../../../src/core/scene.ts";
 import type { JobStatus } from "./sender.ts";
 
 export type SendRecord = {
@@ -35,6 +35,16 @@ export type SendRecord = {
 
 /** What a send starts from. */
 export type SendStart = { at: number; camera: View; before: SceneJSON; beforeVersion: number };
+
+/**
+ * The board as it is now, for a send's before. toJSON() hands out the live shapes, and a send's ops change a shape's
+ * fields and its style in place, so those are copied; boxes, text and pictures are only ever replaced whole, never
+ * changed, so they're shared. A copy per shape, not of the whole board: the send's clock is already running.
+ */
+export function snapshot(scene: Scene): SceneJSON {
+  const j = scene.toJSON();
+  return { ...j, shapes: j.shapes.map((s) => ({ ...s, style: { ...s.style } })) };
+}
 
 /** A short random id, unique enough within one project. */
 export const sendId = () => `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

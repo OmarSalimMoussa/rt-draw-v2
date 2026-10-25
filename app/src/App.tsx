@@ -21,7 +21,7 @@ import { FeedbackButton } from "./access/Feedback.tsx";
 import { Board, SETTLE_MS } from "./board/board.ts";
 import { BoardArrows } from "./board/BoardArrows.tsx";
 import { BoardView } from "./board/BoardView.tsx";
-import { type SendStart, postSend, sendId } from "./board/capture.ts";
+import { type SendStart, postSend, sendId, snapshot } from "./board/capture.ts";
 import { LatencyLog } from "./board/latency.ts";
 import { type Job, Sender } from "./board/sender.ts";
 import { Canvas, type Tool } from "./canvas/Canvas.tsx";
@@ -213,7 +213,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           board.stopLooking();
           // Painted before the clock starts, so going back to the live board doesn't count as the send's changes.
           board.flush();
-          starts.set(job, { at: Date.now(), camera: sendView(viewRef.current, visibleRect(), size()), before: board.scene.toJSON(), beforeVersion: board.history.latest() });
+          starts.set(job, { at: Date.now(), camera: sendView(viewRef.current, visibleRect(), size()), before: snapshot(board.scene), beforeVersion: board.history.latest() });
         },
         onSettled: (job, input, end) => {
           const start = starts.get(job);
