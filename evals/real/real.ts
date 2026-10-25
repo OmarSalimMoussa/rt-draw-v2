@@ -41,6 +41,8 @@ export type GoldCase = {
 export type Verdict = { key: string; verdict: "approve" | "reject"; note?: string; at: string };
 
 const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
+/** An image file as the gateway takes it. */
+const dataUrl = (f: string) => `data:image/jpeg;base64,${readFileSync(f).toString("base64")}`;
 const js = JSON.stringify;
 const json = <T>(f: string): T => JSON.parse(readFileSync(f, "utf8"));
 const maybe = <T>(f: string): T | undefined => (existsSync(f) ? json<T>(f) : undefined);
@@ -186,7 +188,7 @@ export async function triageSession(dir: string, s: Session, run: string): Promi
     const win = s.sends.slice(from, from + TRIAGE_WINDOW);
     const images = win.flatMap((x) => {
       if (!img[x.key]) throw new Error(`${x.key} has no images: run rte real render first`);
-      return [join(dir, "img", img[x.key].before), join(dir, "img", img[x.key].after)];
+      return [dataUrl(join(dir, "img", img[x.key].before)), dataUrl(join(dir, "img", img[x.key].after))];
     });
     const { text } = await ask({ role: "real-triage", ...OPUS, system: TRIAGE_SYSTEM, turns: triageTurns(s, from, win.length), images, run, case: s.id });
     const got = (jsonIn(text)?.sends ?? []) as Partial<TriageRow>[];
@@ -236,7 +238,7 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   const base = { key: x.key, session: s.id, n, batch, at: new Date().toISOString(), prompt: sha(GOLD_SYSTEM()), meant: t.meant, categories: t.categories, evidence: t.evidence };
   const { text } = await ask({
     role: "real-gold", ...OPUS, system: GOLD_SYSTEM(), user: goldUser(s, x, n, t, boardOps(before)),
-    images: [join(dir, "img", img.before), join(dir, "img", img.after)], run, case: x.key,
+    images: [dataUrl(join(dir, "img", img.before)), dataUrl(join(dir, "img", img.after))], run, case: x.key,
   });
   writeFileSync(join(out, "reply.txt"), text);
   rmSync(join(out, "gold.jpg"), { force: true });
