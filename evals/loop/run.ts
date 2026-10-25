@@ -69,7 +69,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway) | bank rerecord --cap n (replies on today's champion)
   aa --shared --cases n                bench freeze                         human freeze
-  real ingest [--raw stamp] | render | triage --cap n | gold --cap n | review [--host ip] [--review-port n] | freeze | baseline --cap n
+  real ingest [--raw stamp] | render | triage --cap n | gold --cap n [--run real-gold-…] | review [--host ip] [--review-port n] | freeze | baseline --cap n
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render] [--owner-ok] --cap n
@@ -666,7 +666,9 @@ async function realCmd() {
     return failed ? 1 : 0;
   } else if (step === "gold") {
     needCap("real gold");
-    const run = `real-gold-${stampNow()}`;
+    // --run resumes an earlier gold run: the calls it finished come back from the cache, unpaid.
+    const run = str("run") ?? `real-gold-${stampNow()}`;
+    if (!run.startsWith("real-gold-")) throw new Error("real gold --run takes an earlier gold run's name (real-gold-…)");
     const todo = real.wantGold(since, only);
     const batch = real.nextBatch();
     let failed = 0;

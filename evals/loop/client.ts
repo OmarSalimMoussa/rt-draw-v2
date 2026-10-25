@@ -3,6 +3,7 @@
 // The gateway reads the tokens file itself; this process hands it the path only,
 // and its env carries no token or key.
 import { type ChildProcess, spawn } from "node:child_process";
+import { request } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Effort, RateLimit, Thinking } from "../../dev/claude.ts";
 import type { RunMode } from "./gateway.ts";
@@ -97,7 +98,29 @@ function need(url: string | undefined): string {
   return url;
 }
 async function post(path: string, body: unknown, url: string | undefined) {
-  const res = await fetch(`${need(url)}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const j = await res.json().catch(() => ({ error: `gateway HTTP ${res.status}` }));
-  return res.ok || j.error ? j : { ...j, error: `gateway HTTP ${res.status}` };
+  const res = await postJson(`${need(url)}${path}`, JSON.stringify(body));
+  let j;
+  try {
+    j = JSON.parse(res.text);
+  } catch {
+    j = { error: `gateway HTTP ${res.status}` };
+  }
+  return (res.status >= 200 && res.status < 300) || j.error ? j : { ...j, error: `gateway HTTP ${res.status}` };
+}
+/**
+ * One JSON POST over node:http, not fetch: fetch gives up after 300 s without the answer's headers, and the gateway
+ * answers an eval role's call only when it's done (gold at its most effort takes up to 20 minutes).
+ */
+function postJson(url: string, body: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request(url, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (c: string) => (text += c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
 }
