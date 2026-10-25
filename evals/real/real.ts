@@ -296,8 +296,12 @@ export async function shootGold(shot: Shot): Promise<number> {
     const before = beforeOf(ss.dir, x), after = json<SceneJSON>(join(out, "gold.scene.json"));
     // Gold on the app's result's frame, widened if gold reached further.
     const app = frameOf(before, afterOf(ss.dir, x), cameraOf(x, before), x.strokes);
-    writeFileSync(join(out, "gold.jpg"), await shot(after, fit(unite(app, frameOf(before, after, cameraOf(x, before), x.strokes))), []));
-    made++;
+    try {
+      writeFileSync(join(out, "gold.jpg"), await shot(after, fit(unite(app, frameOf(before, after, cameraOf(x, before), x.strokes))), []));
+      made++;
+    } catch (e) {
+      put(join(out, "gold.json"), { ...json<GoldCase>(join(out, "gold.json")), problems: [...g.problems, `the bridge couldn't draw gold: ${(e as Error).message.split("\n")[0]}`] });
+    }
   }
   return made;
 }

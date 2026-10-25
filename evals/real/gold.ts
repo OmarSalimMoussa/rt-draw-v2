@@ -2,6 +2,7 @@
 // the send's before board with the product's own runScript, and every drawing() takes the picture Opus drew,
 // read through the product's readPicture with room for detail (picture.maxPaths 80, picture.colors 10), so
 // gold renders exactly as a result of the product would.
+import rough from "roughjs";
 import { Scene, type Shape } from "../../src/core/scene.ts";
 import { runScript } from "../../src/core/ops.ts";
 import { readPicture } from "../../src/core/picture.ts";
@@ -15,6 +16,17 @@ export type Gold = {
   rubric: { should: string[]; mustNot: string[] };
   checks: Check[];
   why: string;
+};
+
+const gen = rough.generator();
+/** Whether rough.js can draw a path: the sanitizer passes "M10 10 Q Q", and rough.js throws on it, taking the whole render down. */
+const drawable = (d: string) => {
+  try {
+    gen.path(d, { seed: 1 });
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 /** Gold's pictures: up to 60 elements and 8 colors asked, read with a little room. */
@@ -79,6 +91,9 @@ export function applyGold(before: SceneJSON, g: Gold): { after: SceneJSON; probl
       continue;
     }
     const read = readPicture(p.els, s.drawing, r(s.box.w), r(s.box.h), GOLD_TUNING);
+    const bad = read.els.filter((e) => e.tag === "path" && !drawable(e.attrs.d));
+    if (bad.length) problems.push(`picture ${s.id}: ${bad.length} paths rough.js can't draw, left out`);
+    read.els = read.els.filter((e) => !bad.includes(e));
     if (!read.els.length) problems.push(`picture ${s.id} has no elements`);
     if (read.features.refused) problems.push(`picture ${s.id}: ${read.features.refused} attributes or elements the product drops`);
     s.picture = { subject: s.drawing, w: r(s.box.w), h: r(s.box.h), els: read.els, done: true };
