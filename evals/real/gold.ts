@@ -67,7 +67,8 @@ export function readGold(text: string): Gold | { error: string } {
 /** The gold board: the ops on the before board, each drawing() with its picture. `problems` lists what didn't apply. */
 export function applyGold(before: SceneJSON, g: Gold): { after: SceneJSON; problems: string[] } {
   const { scene, errors } = runScript(g.ops, Scene.fromJSON(structuredClone(before)));
-  const problems = errors.map((e) => `${e.line}: ${e.error}`);
+  // camera() is the product's own screen move, which only a send on a board makes: gold's is harmless.
+  const problems = errors.filter((e) => !/^\s*camera\(/.test(e.line)).map((e) => `${e.line}: ${e.error}`);
   for (const s of scene.stacked()) {
     if (!s.drawing) continue;
     const p = g.pictures.find((x) => x.id === s.id);
@@ -79,7 +80,7 @@ export function applyGold(before: SceneJSON, g: Gold): { after: SceneJSON; probl
     }
     const read = readPicture(p.els, s.drawing, r(s.box.w), r(s.box.h), GOLD_TUNING);
     if (!read.els.length) problems.push(`picture ${s.id} has no elements`);
-    if (read.features.refused) problems.push(`picture ${s.id}: ${read.features.refused} elements refused`);
+    if (read.features.refused) problems.push(`picture ${s.id}: ${read.features.refused} attributes or elements the product drops`);
     s.picture = { subject: s.drawing, w: r(s.box.w), h: r(s.box.h), els: read.els, done: true };
   }
   for (const p of g.pictures) if (!scene.get(p.id)?.drawing) problems.push(`picture for ${p.id}, which has no drawing()`);
