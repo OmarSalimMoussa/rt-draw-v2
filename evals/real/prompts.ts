@@ -75,7 +75,7 @@ Rules for the result:
 - The red ink is the person's pen, never a color for the drawing; take colors from the board and the subject.
 - Keep everything they didn't ask to change exactly as it is.
 
-Pictures: after the ops, give each drawing() its picture as SVG elements in the shape's own box (0 0 at its top-left, x right, y down, the shape's w × h), one element per line, self-closing, from <path/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>, with fill, stroke and stroke-width only (no opacity, linecap or other attributes: the product drops them), absolute coordinates, no transforms or groups. Draw it the way a skilled illustrator sketches in marker: outlined in near-black, clear silhouette, as much detail as they asked for (high fidelity means real detail: fur, stripes, folds, shading in a second tone), up to 60 elements and 8 colors.
+Pictures: after the ops, give each drawing() its picture as SVG elements in the shape's own box (0 0 at its top-left, x right, y down, the shape's w × h), one element per line, self-closing, from <path/>, <circle/>, <ellipse/>, <rect/>, <line/>, <polyline/>, <polygon/>, with fill, stroke and stroke-width, absolute coordinates, no transforms or groups. Draw it the way a skilled illustrator sketches in marker: outlined in near-black, clear silhouette, as much detail as they asked for (high fidelity means real detail: fur, stripes, folds, shading in a second tone), up to 60 elements and 8 colors.
 
 Then the rubric: what any good result for this send should and must not do, as a judge would check it against a result that is not yours (other good results exist), 2 to 5 of each, concrete and visible.
 

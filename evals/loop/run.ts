@@ -603,7 +603,8 @@ async function realCmd() {
     await shots(async (shot) => {
       let n = 0;
       for (const { dir, s } of real.chosen(since, only)) n += await real.renderSession(dir, s, shot);
-      say(`real render: ${n} images made, ${await real.shootGold(shot)} gold images`);
+      const rebuilt = real.rebuildGold();
+      say(`real render: ${n} images made; gold: ${rebuilt} boards rebuilt, ${await real.shootGold(shot)} images`);
     });
   } else if (step === "triage") {
     needCap("real triage");

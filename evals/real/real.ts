@@ -256,6 +256,34 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   return gc;
 }
 
+/**
+ * Every gold case rebuilt from its saved reply (0 calls), so a change to gold.ts reaches the cases already drawn; a
+ * board that came out different loses its image.
+ */
+export function rebuildGold(): number {
+  const sessions = new Map(readSessions().map((x) => [x.s.id, x]));
+  let changed = 0;
+  for (const g of goldCases()) {
+    const out = goldCaseDir(g.key);
+    const ss = sessions.get(g.session);
+    const x = ss?.s.sends[g.n - 1];
+    if (!ss || !x || !existsSync(join(out, "reply.txt"))) continue;
+    const read = readGold(readFileSync(join(out, "reply.txt"), "utf8"));
+    if ("error" in read) continue;
+    const before = beforeOf(ss.dir, x);
+    const built = applyGold(before, read);
+    const on = (scene: SceneJSON) => read.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
+    const { verdict: _, ...stored } = g;
+    put(join(out, "gold.json"), { ...stored, gold: read, problems: built.problems, appChecks: on(afterOf(ss.dir, x)), goldChecks: on(built.after) } satisfies GoldCase);
+    if (js(maybe(join(out, "gold.scene.json"))) !== js(built.after)) {
+      put(join(out, "gold.scene.json"), built.after);
+      rmSync(join(out, "gold.jpg"), { force: true });
+      changed++;
+    }
+  }
+  return changed;
+}
+
 /** Gold boards without an image yet, shot framed as the app's result is. */
 export async function shootGold(shot: Shot): Promise<number> {
   const sessions = new Map(readSessions().map((x) => [x.s.id, x]));
