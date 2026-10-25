@@ -26,7 +26,20 @@ export const CHECK_MENU = `  {"type": "picture-for", "words": ["duck"]}: some dr
   {"type": "aspect", "words": ["duck"], "ratio": 1.2}: the drawing() for these words has width ÷ height within 35% of ratio`;
 
 const wordsIn = (s: string, words: string[]) => words.some((w) => new RegExp(`\\b${w.replace(/[^\p{L}\p{N} ]/gu, "")}`, "iu").test(s));
-const about = (s: Shape, words: string[]) => wordsIn(`${s.drawing ?? ""} ${s.description}`, words);
+/**
+ * What a description says the shape is, without where it is: "deep blue sea that the hydra rises out of" is sea,
+ * "pale sky behind the hydra" is sky. Descriptions name their neighbours to be findable, so the whole of one would
+ * make every shape near a subject part of it.
+ */
+export const subjectOf = (d: string) =>
+  d.split(/\s(?:behind|below|beneath|under|underneath|above|over|beside|next to|near|around|inside|within|in front of|across|along|against|between|that|which|where|while|for|with the|on top of|at the)\s|[,;:(]/i)[0];
+/** A shape is about the words when its picture shows them, or its description says it is them. */
+const about = (s: Shape, words: string[]) => wordsIn(s.drawing ?? "", words) || wordsIn(subjectOf(s.description), words);
+/** Shapes the send added or changed: the only ones a check of what it did may blame. */
+const touched = (after: SceneJSON, before: SceneJSON) => {
+  const was = new Map(before.shapes.map((s) => [s.id, s]));
+  return (s: Shape) => !was.has(s.id) || was.get(s.id)!.drawing !== s.drawing;
+};
 const drawings = (j: SceneJSON) => j.shapes.filter((s) => s.drawing);
 const inside = (a: Box, b: Box) => a.x >= b.x - 1 && a.y >= b.y - 1 && a.x + a.w <= b.x + b.w + 1 && a.y + a.h <= b.y + b.h + 1;
 const colorOf = (c: string | undefined) => c?.toLowerCase().replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/, "#$1$1$2$2$3$3");
@@ -46,17 +59,18 @@ export function runCheck(c: Check, after: SceneJSON, before: SceneJSON): { pass:
       return r(!parts.length, `built from ${parts.length} plain shapes: ${parts.slice(0, 3).map((s) => s.id).join(", ")}`);
     }
     case "pictures-complete": {
-      const short = drawings(after).filter((s) => !s.picture?.done || s.picture.els.length < (c.min ?? 1));
+      // Only pictures the send asked for: one already on the board was drawn to its own ask.
+      const fresh = touched(after, before);
+      const short = drawings(after).filter((s) => fresh(s) && (!s.picture?.done || s.picture.els.length < (c.min ?? 1)));
       return r(!short.length, `unfinished or thin pictures: ${short.slice(0, 3).map((s) => `${s.id} (${s.picture?.els.length ?? 0})`).join(", ")}`);
     }
     case "no-color": {
       const want = colorOf(c.color);
-      const hit = after.shapes.filter(
-        (s) => [s.style.fill, s.style.stroke, s.text?.color].some((x) => colorOf(x) === want) || s.picture?.els.some((e) => colorOf(e.attrs.fill) === want || colorOf(e.attrs.stroke) === want),
-      );
-      // Only what the send added or changed: a color already on the before board is theirs.
-      const had = new Set(before.shapes.filter((s) => JSON.stringify(s) === JSON.stringify(after.shapes.find((a) => a.id === s.id))).map((s) => s.id));
-      const fresh = hit.filter((s) => !had.has(s.id));
+      const uses = (s: Shape | undefined) =>
+        !!s && ([s.style.fill, s.style.stroke, s.text?.color].some((x) => colorOf(x) === want) || !!s.picture?.els.some((e) => colorOf(e.attrs.fill) === want || colorOf(e.attrs.stroke) === want));
+      // Only color the send brought: a shape that had it before (moved, say) is as the board was.
+      const was = new Map(before.shapes.map((s) => [s.id, s]));
+      const fresh = after.shapes.filter((s) => uses(s) && !uses(was.get(s.id)));
       return r(!fresh.length, `${c.color} in ${fresh.slice(0, 3).map((s) => s.id).join(", ")}`);
     }
     case "removed": {

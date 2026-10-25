@@ -17,7 +17,7 @@ import { historyWrite } from "../loop/history.ts";
 import { paths } from "../loop/paths.ts";
 import type { CaseInput, Meant, SceneJSON } from "../loop/types.ts";
 import { type Check, runCheck } from "./checks.ts";
-import { type Gold, applyGold, boardOps, readGold } from "./gold.ts";
+import { type Gold, applyGold, boardOps, ownChecks, readGold } from "./gold.ts";
 import { GOLD_SYSTEM, TRIAGE_SYSTEM, goldUser, triageTurns } from "./prompts.ts";
 import { type RealSend, type Session, afterOf, beforeOf, ingest } from "./sessions.ts";
 import { reviewPage } from "./review.ts";
@@ -253,8 +253,10 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   }
   const built = applyGold(before, g);
   put(join(out, "gold.scene.json"), built.after);
-  const on = (scene: SceneJSON) => g.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
-  const gc: GoldCase = { ...base, gold: g, problems: built.problems, appChecks: on(after), goldChecks: on(built.after) };
+  const own = ownChecks(g, built.after, before);
+  const kept = { ...g, checks: own.checks };
+  const on = (scene: SceneJSON) => kept.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
+  const gc: GoldCase = { ...base, gold: kept, problems: [...built.problems, ...own.dropped], appChecks: on(after), goldChecks: on(built.after) };
   put(join(out, "gold.json"), gc);
   return gc;
 }
@@ -275,9 +277,11 @@ export function rebuildGold(): number {
     if ("error" in read) continue;
     const before = beforeOf(ss.dir, x);
     const built = applyGold(before, read);
-    const on = (scene: SceneJSON) => read.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
-    const { verdict: _, ...stored } = g;
-    put(join(out, "gold.json"), { ...stored, gold: read, problems: built.problems, appChecks: on(afterOf(ss.dir, x)), goldChecks: on(built.after) } satisfies GoldCase);
+    const own = ownChecks(read, built.after, before);
+    const kept = { ...read, checks: own.checks };
+    const on = (scene: SceneJSON) => kept.checks.map((check) => ({ check, ...runCheck(check, scene, before) }));
+    const { verdict: _, note: __, ...stored } = g;
+    put(join(out, "gold.json"), { ...stored, gold: kept, problems: [...built.problems, ...own.dropped], appChecks: on(afterOf(ss.dir, x)), goldChecks: on(built.after) } satisfies GoldCase);
     if (js(maybe(join(out, "gold.scene.json"))) !== js(built.after)) {
       put(join(out, "gold.scene.json"), built.after);
       rmSync(join(out, "gold.jpg"), { force: true });

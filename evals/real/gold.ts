@@ -8,7 +8,7 @@ import { runScript } from "../../src/core/ops.ts";
 import { readPicture } from "../../src/core/picture.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
 import type { SceneJSON } from "../loop/types.ts";
-import { type Check, readChecks } from "./checks.ts";
+import { type Check, readChecks, runCheck } from "./checks.ts";
 
 export type Gold = {
   ops: string;
@@ -100,4 +100,13 @@ export function applyGold(before: SceneJSON, g: Gold): { after: SceneJSON; probl
   }
   for (const p of g.pictures) if (!scene.get(p.id)?.drawing) problems.push(`picture for ${p.id}, which has no drawing()`);
   return { after: scene.toJSON(), problems };
+}
+
+/**
+ * Gold's checks that gold itself passes. One it fails can't be what the send needed (gold is the send done right),
+ * so it would fail good results too: it's left out, and said so.
+ */
+export function ownChecks(g: Gold, after: SceneJSON, before: SceneJSON): { checks: Gold["checks"]; dropped: string[] } {
+  const results = g.checks.map((check) => ({ check, ...runCheck(check, after, before) }));
+  return { checks: results.filter((r) => r.pass).map((r) => r.check), dropped: results.filter((r) => !r.pass).map((r) => `check left out, gold fails it: ${JSON.stringify(r.check)} (${r.why})`) };
 }
