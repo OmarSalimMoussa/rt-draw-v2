@@ -1,4 +1,4 @@
-# How rt-draw got twice as fast by testing itself
+# How rt-draw got twice as fast with autonomous eval-driven optimization
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="case-study/latency-dark.svg">
