@@ -23,7 +23,7 @@ function card(g: GoldCase & { verdict?: Verdict }, ss: { dir: string; s: Session
       return undefined;
     }
   })();
-  const img = (src: string | undefined, cap: string) => `<figure>${src ? `<img loading="lazy" src="${esc(src)}" alt="${esc(cap)}">` : `<div class="none">none</div>`}<figcaption>${esc(cap)}</figcaption></figure>`;
+  const img = (src: string | undefined, cap: string) => `<figure>${src ? `<a href="${esc(src)}" target="_blank" title="full size"><img loading="lazy" src="${esc(src)}" alt="${esc(cap)}"></a>` : `<div class="none">none</div>`}<figcaption>${esc(cap)}</figcaption></figure>`;
   const checks = (g.gold?.checks ?? []).map((c, i) => {
     const a = g.appChecks[i], o = g.goldChecks[i];
     return `<tr><td><code>${esc(JSON.stringify(c))}</code></td><td class="${a?.pass ? "ok" : "bad"}">${a?.pass ? "passes" : `fails${a?.why ? `: ${esc(a.why)}` : ""}`}</td><td class="${o?.pass ? "ok" : "bad"}">${o?.pass ? "passes" : `fails${o?.why ? `: ${esc(o.why)}` : ""}`}</td></tr>`;
