@@ -702,7 +702,7 @@ async function realCmd() {
     // The tree listed twice: each arm its own Vite, as every A/A (openRig: one Vite for both puts B behind A).
     const r = await withGateway((gw) => withRig(gw, [champ.tree, champ.tree], (rig) => realBaseline(rig, { run, arms: { A: champ, B: champ }, seed: run, champion: champ.sha })));
     const x = (v?: Ratio) => (v ? `×${v.est.toFixed(3)} (${v.lo95.toFixed(3)}–${(v.hi95 ?? v.hi90).toFixed(3)})` : "-");
-    say(`real baseline: ${r.found.length} of ${r.cases} R1 cases the champion already does right (both runs pass every check), ${r.ids.length} listed in all${r.void ? `, ${r.void} void` : ""}; A/A first drawing ${x(r.ttfd)}, render ${x(r.render)} (${run}); the next rte real freeze leaves them out`);
+    say(`real baseline: ${r.found.length} of ${r.cases} R1 cases the champion already does right (of ${r.passing.length} where both runs pass every check, those where the judge finds both as good as gold), ${r.ids.length} listed in all${r.void ? `, ${r.void} void` : ""}; A/A first drawing ${x(r.ttfd)}, render ${x(r.render)} (${run}); the next rte real freeze leaves them out`);
   } else throw new Error("real ingest | render | triage | gold | review | freeze | baseline");
 }
 
