@@ -2,15 +2,17 @@
 // or checkpoint, as the bank's cases are, and each arm's result scored by gold's free checks. The fidelity judge
 // compares the arms against the owner-approved rubric. R1 decides nothing until the judge is calibrated on
 // illustrations: it is reported, so the owner sees whether what the loop keeps helps what testers actually do.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sceneDiff } from "../core/diff.ts";
-import { fidelityCall, pick, RUBRIC, swap, variants } from "../judge/judge.ts";
+import { combined, fidelityCall, RUBRIC, swap, variants } from "../judge/judge.ts";
 import { stepOf } from "../judge/packet.ts";
 import { type Arms, type Judge, type Rig, runAB } from "../loop/ab.ts";
+import { resized } from "../loop/chrome.ts";
+import { LOOP } from "../loop/config.ts";
 import { pairedRatio } from "../loop/latency.ts";
 import { paths } from "../loop/paths.ts";
-import { caseDir, put, runFile } from "../loop/record.ts";
+import { caseDir, put, putImage, runFile } from "../loop/record.ts";
 import type { Arm, Expectation, Packet, Ratio, Row, SceneJSON } from "../loop/types.ts";
 import { type Check, runChecks } from "./checks.ts";
 import { fixedFile } from "./real.ts";
@@ -67,13 +69,11 @@ async function runReal(rig: Rig, o: { run: string; arms: Arms; seed: string; jud
 
 /**
  * Whether one champion run is as good as gold: the fidelity judge, blind and with the gold's rubric, compares the run's
- * result with the gold image in both orders, and neither order may pick gold. Free checks alone can't see a diagram
- * with no labels or a subject that falls apart. Stores judge/gold-<arm>-1.json and -2.json.
+ * result with gold/after.jpg in both orders, and gold may not win (orders that disagree are a tie, §4.4). Free checks
+ * alone can't see a diagram with no labels or a subject that falls apart. Stores judge/gold-<arm>-1.json and -2.json.
  */
 async function asGoodAsGold(run: string, id: string, arm: Arm): Promise<boolean> {
   const dir = caseDir(run, id), bench = join(benchRoot(), id);
-  mkdirSync(join(dir, "gold"), { recursive: true });
-  copyFileSync(join(bench, "gold.jpg"), join(dir, "gold", "after.jpg"));
   const e = json<Expectation>(join(dir, "expectation.json"));
   const gold = sceneDiff(json<SceneJSON>(join(bench, "before.scene.json")), json<SceneJSON>(join(bench, "gold.scene.json"))).changes;
   // Gold stands in as the other arm: positions only say which side is which.
@@ -87,7 +87,7 @@ async function asGoodAsGold(run: string, id: string, arm: Arm): Promise<boolean>
   const v = variants().fidelity;
   const verdicts = await Promise.all([p.positions, swap(p.positions)].map((at) => fidelityCall(run, p, at, v)));
   verdicts.forEach((j, i) => put(join(dir, "judge", `gold-${arm}-${i + 1}.json`), j));
-  return verdicts.every((j) => pick(j) !== other);
+  return combined(verdicts[0], verdicts[1]) !== other;
 }
 
 /**
@@ -100,6 +100,10 @@ export async function realBaseline(rig: Rig, o: { run: string; arms: Arms; seed:
   if (!r1Cases().length) throw new Error("R1 isn't frozen: rte real freeze first");
   const { ids, rows, scored, live, results } = await runReal(rig, o);
   const passing = scored.filter((r, i) => !r.lost && results[i].every((arm) => !!arm?.length && arm.every(Boolean))).map((r) => r.case);
+  // Gold at the judge's size, as every arm's result is shot: at gold.jpg's twice the pixels, detail too small for the
+  // arm's shot to show would count for gold.
+  const page = (await rig.tab(0, "A", o.arms.A.tree)).page;
+  for (const id of passing) putImage(join(caseDir(o.run, id), "gold", "after.jpg"), await resized(page, readFileSync(join(benchRoot(), id, "gold.jpg")), LOOP.judgePx, LOOP.judgeQuality));
   const judged = await Promise.all(passing.map(async (id) => ({ id, arms: await Promise.all((["A", "B"] as const).map((arm) => asGoodAsGold(o.run, id, arm))) })));
   const fixed = judged.filter((j) => j.arms.every(Boolean)).map((j) => j.id);
   // Added to the cases earlier baselines found: today's R1 already leaves those out, so they can't be found again.
