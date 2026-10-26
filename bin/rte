@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# rte: the eval loop's command line (evals/loop/run.ts, evals/RUNBOOK.md) from the checkout this file is in, plus two
+# for long steps on the PGX, which run supervised in the tmux window `loop` (evals/loop/launch.sh):
+#   bin/rte <command> [flags…]        e.g. bin/rte status, bin/rte real gold --cap 40
+#   bin/rte job <command> [flags…]    the same, supervised (a closed ssh doesn't end it); prints where its log is
+#   bin/rte wait                      until the supervised step ends, then its log's last lines
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export RT_EVAL_HOME="${RT_EVAL_HOME:-$HOME/rt-eval}"
+case "${1:-}" in
+  job)
+    shift
+    bash evals/loop/launch.sh "$@"
+    echo "rte job: $* in tmux ${RT_EVAL_TMUX:-rt}:loop; its log is $RT_EVAL_HOME/logs/run-$(date -u +%F).log (bin/rte wait)"
+    ;;
+  wait)
+    s="${RT_EVAL_TMUX:-rt}"
+    while tmux list-windows -t "=$s" -F '#W' 2>/dev/null | grep -qx loop; do sleep 30; done
+    tail -n 20 "$RT_EVAL_HOME/logs/run-$(date -u +%F).log" 2>/dev/null || true
+    ;;
+  *) exec node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@" ;;
+esac

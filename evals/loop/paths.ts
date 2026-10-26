@@ -2,7 +2,7 @@
 // spec §3.1. Never inside a repo or ~/projects: run files in a work tree get swept
 // into commits, and a v1 harness once wiped real telemetry next to the code.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -82,3 +82,9 @@ export function paths(home?: string) {
 }
 
 export type Paths = ReturnType<typeof paths>;
+
+/** The owner's checkout: the one `rte init --from` cloned (init.json), else the current folder. */
+export function ownerCheckout(): string {
+  const f = join(evalHome(), "init.json");
+  return (existsSync(f) && (JSON.parse(readFileSync(f, "utf8")) as { from?: string }).from) || process.cwd();
+}

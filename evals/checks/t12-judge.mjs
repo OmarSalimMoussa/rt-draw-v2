@@ -6,7 +6,7 @@
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t12-judge.mjs
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
@@ -86,7 +86,6 @@ const ids = (prefix, n, want) => {
   return out;
 };
 const isAudit = (seed, id) => J.draw(seed, "audit", id) < LOOP.auditShare;
-const isCraft = (seed, id) => J.draw(seed, "craft", id) < LOOP.craftShare;
 
 // ===== Pure parts (0 calls)
 
@@ -102,8 +101,7 @@ const other = J.positionsFor(many, "seed-b");
 check(many.some((id) => other.get(id).left !== pos.get(id).left) && J.positionsFor(many, "seed-a").get("p7").left === pos.get("p7").left, "positions aren't seeded");
 const draws = Array.from({ length: 4000 }, (_, i) => `d${i}`);
 const auditShare = draws.filter((id) => isAudit("s", id)).length / draws.length;
-const craftShare = draws.filter((id) => isCraft("s", id)).length / draws.length;
-check(Math.abs(auditShare - 0.2) < 0.03 && Math.abs(craftShare - 0.25) < 0.03, `seeded audit ${auditShare} (want 0.2), craft ${craftShare} (want 0.25)`);
+check(Math.abs(auditShare - 0.2) < 0.03, `seeded audit ${auditShare} (want 0.2)`);
 
 // ---- The flip fallback: > 30% after 16 audited, never before.
 check(!J.bothOrders(15, 15) && J.bothOrders(16, 5) && !J.bothOrders(16, 4) && !J.bothOrders(20, 6) && J.bothOrders(20, 7), "the flip-rate fallback isn't > 30% after 16 audited cases");
@@ -171,10 +169,10 @@ check(N.canaryAlarm(16, 20) && !N.canaryAlarm(17, 20) && N.canaryAlarm(3, 4) && 
 
 // ===== Through the fake API, part 1: replies in a planned order, cases judged one at a time.
 const R1 = "r1-ab", S1 = "seed-1", R2 = "r2-craft", S2 = "seed-2", BANK = "bank-run";
-const plain = (seed) => (id) => !isAudit(seed, id) && !isCraft(seed, id);
+const plain = (seed) => (id) => !isAudit(seed, id);
 const [n1, n2, n3, n6, b1] = ids("n", 5, plain(S1));
-const [n4] = ids("q", 1, (id) => isAudit(S1, id) && !isCraft(S1, id));
-const audits = ids("a", 15, (id) => isAudit(S1, id) && !isCraft(S1, id));
+const [n4] = ids("q", 1, (id) => isAudit(S1, id));
+const audits = ids("a", 15, (id) => isAudit(S1, id));
 const [n5] = ids("k", 1, (id) => !isAudit(S2, id));
 const r1Cases = [n1, n2, n3, n4, n6, ...audits, b1];
 const r1Pos = J.positionsFor(r1Cases, S1);
@@ -220,7 +218,7 @@ check(up1() === 1, "a current expectation was asked again");
 check(J.lastServed() === SERVED, `the served model id wasn't read from the call: ${J.lastServed()}`);
 
 // ---- Order handling on one run.
-const j1 = J.judging(R1, { seed: S1, craft: "sampled" });
+const j1 = J.judging(R1, { seed: S1, craft: "none" });
 const verdicts = {};
 for (const id of [n1, n2, n3, n4, n6]) verdicts[id] = await j1.judgeCase(id, r1Pos.get(id));
 const has2 = (id) => existsSync(judgeFile(R1, id, "fidelity-2.json"));
@@ -282,7 +280,7 @@ const vb = await j1.judgeCase(b1, r1Pos.get(b1));
 check(up2() === 32 && has2(b1) && vb.s === 0, `in both orders a confident, unaudited verdict didn't get a second order (${up2() - 30} calls)`);
 // A resumed run rebuilds its counts from its done cases (0 calls).
 for (const id of r1Cases) rec.put(join(rec.caseDir(R1, id), "done"), "x\n");
-const again = J.judging(R1, { seed: S1, craft: "sampled" });
+const again = J.judging(R1, { seed: S1, craft: "none" });
 check(again.both() && JSON.stringify(again.flips()) === JSON.stringify({ audited: 16, flipped: 15 }) && up2() === 32, `a resumed run's flips: ${JSON.stringify(again.flips())}, both ${again.both()}`);
 
 // ---- Craft when a screen left the change: the two framed shots in the packet's order, not one arm's new page against the other's old one.
@@ -372,6 +370,48 @@ check(fresh.every((p) => { const j = json(judgeFile(p.run, p.case, "v2/fidelity-
   "variant 2's verdicts aren't in judge/v2/ with their own judgeId, or replaced the run's own");
 check(json(J.calibrationFile()).checks.length === 2 && c2.health.kind === "calib" && !c2.health.pass, "calibration.json or its health row");
 
+// ---- The illustrations round: a label set of its own beside the calibration's, from the cases where both sides drew pictures.
+const IL = "calib-illustrations", ilIds = Array.from({ length: 36 }, (_, i) => `c-il-${i}`), ilPos = J.positionsFor(ilIds, SC);
+const reply = (role) => ({ role, ordinal: 0, reqHash: role, cacheFile: "", offsets: [] });
+ilIds.forEach((id, i) => {
+  bankCase(id);
+  runCase(IL, id);
+  // Every 6th case: B drew no picture, so it's no illustration pair.
+  for (const arm of ["A", "B"]) rec.put(join(rec.caseDir(IL, id), arm, "replies.json"), [reply("draw"), ...(i % 6 === 5 && arm === "B" ? [] : [reply("picture")])]);
+  K.writePacket(IL, id, ilPos.get(id), exp(id));
+  rec.put(judgeFile(IL, id, "fidelity-1.json"), judged("left", 3, ilPos.get(id)));
+});
+const mainPairs = readFileSync(join(home, "labels", "pairs.json"), "utf8"), calBefore = json(J.calibrationFile());
+const u3 = up2();
+const il = await C.assembleIllustrations({ contrast: IL, seed: SC });
+const ilFid = il.filter((p) => p.question === "fidelity"), ilFirsts = ilFid.filter((p) => !p.swap), ilCraft = il.filter((p) => p.question === "craft");
+const I = LOOP.calib.illustrations;
+check(ilFirsts.length === 30 && ilFid.length === 30 + I.repeats && ilCraft.length === 30 && il.every((p) => Number(p.case.split("-").at(-1)) % 6 !== 5 && p.subset === "illustrations"),
+  `the illustrations round: ${ilFirsts.length} fidelity, ${ilFid.length - ilFirsts.length} repeats, ${ilCraft.length} craft, cases ${il.map((p) => p.case).join(",").slice(0, 120)}`);
+check(up2() - u3 === 30 && JSON.stringify(json(join(home, "labels", "illustrations", "pairs.json"))) === JSON.stringify(il) && readFileSync(join(home, "labels", "pairs.json"), "utf8") === mainPairs,
+  `the round made ${up2() - u3} craft calls (want 30), or its pairs aren't in labels/illustrations/, or it touched the calibration's`);
+const ilLabels = (against) => {
+  const out = [];
+  const add = (p, arm) => out.push({ id: `il${out.length}`, pair: p.id, packet: `runs/${p.run}/cases/${p.case}/judge/packet.json`, subset: p.subset, question: p.question, side: "left", label: arm, strength: "clear", ms: 900, at: new Date(Date.now() + out.length).toISOString() });
+  const left = (p) => json(judgeFile(p.run, p.case, "packet.json")).positions.left;
+  const given = new Map(ilFirsts.map((p, i) => [p.id, i < against ? (left(p) === "A" ? "B" : "A") : left(p)]));
+  for (const p of ilFid) add(p, given.get(p.id.replace(/:r$/, "")));
+  for (const p of ilCraft.slice(0, I.craftPairs)) add(p, left(p));
+  writeFileSync(join(home, "labels", "illustrations", "labels.jsonl"), out.map((l) => JSON.stringify(l)).join("\n") + "\n");
+};
+ilLabels(0);
+const u4 = up2();
+const ci = await C.checkIllustrations();
+const calAfter = json(J.calibrationFile());
+check(ci.outcome === "pass" && calAfter.use.illustrations === true && calAfter.use.fidelity === calBefore.use.fidelity && calAfter.use.craft === calBefore.use.craft && calAfter.outcome === calBefore.outcome && up2() === u4 && J.variants().illustrationsCalibrated,
+  `illustrations agreeing: ${ci.outcome}, use ${JSON.stringify(calAfter.use)} (was ${JSON.stringify(calBefore.use)}), ${up2() - u4} calls`);
+// A later calibration check keeps the round's result; 7 of 30 clear against the judge (77%) fails the round's 80%.
+await C.checkCalibration(1);
+check(json(J.calibrationFile()).use.illustrations === true, "a calibration check dropped use.illustrations");
+ilLabels(7);
+const cf = await C.checkIllustrations();
+check(cf.outcome === "fail" && !cf.fidelity.pass && cf.craft.pass && json(J.calibrationFile()).use.illustrations === false && !J.variants().illustrationsCalibrated, `illustrations at 23 of 30: ${cf.outcome}, fidelity ${JSON.stringify(cf.fidelity.clear)}`);
+
 // ---- The canary, in a home of its own: 24 stable packets; 4 of the 20 picked now go the other way, so 16 agree.
 const home2 = tempHome();
 const ST = "old-run", SK = "seed-canary";
@@ -397,6 +437,12 @@ check(up2() - u2 === 24 && hc.detail.agree === 16 && hc.detail.n === 20 && hc.de
   `canary: ${up2() - u2} calls, ${JSON.stringify(hc.detail)}`);
 check(cl.length === 2 && cl[0].kind === "set" && cl[0].packets.length === 20 && cl[1].judgeId === J.judgeId("fidelity", SERVED), "canary.jsonl's set and run lines");
 check(!N.canaryDue(SERVED) && N.canaryDue("claude-sonnet-5-5-20261101") && N.canaryDue(SERVED, Date.now() + N.CANARY_EVERY_MS), "canaryDue isn't weekly and on a served-model change");
+// The set's run cleared away (a home's clean-up): the next run picks a new set from the runs there are.
+renameSync(join(home2, "runs", ST), join(home2, "runs", "newer-run"));
+const hc2 = await N.runCanary(SK);
+const cl2 = readFileSync(join(home2, "history", "judge", "canary.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const sets = cl2.filter((l) => l.kind === "set");
+check(hc2.detail.n === 20 && sets.length === 2 && sets[1].packets.every((k) => k.run === "newer-run"), `a canary set whose run is gone isn't picked again: ${JSON.stringify({ n: hc2.detail.n, sets: sets.length })}`);
 
 // ---- Nothing a judge was sent names an arm, commit, tuning, model, persona, rating or `testing`; the fakes saw only the gateways' calls.
 const all = [...api1.requests, ...api2.requests];

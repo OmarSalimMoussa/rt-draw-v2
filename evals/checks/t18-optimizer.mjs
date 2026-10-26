@@ -21,10 +21,10 @@ const sh = (cmd, cwd) => execFileSync("sh", ["-c", cmd], { cwd, encoding: "utf8"
 const put = (file, data) => (mkdirSync(join(file, ".."), { recursive: true }), writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data)));
 const sha12 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
-const { g0, parseDiff, diffOf, cardOwnerReasons, modelShifts } = await import("../optimizer/gates.ts");
+const { g0, parseDiff, diffOf, cardOwnerReasons } = await import("../optimizer/gates.ts");
 const { analystDigest, failureDigest, tokensOf, writeLossDigest, writeMissDigest, DIGEST } = await import("../optimizer/digest.ts");
 const { OVERUSE, PATTERNS, tracePatterns } = await import("../optimizer/patterns.ts");
-const { BASH_ALLOW, CAPS, analyst, critic, engineer, engineerCanUseTool, failureAnalyst, readCards, slotToken } = await import("../optimizer/agents.ts");
+const { BASH_ALLOW, CAPS, analyst, critic, engineer, engineerCanUseTool, failureAnalyst, readCards, slotToken, toolRule } = await import("../optimizer/agents.ts");
 const prompts = await import("../optimizer/prompts.ts");
 const { startFakeApi } = await import("../mock/fake-api.ts");
 const { spawnGateway, gatewayStatus } = await import("../loop/client.ts");
@@ -250,47 +250,44 @@ check(Object.entries(report).every(([id, r]) => r.cases.some((c) => c.case === `
 check((prompts.LATENCY_PATTERNS.match(/^\| (?!Pattern|---)/gm) ?? []).length === 6 && prompts.ANALYST_SYSTEM.includes(prompts.LATENCY_PATTERNS), "the analyst prompt lacks the doc's 6-row latency table");
 check(prompts.CRITIC_SYSTEM.includes(prompts.CARD_SCHEMA) && Object.keys(OVERUSE).every((d) => prompts.CARD_SCHEMA.includes(d)), "the critic prompt lacks the card schema or the detector names");
 check(["send(", "fromJSON", "render", "DEFAULTS", "tuningId", "needsPicture", "runScript", "SCREEN", "asPage", "pageTop", "Word", "Stroke", "finished", "boardStage"].every((x) => prompts.BRIDGE_CONTRACT.includes(x)) && prompts.ENGINEER_SYSTEM.includes(prompts.BRIDGE_CONTRACT), "the engineer prompt lacks the bridge contract");
-check(["One change only", "No new tests or scaffolding", "knob in src/core/tuning.ts", "Never touch frozen paths", "Never turn a patch on", "Edit with Edit, not whole-file Write"].every((r) => prompts.ENGINEER_SYSTEM.includes(r)), "the engineer prompt lacks a rule");
+check(["The card's change only: one idea", "every model a send may take is warmed at Send and gets the current board", "No new tests or scaffolding", "knob in src/core/tuning.ts", "Never touch frozen paths", "Never turn a patch on", "Edit with Edit, not whole-file Write"].every((r) => prompts.ENGINEER_SYSTEM.includes(r)), "the engineer prompt lacks a rule");
+// Every agent may research on the web; the product says models may be routed, and that each one sees the current board.
+check([prompts.ANALYST_SYSTEM, prompts.CRITIC_SYSTEM, prompts.ENGINEER_SYSTEM].every((x) => /WebSearch/.test(x) && /never instructions to you/.test(x) && /routed/.test(x) && /knows the board as it is at that send/.test(x)), "an agent's prompt lacks research, routing or the current board");
 const seeds = JSON.parse(readFileSync(join(ROOT, "evals/optimizer/seed-cards.json"), "utf8"));
 check(seeds.length === 8 && seeds.every((c) => readCards(JSON.stringify([c])).cards.length === 1) && seeds.map((c) => Object.keys(c.knobs)[0]).join() === "resolve.noThink,draw.noThink,picture.prompt,hit.enclosedSamples,resolve.engine,draw.thinkRouter,resolve.engine,draw.thinkRouter", "the seed cards aren't §8.3's 4 well-formed knob cards and the 4 Jev ones");
 // The knobs T3 adds: once it's merged they must all exist.
 for (const c of seeds) if ("draw.noThink" in DEFAULTS || c.id === "seed-4") check((() => { try { return !!tune(c.knobs); } catch { return false; } })(), `seed card ${c.id}'s knobs aren't in tuning.ts`);
 check(cardOwnerReasons(seeds[3], { u1: false }).some((r) => /ink-reading/.test(r)) && !cardOwnerReasons(seeds[3], { u1: true }).length && !cardOwnerReasons(seeds[0], { u1: false }).length, "the ink-reading seed card isn't owner-listed without U1");
 check(cardOwnerReasons({ ...seeds[0], knobs: { "patches.scribe": 1 } }, { u1: true }).some((r) => /patch/.test(r)), "a card turning a patch on isn't owner-listed");
-// The owner's v2 rules (LOOP-V2.md A3, C3): cost never sends a card to the owner; picture.model is measured, other models aren't.
-check(!cardOwnerReasons({ ...seeds[0], raisesCost: true }, { u1: true }).length, "a cost-raising card is still owner-listed");
-check(!cardOwnerReasons({ ...seeds[0], knobs: { "picture.model": 0 } }, { u1: true }).length && cardOwnerReasons({ ...seeds[0], knobs: { "draw.model": 2 } }, { u1: true }).some((r) => /model switch/.test(r)), "picture.model isn't measured, or another model switch isn't owner-listed");
-// Every knob that picks a model or who resolves is a model switch; render.pictureBox is the owner's (LOOP-V2.md B2).
-for (const k of ["router.fastModel", "router.fullModel", "resolve.engine", "resolve.jevModel", "draw.thinkJevModel"])
-  check(cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true }).some((r) => /model switch/.test(r)), `a card on ${k} isn't owner-listed as a model switch`);
-check(cardOwnerReasons({ ...seeds[0], knobs: { "render.pictureBox": 0 } }, { u1: true }).some((r) => /owner's knob/.test(r)) && !cardOwnerReasons({ ...seeds[0], knobs: { "router.fastMaxWords": 20 } }, { u1: true }).length, "render.pictureBox isn't the owner's, or a routing threshold is");
-// Model switches read off what the arms called, case by case, role labels unread (C3): every draw on the fast lane's
-// model (A used it too, for the camera); the draw relabelled; a switch among models both arms already call (the output
-// moves); a partial switch on a few cases. Not one: one case of 20, a call B adds with a model the case already uses,
-// output lengths that vary, a scan's lines.
-const call = (c, arm, role, model, outTokens = 1000, mode = "live") => ({ case: `c${c}`, arm, role, model, outTokens, mode });
-const lanes = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", c % 4 ? "sonnet" : "haiku"), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", "haiku"), call(c, "B", "camera", "haiku", 50)]).flat();
-const shifted = modelShifts(lanes);
-check(shifted.length === 1 && /differ on 15 of 20 cases.*dropped sonnet/.test(shifted[0]), `every draw on the fast model isn't a switch: ${JSON.stringify(shifted)}`);
-check(modelShifts(lanes.map((x) => (x.arm === "B" && x.role === "draw" ? { ...x, role: "draw2" } : x))).length === 1, "a relabelled draw call hides a switch");
-const swapped = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 2000), call(c, "A", "camera", "haiku", 100), call(c, "B", "draw", "haiku", 2000), call(c, "B", "camera", "sonnet", 100)]).flat();
-check(modelShifts(swapped).length === 1 && /moved output/.test(modelShifts(swapped)[0]), `a switch among models both arms call isn't seen: ${JSON.stringify(modelShifts(swapped))}`);
-const partial = Array.from({ length: 50 }, (_, c) => [call(c, "A", "picture", "sonnet"), call(c, "B", "picture", c < 4 ? "opus" : "sonnet")]).flat();
-check(modelShifts(partial).length === 1, "a picture switch on 4 of 50 cases isn't seen");
-const one = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 1500 + 40 * (c % 7)), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", c === 3 ? "opus" : "sonnet", 1700 - 30 * (c % 5)), call(c, "B", "camera", "haiku", 50), ...(c < 5 ? [call(c, "B", "describe", "haiku", 60)] : []), call(c, "B", "draw", "opus", 900, "scan")]).flat();
-check(!modelShifts(one).length, `one case of 20, a call with a model the case already uses, varying lengths or a scan read as a switch: ${JSON.stringify(modelShifts(one))}`);
-// A champion call replayed from the bank (its recorded tokens given), or a shared call's follower (it meters none), is
-// still a call: a prompt card whose B draws live beside A's replay, or a code card that shares A's draw, isn't a switch.
-const replayed = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 2000, "replay"), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", "sonnet", 1900), call(c, "B", "camera", "haiku", 50)]).flat();
-const shared = Array.from({ length: 20 }, (_, c) => [{ ...call(c, "A", "draw", "sonnet", 2000), reqHash: `d${c}`, shared: "leader" }, call(c, "A", "describe", "haiku", 300), { ...call(c, "B", "draw", "sonnet", 0), reqHash: `d${c}`, shared: "follower" }, call(c, "B", "describe", "haiku", 320)]).flat();
-check(!modelShifts(replayed).length && !modelShifts(shared).length, `a replayed or shared champion call read as a switch: ${JSON.stringify([modelShifts(replayed), modelShifts(shared)])}`);
+// The owner's rules (LOOP-V2.md A3, C3): neither cost nor a model switch or router sends a card to the owner, every model
+// knob and who resolves is measured; render.pictureBox is the owner's (LOOP-V2.md B2).
+for (const k of ["picture.model", "draw.model", "describe.model", "router.fastModel", "router.fullModel", "resolve.engine", "resolve.jevModel", "draw.thinkJevModel", "router.fastMaxWords"])
+  check(!cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true }).length, `a card on ${k} is owner-listed: ${cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true })}`);
+check(cardOwnerReasons({ ...seeds[0], knobs: { "render.pictureBox": 0 } }, { u1: true }).some((r) => /owner's knob/.test(r)), "render.pictureBox isn't the owner's");
 
 // ---- The search (LOOP-V2.md D1, D3, D4): sweep and combo cards, knob literals, pruning, near wins.
 const search = await import("../loop/search.ts");
-const kc = (o) => ({ id: "s", component: "draw", change: "c", goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "p", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "r", files: [], ...o });
+const kc = (o) => ({ id: "s", component: "draw", change: "c", goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: [], ...o });
 const faults = (o) => readCards(JSON.stringify([kc(o)])).dropped.join();
 check(!faults({ kind: "sweep", sweep: { knob: "picture.fill", values: [0.8, 1] } }) && /sweep without/.test(faults({ kind: "sweep" })) && /at most 4/.test(faults({ kind: "sweep", sweep: { knob: "picture.fill", values: [0.5, 0.6, 0.7, 0.8, 1] } })), "sweep cards aren't read as well-formed, or their faults aren't caught");
 check(!faults({ kind: "combo", combines: ["e1-h1", "e2-h3"] }) && /two tried ids/.test(faults({ kind: "combo", combines: ["e1-h1"] })) && /at most 3/.test(faults({ kind: "combo", combines: ["a", "b", "c", "d"] })), "combo cards aren't read as well-formed, or their faults aren't caught");
+// A combo's tried patches that edit the same lines don't apply in turn: TriedConflict, so an engineer makes them by hand.
+{
+  const g = join(home, "combo-git"), hist = join(home, "combo-history");
+  mkdirSync(join(hist, "tried"), { recursive: true });
+  sh(`git init -q -b main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m base && printf '1\\n2\\n3\\n' > a.txt && git add a.txt && git -c user.name=t -c user.email=t@t commit -q -m a`, (mkdirSync(g, { recursive: true }), g));
+  for (const [id, line] of [["t1", "two"], ["t2", "deux"]]) {
+    sh(`git checkout -q -B ${id} main && sed -i 's/^2$/${line}/' a.txt && git -c user.name=t -c user.email=t@t commit -qam ${id}`, g);
+    writeFileSync(join(hist, "tried", `${id}.patch`), `rt-eval tried: ${id}\n---\n${sh(`git format-patch -1 --stdout ${id}`, g)}`);
+  }
+  sh("git checkout -q main", g);
+  search.applyTried(g, ["t1"], hist, join(home, "combo-tmp"));
+  check(readFileSync(join(g, "a.txt"), "utf8") === "1\ntwo\n3\n" && search.triedPatch("t2", hist).startsWith("From "), "a tried patch doesn't apply, or its text isn't read back");
+  sh("git checkout -q -- . && git reset -q --hard", g);
+  let conflict;
+  try { search.applyTried(g, ["t1", "t2"], hist, join(home, "combo-tmp")); } catch (err) { conflict = err; }
+  check(conflict instanceof search.TriedConflict && /t2 doesn't apply on today's champion after t1/.test(conflict.message), `overlapping tried patches: ${conflict}`);
+}
 const tsrc = readFileSync(join(ROOT, "src/core/tuning.ts"), "utf8");
 const lit = (k) => search.knobLiteral(tsrc, k);
 check(lit("picture.fill")?.value === DEFAULTS["picture.fill"] && lit("render.pictureBox")?.max === 1 && lit("picture.prompt")?.value === DEFAULTS["picture.prompt"] && lit("draw.prompt")?.value === DEFAULTS["draw.prompt"] && lit("resolve.jevPrompt")?.value === DEFAULTS["resolve.jevPrompt"] && lit("draw.thinkPrompt") && !lit("no.such"), "knobLiteral doesn't read today's defaults (P(role, n) prompt knobs included)");
@@ -306,18 +303,22 @@ const row = (id, verdict, looks, o = {}) => ({ id, verdict, class: "Q", reasons:
 const aLost = sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "revert" } : c));
 check(search.sweepSkip(sw.cards, b, []) === undefined, "a sweep value is skipped before anything was decided");
 check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1)]) ?? ""), "a value beyond a clear first-look loss on its side isn't pruned");
-check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "void", 1), row("e5-h2ar", "revert", 3, { reasons: ["latency veto: ttfd ×1.1"] })]) ?? ""), "a vetoed value, decided on its void rerun, doesn't prune the values beyond it");
+// Why a decision went its way is read off its codes; a row written before them, off its reasons' words.
+check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { codes: ["latency"], reasons: ["latency veto: surely slower (p 0.010 over every deciding stat), most on ttfd ×1.10"] })]) ?? "")
+  && /pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { reasons: ["latency veto: ttfd ×1.1"] })]) ?? ""), "a vetoed value, with codes or before them, doesn't prune the values beyond it");
+check(search.sweepSkip(aLost, b, [row("e5-h2a", "void", 1)]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { codes: [], reasons: ["latency veto: ttfd ×1.1"] })]) === undefined,
+  "a void, or a row whose codes say no veto whatever its words, prunes the values beyond it");
 check(search.sweepSkip(aLost, c2, [row("e5-h2a", "revert", 1)]) === undefined, "a value on the other side of a loss is pruned");
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3)]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1, { class: "N" })]) === undefined, "a late loss or a no-effect value prunes the values beyond it");
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1, { looks: [{ n: 16, decisive: 10, z: -0.3 }] })]) === undefined, "a first-look revert that isn't a clear loss (Z -0.3) prunes the values beyond it");
 // A latency value prunes only on a veto: its first-look revert is often noise, and its fidelity Z says nothing of speed.
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1, { goal: "latency", looks: [{ n: 16, decisive: 10, z: -1.5 }] })]) === undefined, "a latency value's first-look revert (noise 44% of the time) pruned the values beyond it");
 check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 2, { goal: "latency", reasons: ["latency veto: ttfd ×1.09"] })]) ?? ""), "a latency value's veto doesn't prune the values beyond it");
-check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["Rule F keep at look 48", "held-out: ttfd ×1.004 isn't faster"] })]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["quality debt: fidelity Z -0.10 < 0"] })]) === undefined, "G3's direction rule or a debt floor on a latency value pruned the values beyond it");
+check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["Rule F keep at look 48", "held-out: ttfd ×1.004 isn't faster"] })]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", codes: ["floor"], reasons: ["fidelity Z -0.80 < -0.5"] })]) === undefined, "G3's direction rule or a fidelity floor on a latency value pruned the values beyond it");
 check(/the sweep kept e5-h2a/.test(search.sweepSkip(sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "keep" } : c)), c2, []) ?? ""), "a keep doesn't end its sweep");
 const dec = (id, o) => ({ id, kind: "card", verdict: "revert", class: "Q", goal: "fidelity", reasons: ["Rule F at look 48"], counts: { wins: 20, losses: 15, ties: 13, exactTies: 0 }, looks: [{ n: 16 }, { n: 32 }, { n: 48 }], latency: { ttfc: { est: 1 }, ttd: { est: 1 }, ttfd: { est: 0.97 } }, card: { kind: "knob", component: "draw", change: id }, ...o });
 const near = search.nearWins([dec("w1"), dec("w2", { counts: { wins: 10, losses: 15, ties: 5 } }), dec("w3", { reasons: ["latency veto: ttfd ×1.1"] }), dec("w4", { class: "N" }), dec("w5", { goal: "latency", card: { kind: "code", component: "picture", change: "w5", metric: "ttfd" } }), dec("w6", { verdict: "keep" }),
-  dec("w7", { reasons: ["Rule F keep at look 48", "latency debt: this keep's ttfd is ×1.010, above 1.00"] }), dec("w8", { reasons: ["Rule F keep at look 32", "empty sends up 4.0 points"] }), dec("w9", { goal: "latency", reasons: ["fidelity Z -0.80 < -0.5"], card: { kind: "knob", component: "draw", change: "w9", metric: "ttfd" } })]);
+  dec("w7", { codes: ["heldout"], reasons: ["Rule F keep at look 48", "held-out: fidelity Z 0.00 doesn't lean"] }), dec("w8", { reasons: ["Rule F keep at look 32", "empty sends up 4.0 points"] }), dec("w9", { goal: "latency", reasons: ["fidelity Z -0.80 < -0.5"], card: { kind: "knob", component: "draw", change: "w9", metric: "ttfd" } })]);
 check(near.length === 2 && /^w5 /.test(near[0]) && /^w1 .*20-15-13 at look 48, first drawing ×0\.97/.test(near[1]), `near wins aren't the reverted cards that leaned the right way, newest first: ${near.join(" | ")}`);
 const nd = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, tried: ["e1-h2 draw prose opener | draw | 3f2a | revert"], nearWins: near });
 check(nd.includes("# 4. Near wins") && nd.indexOf("# 4. Near wins") < (nd.indexOf("# 7. Tried") >>> 0), "the analyst's digest lacks the near wins section, ahead of the tried index");
@@ -345,7 +346,7 @@ for (const cmd of ["npx tsc --noEmit", "./node_modules/.bin/tsc --noEmit && curl
 for (const cmd of ["./node_modules/.bin/tsc --noEmit", "git diff", "git status", "git diff --stat src/core/x.ts", "node --permission --allow-fs-read=. --import ./evals/loop/node-hooks.mjs scripts/tune.ts sets/marks.json --parts marks,arrow"])
   check(await allowed("Bash", { command: cmd }), `the engineer may not run ${cmd}`);
 check(BASH_ALLOW.some((re) => re.test("./node_modules/.bin/tsc --noEmit")) && !BASH_ALLOW.some((re) => /npx/.test(re.source)), "the allowlist isn't tsc without npx");
-check(JSON.stringify(CAPS) === JSON.stringify({ critic: { turns: 20, minutes: 8, usd: 1.5 }, engineer: { turns: 40, minutes: 15, usd: 2.5 } }), `CAPS ${JSON.stringify(CAPS)}`);
+check(JSON.stringify(CAPS) === JSON.stringify({ analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } }), `CAPS ${JSON.stringify(CAPS)}`);
 
 // ---- Agents on the fake API: the turn, $ and minute caps, cards, refused tools
 const token = { slot: 1, token: "sk-ant-oat01-fake-t18" };
@@ -353,7 +354,7 @@ const mockOf = (api) => ({ baseUrl: api.url, deadProxyPort: PORTS.closed });
 const script = (name, turns) => (put(join(home, "scripts", name), turns), join(home, "scripts", name));
 const tool = (name, input, i) => ({ content: [{ type: "text", text: `step ${i}` }, { type: "tool_use", id: `toolu_${name}_${i}`, name, input }] });
 const globs = Array.from({ length: 12 }, (_, i) => tool("Glob", { pattern: "*.md", path: tree }, i));
-const card = (id, kind, o = {}) => ({ id, component: "draw", kind, change: "c", ...(kind === "knob" ? { knobs: { "draw.mapWords": 30 } } : {}), goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "p", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "r", files: ["src/core/draw.ts"], ...o });
+const card = (id, kind, o = {}) => ({ id, component: "draw", kind, change: "c", ...(kind === "knob" ? { knobs: { "draw.mapWords": 30 } } : {}), goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: ["src/core/draw.ts"], ...o });
 const cards = [card("h1", "code"), card("h2", "knob"), card("h3", "bogus"), card("h4", "code"), card("h5", "knob"), card("h6", "code"), card("h7", "code"), card("h8", "sweep", { sweep: { knob: "draw.mapWords", values: [20, 40] } })];
 const sessions = [];
 const run = async (api, o) => {
@@ -383,13 +384,20 @@ sessions.push({ api: apiD, turns: eng.turns });
 check(eng.stop === "done" && eng.text === "Changed nothing: a check." && eng.wt === p.worktree("cand/e1-h9") && existsSync(join(eng.wt, "node_modules")), `the engineer's session: ${JSON.stringify(eng)}`);
 check(eng.denied.length === 3 && /^Read .*hostname/.test(eng.denied[0]) && /^Write .*Edit/.test(eng.denied[1]) && /^Bash .*npx/.test(eng.denied[2]) && readFileSync(join(eng.wt, "src/core/x.ts"), "utf8") === "export const x = 1;\n", `the engineer's refused tools: ${JSON.stringify(eng.denied)}`);
 await apiD.close();
+// The analyst: a read-only session that may search the web and read public pages, never this machine or its network.
+const web = toolRule(tree, { root: tree, edit: false });
+check(!web("WebSearch", { query: "model routing cascades" }) && !web("WebFetch", { url: "https://arxiv.org/abs/2404.14618", prompt: "p" }) && ["http://127.0.0.1:5400/status", "http://100.94.227.92:5182/", "http://localhost:5182/", "https://pgx.tail1a2b.ts.net/", "http://[::1]/", "file:///etc/passwd"].every((url) => web("WebFetch", { url, prompt: "p" })), "the web rule: search and public pages open, this machine and its network shut");
+const apiF = await startFakeApi({ port: PORTS.fakeA, script: script("analyst.json", [tool("WebFetch", { url: "http://100.94.227.92:5182/", prompt: "the sends" }, 0), { content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "draw"}]}' }] }]) });
+const agentsBefore = readMeter(p.calls).filter((l) => l.agent).length;
+const an = await analyst({ run: "e1", token, mockApi: mockOf(apiF), digest: "d", tree });
+check(an.includes('"hypotheses"') && apiF.requests.length === 2 && readMeter(p.calls).filter((l) => l.agent).length === agentsBefore + 1, `the analyst's session: ${an} (${apiF.requests.length} requests)`);
+await apiF.close();
 for (const s of sessions) check(s.api.requests.length === sessions.filter((x) => x.api === s.api).reduce((a, x) => a + x.turns, 0), `a fake API got ${s.api.requests.length} requests for ${s.turns} turns`);
 const agentLines = readMeter(p.calls).filter((l) => l.agent);
-check(agentLines.length === 5 && agentLines.every((l) => l.token === 1 && l.model === "claude-sonnet-5-5" && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
+check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === "claude-sonnet-5-5" && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
 
-// ---- The analyst and the failure analyst: one gateway call each, on the gateway's token slot
+// ---- The failure analyst: one gateway call, on the gateway's token slot
 mkdirSync(join(home, "replies"));
-writeFileSync(join(home, "replies", `analyst.${sha12(prompts.ANALYST_SYSTEM)}.txt`), '{"components": [], "hypotheses": [{"component": "draw"}]}');
 writeFileSync(join(home, "replies", `failure.${sha12(prompts.FAILURE_SYSTEM)}.txt`), 'Here: [{"case": "c1", "component": "draw", "evidence": "e", "tag": "t"}]');
 const apiE = await startFakeApi({ port: PORTS.fakeC, replies: join(home, "replies") });
 const tokensFile = join(home, "config", "tokens.env");
@@ -397,19 +405,17 @@ put(tokensFile, "RT_EVAL_TOKEN_1=sk-ant-oat01-fake-t18-gw\n");
 chmodSync(tokensFile, 0o600);
 const gw = await spawnGateway({ home, port: PORTS.gateway, tokens: tokensFile, mockApi: apiE.url, cap: 5 });
 try {
-  const a = await analyst(digest, "e1");
-  check(a.includes('"hypotheses"'), `the analyst's reply: ${a}`);
   const f = await failureAnalyst(fd, "e1");
   check(f.length === 1 && f[0].component === "draw", `the failure analyst's notes: ${JSON.stringify(f)}`);
   const t = await slotToken([{ slot: 1, token: "sk-ant-oat01-fake-t18-gw" }]);
   check(t.slot === 1, "slotToken didn't pick the gateway's current slot");
   const st = await gatewayStatus();
-  check(st.calls === 2 && apiE.requests.length === 2 && apiE.requests.map((r) => r.role).join() === "analyst,failure", `the gateway made ${st.calls} calls, the fake API got ${apiE.requests.length} (${apiE.requests.map((r) => r.role)})`);
+  check(st.calls === 1 && apiE.requests.length === 1 && apiE.requests.map((r) => r.role).join() === "failure", `the gateway made ${st.calls} calls, the fake API got ${apiE.requests.length} (${apiE.requests.map((r) => r.role)})`);
 } finally {
   await gw.close();
   await apiE.close();
 }
 const lines = readMeter(p.calls).filter((l) => !l.agent);
-check(lines.length === 2 && lines.map((l) => l.role).join() === "analyst,failure" && lines.every((l) => l.token === 1 && l.cacheWrite1h === 0), `the gateway's meter lines: ${JSON.stringify(lines)}`);
+check(lines.length === 1 && lines.map((l) => l.role).join() === "failure" && lines.every((l) => l.token === 1 && l.cacheWrite1h === 0), `the gateway's meter lines: ${JSON.stringify(lines)}`);
 check(!readFileSync(p.calls, "utf8").includes("sk-ant"), "a token reached the meter");
 finish();

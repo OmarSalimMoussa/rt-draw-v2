@@ -1,11 +1,10 @@
-// T20's acceptance check: the history branch, checkpoints, anchors, eras, the yardstick and the human set.
+// T20's acceptance check: the history branch, checkpoints against A0, eras, the yardstick and the human set.
 // Part 1 runs real checkpoints on t15's fake bank (one headless Chrome, the gateway on the fake API, fake
 // tokens, 0 real calls; the fake API's requests must equal the gateway's calls): checkpoint 0 (A0 against
-// A0, the aa block), U1 frozen from fake recorded sends (a bench era, bridged by re-running the last pair)
-// and a judge change (an era bridged by re-judging the last checkpoint's packets). Part 2 runs the
-// bookkeeping on crafted rows in a second temp home with a small git repo: bench freeze of 32 + 32 and
-// verifyBench, the anchor rule, Q, both debts through an anchor move, markers, a measuring-code era, an
-// owner step, the ledger, tried patches, the owner list and the push. Ports 5325–5327.
+// A0, the aa block), U1 frozen from fake recorded sends (a new bench: the next era) and a judge change (a new
+// judgeId: the next era). Part 2 runs the bookkeeping on crafted rows in a second temp home with a small git
+// repo: bench freeze of 32 + 32 and verifyBench, A0 that never moves, a surely slower champion on the owner
+// list, markers, an owner step, the ledger, tried patches, the owner list and the push. Ports 5325–5327.
 //   TMPDIR=<work dir> node --import ./evals/loop/node-hooks.mjs evals/checks/t20-history.mjs
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -25,26 +24,21 @@ const fails = (...a) => { try { git(...a); return false; } catch { return true; 
 const json = (f) => JSON.parse(readFileSync(f, "utf8"));
 const lines = (f) => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 const write = (f, body) => (mkdirSync(dirname(f), { recursive: true }), writeFileSync(f, typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body)));
-const logit = (p) => Math.log(Math.min(0.95, Math.max(0.05, p)) / (1 - Math.min(0.95, Math.max(0.05, p))));
-const near = (a, b, e = 1e-9) => Math.abs(a - b) <= e;
 
 // A CheckpointRow as §5.3 has it: every field there, finite, intervals around their estimates.
 const fin = (x) => typeof x === "number" && Number.isFinite(x);
-const ratioOk = (x) => !!x && ["est", "lo90", "hi90", "lo95"].every((k) => fin(x[k]));
+const ratioOk = (x) => !!x && fin(x.est) && (x.p === undefined || (fin(x.p.slower) && fin(x.p.faster)));
 const shareOk = (x) => !!x && x.n > 0 && [x.share, x.lo90, x.hi90].every(fin) && x.lo90 <= x.share + 1e-9 && x.share <= x.hi90 + 1e-9;
 const latOk = (x) => !!x && ["ttfcP50", "ttfcP75", "ttdP50", "ttdP75", "ttfdP50", "ttfdP75", "renderP50", "renderP75"].every((k) => fin(x[k]));
 function invalid(r) {
-  const l = r.latency, q = r.quality?.vsQualityCheckpoint, h = r.health ?? {};
+  const l = r.latency, h = r.health ?? {};
   const t = (k) => r.aa?.tests?.[k];
   return Object.entries({
     id: /^ck-\d\d$/.test(r.id), head: fin(r.epoch) && fin(r.era) && !Number.isNaN(Date.parse(r.at)) && typeof r.machine === "string",
-    trust: ["green", "amber", "void"].includes(r.trust), arms: /^[0-9a-f]{40}$/.test(r.champion) && /^A\d+$/.test(r.anchor) && typeof r.anchorMoved === "boolean",
+    trust: ["green", "amber", "void"].includes(r.trust), arms: /^[0-9a-f]{40}$/.test(r.champion) && r.anchor === "A0",
     share: shareOk(r.share?.all) && ["heldout", "tuning", "human"].every((k) => r.share[k] === undefined || shareOk(r.share[k])) && shareOk(r.craft),
-    Q: [r.Q?.value, r.Q?.lo90, r.Q?.hi90].every(fin) && r.Q.lo90 <= r.Q.value + 1e-9 && r.Q.value <= r.Q.hi90 + 1e-9,
-    latency: latOk(l?.champion) && latOk(l?.anchor) && ratioOk(l?.ratioTtfc) && ratioOk(l?.ratioTtd) && fin(l?.chainedTtfc) && fin(l?.chainedTtd) && typeof l?.debt === "boolean"
-      && ratioOk(l?.ratioTtfd) && ratioOk(l?.ratioRender) && fin(l?.chainedTtfd) && fin(l?.chainedRender)
-      && ratioOk(l?.vsLatencyCheckpoint?.ttfd) && ratioOk(l?.vsLatencyCheckpoint?.render) && /^ck-\d\d$/.test(l?.vsLatencyCheckpoint?.L),
-    quality: typeof r.quality?.debt === "boolean" && [q?.dQ, q?.lo90, q?.hi90].every(fin) && /^ck-\d\d$/.test(q?.P),
+    latency: latOk(l?.champion) && latOk(l?.anchor) && ratioOk(l?.ratioTtfc) && ratioOk(l?.ratioTtd) && ratioOk(l?.ratioTtfd) && ratioOk(l?.ratioRender)
+      && (l.slower === undefined || /^latency veto: surely slower/.test(l.slower)),
     cost: fin(r.productUsdPerSend?.champion) && fin(r.productUsdPerSend?.anchor) && fin(r.overfitGap),
     health: ["voidPct", "flipPct", "hedgePct", "beatCompliance", "coldShare", "psiMedian"].every((k) => fin(h[k])) && typeof h.thinking === "object",
     aa: r.aa === undefined || (typeof r.aa.pass === "boolean" && r.aa.ci === 0.99 && ["ttfd", "render", "order", "share"].every((k) => [t(k)?.est, t(k)?.lo, t(k)?.hi, t(k)?.halfWidth].every(fin) && t(k).halfWidth > 0)),
@@ -71,11 +65,10 @@ const L = await fakeLoop({ port: 5325 });
   const b1 = C.freeze({ heldout: 4, tuning: 4, seed: "t20" });
   const ck0 = await C.checkpoint({ rig, epoch: 0, champion: champ });
   check(!invalid(ck0).length, `checkpoint 0's row isn't a valid CheckpointRow: ${invalid(ck0).join(", ")}`);
-  check(ck0.id === "ck-00" && ck0.anchor === "A0" && !ck0.anchorMoved && ck0.share.all.n === 8 - Math.round(ck0.health.voidPct * 8) && ck0.share.heldout && ck0.share.tuning, `checkpoint 0 isn't A0 against A0 on B1's 8 cases: ${JSON.stringify(ck0.share)}`);
+  check(ck0.id === "ck-00" && ck0.anchor === "A0" && ck0.era === 1 && ck0.bench === b1.hash.slice(0, 16) && !ck0.latency.slower && ck0.share.all.n === 8 - Math.round(ck0.health.voidPct * 8) && ck0.share.heldout && ck0.share.tuning, `checkpoint 0 isn't A0 against A0 on B1's 8 cases: ${JSON.stringify(ck0.share)}`);
   check(ck0.aa && ["ttfd", "render", "order", "share"].every((k) => ck0.aa.tests[k].halfWidth > 0), `checkpoint 0 carries no aa block with half-widths: ${JSON.stringify(ck0.aa)}`);
-  const anchors0 = json(join(hist, "anchors.json")), eras0 = json(join(hist, "eras.json"));
-  check(anchors0.length === 1 && anchors0[0].id === "A0" && anchors0[0].sha === champ.sha && anchors0[0].Q === 0, `anchors.json after checkpoint 0: ${JSON.stringify(anchors0)}`);
-  check(eras0.length === 1 && eras0[0].why === "bench" && eras0[0].bench === b1.hash.slice(0, 16) && /^[0-9a-f]{16}$/.test(eras0[0].judgeId) && eras0[0].measureHash === C.measureHash(), `eras.json after checkpoint 0: ${JSON.stringify(eras0)}`);
+  const anchors0 = json(join(hist, "anchors.json"));
+  check(JSON.stringify(anchors0) === JSON.stringify([{ id: "A0", sha: champ.sha }]) && /^[0-9a-f]{16}$/.test(ck0.judgeId) && !existsSync(join(hist, "eras.json")), `anchors.json after checkpoint 0: ${JSON.stringify(anchors0)}`);
   check(lines(join(hist, "health.jsonl")).some((h) => h.kind === "aa" && h.detail.checkpoint === "ck-00"), "checkpoint 0's A/A isn't in health.jsonl");
   check(!git("-C", hist, "status", "--porcelain") && git("-C", hist, "log", "--format=%s").includes("ck-00: share"), "checkpoint 0 wasn't committed on eval/history");
   check(json(join(hist, "runs", "ck-00.json")).rows.length === 8, "runs/ck-00.json doesn't hold checkpoint 0's rows");
@@ -100,26 +93,21 @@ const L = await fakeLoop({ port: 5325 });
     "a U1 case lost its typed words, meant or set");
   check(C.verifyBench("U1").ok && json(join(u1Dir, "manifest.json")).hash === u1.hash, "U1's manifest doesn't match its files");
 
-  // ---- ck-01: U1 joined the yardstick, so era 2 starts, bridged by re-running ck-00's pair on it.
+  // ---- ck-01: U1 joined the yardstick, a new bench: era 2, charted apart (nothing bridges two eras).
+  const eraMarks = () => lines(join(hist, "markers.jsonl")).filter((m) => m.kind === "era").map((m) => `${m.ref} ${m.era} ${m.label}`);
   const ck1 = await C.checkpoint({ rig, epoch: 1, champion: champ });
-  const eras1 = json(join(hist, "eras.json"));
-  const bridge = eras1[1]?.bridge;
-  check(!invalid(ck1).length && ck1.era === 2 && eras1.length === 2 && eras1[1].why === "bench" && eras1[1].bench === C.benchHash() && eras1[1].bench.includes("+"), `the U1 freeze didn't start a bench era: ${JSON.stringify(eras1.at(-1))}`);
-  check(bridge?.run === "ck-01-bridge" && [bridge.step.Q, bridge.step.ttfc, bridge.step.ttd].every(fin) && json(join(hist, "runs", "ck-01-bridge.json")).rows.length === 10, `the bench era's bridge didn't re-run the last pair: ${JSON.stringify(bridge)}`);
+  check(!invalid(ck1).length && ck1.era === 2 && ck1.bench === C.benchHash() && ck1.bench.includes("+") && eraMarks().join() === "ck-01 2 era 2: a new bench", `the U1 freeze didn't start era 2: ${ck1.era}, ${eraMarks().join(" / ")}`);
+  check(!existsSync(p.run("ck-01-bridge")) && JSON.stringify(json(join(hist, "anchors.json"))) === JSON.stringify(anchors0), "a new bench re-ran a pair or moved A0");
   check(ck1.share.human?.n === 2 || ck1.health.voidPct > 0, `ck-01 has no human line: ${JSON.stringify(ck1.share.human)}`);
-  check(u1Cases.every((c) => existsSync(join(u1Dir, c, "expectation.json"))) && C.verifyBench("U1").ok && C.benchHash() === eras1[1].bench, "U1's new expectations weren't written back, or moved its hash");
+  check(u1Cases.every((c) => existsSync(join(u1Dir, c, "expectation.json"))) && C.verifyBench("U1").ok && C.benchHash() === ck1.bench, "U1's new expectations weren't written back, or moved its hash");
 
-  // ---- ck-02: calibration adopts fidelity variant 2, a new judgeId: era 3, bridged by re-judging ck-01's packets.
+  // ---- ck-02: calibration adopts fidelity variant 2, a new judgeId: era 3, nothing re-judged.
   write(join(hist, "judge", "calibration.json"), { use: { fidelity: 2 } });
   const before = (await gatewayStatus(gw.url)).calls;
   const ck2 = await C.checkpoint({ rig, epoch: 2, champion: champ });
-  const eras2 = json(join(hist, "eras.json"));
-  const packets = readdirSync(join(p.run("ck-01"), "cases")).filter((c) => existsSync(join(p.run("ck-01"), "cases", c, "judge", "packet.json"))).length;
-  check(!invalid(ck2).length && ck2.era === 3 && eras2[2]?.why === "judge" && eras2[2].judgeId !== eras2[1].judgeId && eras2[2].bridge?.run === "ck-02-rejudge" && eras2[2].bridge.step.ttfc === 1 && fin(eras2[2].bridge.step.Q),
-    `a judge change didn't start an era bridged by a re-judge: ${JSON.stringify(eras2.at(-1))}`);
-  check(lines(join(p.run("ck-02-rejudge"), "rejudged.jsonl")).length === packets && packets > 0, `the re-judge didn't cover ck-01's ${packets} packets`);
+  check(!invalid(ck2).length && ck2.era === 3 && ck2.judgeId !== ck1.judgeId && eraMarks().at(-1) === "ck-02 3 era 3: a new judge" && !existsSync(p.run("ck-02-rejudge")), `a judge change didn't start era 3: ${ck2.era}, ${eraMarks().join(" / ")}`);
   check(!lines(join(hist, "markers.jsonl")).some((m) => m.kind === "harness" || m.kind === "served-model"), "a marker was written though the harness and served models didn't change");
-  console.error(`t20: ck-00 share ${ck0.share.all.share.toFixed(2)} (aa ${ck0.aa.pass ? "pass" : `fail ${JSON.stringify(ck0.aa.tests)}`}), ck-01 bridge step Q ${bridge.step.Q.toFixed(2)}, ck-02 re-judge step Q ${eras2[2].bridge.step.Q.toFixed(2)}; ${(await gatewayStatus(gw.url)).calls - before} calls for ck-02`);
+  console.error(`t20: ck-00 share ${ck0.share.all.share.toFixed(2)} (aa ${ck0.aa.pass ? "pass" : `fail ${JSON.stringify(ck0.aa.tests)}`}), eras ${[ck0, ck1, ck2].map((k) => k.era).join(" ")}; ${(await gatewayStatus(gw.url)).calls - before} calls for ck-02`);
 
   const total = (await gatewayStatus(gw.url)).calls;
   check(api.requests.length === total && total > 0, `the fake API got ${api.requests.length} requests for the gateway's ${total} calls`);
@@ -164,6 +152,26 @@ for (let k = 1; k <= 8; k++) for (let n = 1; n <= 4; n++) bankCase(`c-h-s${k}-${
 for (let k = 1; k <= 32; k++) for (let n = 1; n <= 2; n++) bankCase(`c-t-s${String(k).padStart(2, "0")}-${n}`, "tuning", `t-s${k}`, n, ASKS[(2 * k + 3 * n) % 8]);
 bankCase("c-g-s1-1", "heldout-gate", "g-s1", 1, "add");
 
+// ---- A decision's scan: no case retires, so past LOOP.bank.scanMax tuning cases each decision scans its own seeded
+// sample of whole sessions; under it, every case, as before the cap.
+{
+  const { scanCases } = await import("../loop/rte.ts");
+  const { LOOP } = await import("../loop/config.ts");
+  const all = scanCases("d1");
+  check(all.length === 65 && all.join() === [...all].sort().join(), `under the cap the scan didn't take all 64 tuning cases and the H-gate case, sorted: ${all.length}`);
+  const max = LOOP.bank.scanMax;
+  LOOP.bank.scanMax = 20;
+  const draws = ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"].map((s) => scanCases(s));
+  const again = scanCases("d1");
+  LOOP.bank.scanMax = max;
+  const tuningOf = (ids) => ids.filter((id) => id.startsWith("c-t-"));
+  const sessions = (ids) => new Set(tuningOf(ids).map((id) => id.replace(/-\d+$/, ""))).size;
+  check(draws.every((d) => tuningOf(d).length === 20 && sessions(d) === 10 && d.includes("c-g-s1-1")) && again.join() === draws[0].join(),
+    `past the cap a scan isn't 20 tuning cases in 10 whole sessions plus the H-gate case, the same for the same decision: ${draws.map((d) => `${tuningOf(d).length}/${sessions(d)}`).join(" ")}`);
+  const seen = new Set(draws.flatMap(tuningOf)).size;
+  check(new Set(draws.map((d) => d.join())).size === draws.length && seen >= 48, `8 decisions' samples aren't all different or reach only ${seen} of the 64 tuning cases`);
+}
+
 // ---- bench freeze: 32 H-chart + 32 tuning (one per session), a manifest whose hash recomputes; tampering is caught.
 const hist = H.openHistory();
 check(fails("-C", repo, "merge-base", "eval/history", "master") && existsSync(`${p.history}.void`) && JSON.parse(git("-C", repo, "show", "eval/history:judge/ids.json"))["j-early"], "a file written before the worktree wasn't adopted onto the orphan branch");
@@ -204,14 +212,15 @@ let served = "claude-x-1";
 const runner = async ({ run, anchor, champion }) => {
   asked.push({ run, anchor: anchor.sha, champion: champion.sha });
   if (!plans[run]) throw new Error(`no plan for run ${run}`);
-  // render: B's render ratio (null: rows without render, as before the metric); first drawing's ratio otherwise. flat:
-  // A's render carries the same per-case noise as B's, so the ratio is `render` at every case, tails included.
-  const { win, ratio = 1, render = 1, flat = false } = plans[run];
+  // ratio: B's over A's on the times, render: on render (null: rows without render, as before the metric). Each arm has the
+  // same spread of per-case noise, mirrored between them, so the ratio holds at the median and the tails alike, and the
+  // per-case ratios vary around it (as measured ones do).
+  const { win, ratio = 1, render = 1 } = plans[run];
   const rows = bench.map((x, i) => {
-    const jit = 1 + 0.02 * ((i % 5) - 2); // per-case noise, so every interval has a width
+    const ja = 1 + 0.02 * ((i % 5) - 2), jb = 1 + 0.02 * (2 - (i % 5));
     const s = win(x, i);
-    return { case: x.id, cluster: info.get(x.id).originSession, affected: true, class: "Q", s, sCraft: s, ttfc: [1000, Math.round(1000 * ratio * jit)], ttd: [3000, Math.round(3000 * ratio * jit)],
-      ttfd: [1000, Math.round(1000 * ratio * jit)], render: render === null ? [null, null] : [8 * (flat ? jit : 1), 8 * render * jit],
+    return { case: x.id, cluster: info.get(x.id).originSession, affected: true, class: "Q", s, sCraft: s, ttfc: [Math.round(1000 * ja), Math.round(1000 * ratio * jb)], ttd: [Math.round(3000 * ja), Math.round(3000 * ratio * jb)],
+      ttfd: [Math.round(1000 * ja), Math.round(1000 * ratio * jb)], render: render === null ? [null, null] : [8 * ja, 8 * render * jb],
       work: [1, 1], usd: [0.03, 0.03], thought: [false, false], overuse: [false, false], pics: [[0, 0], [0, 0]], ask: info.get(x.id).ask, firstArm: i % 2 ? "B" : "A" };
   });
   write(join(p.run(run), "rows.jsonl"), rows.map((x) => JSON.stringify(x)).join("\n") + "\n");
@@ -237,62 +246,38 @@ commits(4);
 
 const k0 = await run("ck-00", c[0], { win: even(0.5) });
 const k1 = await run("ck-01", c[1], { win: even(0.8), ratio: 1.1 });
-// ck-02 is the second slower checkpoint in a row: its debt is checked first in one run, the champion at L (ck-00's, c0)
-// against ck-02's, 1.10× as A1 was (LOOP-V2.md D2).
-plans["ck-02-debt"] = { win: even(0.5), ratio: 1.1 };
 const k2 = await run("ck-02", c[2], { win: even(0.5) });
 const k3 = await run("ck-03", c[3], { win: clumped, ratio: 0.88 });
 const k4 = await run("ck-04", c[4], { win: (x, i) => (tuningOf(x) && i % 5 === 1 ? 1 : -1) });
-const rowsOf = (id) => lines(join(p.run(id), "rows.jsonl"));
 for (const k of [k0, k1, k2, k3, k4]) check(!invalid(k).length, `${k.id}'s row isn't a valid CheckpointRow: ${invalid(k).join(", ")}`);
 
-// Anchors move only by §5.2's rule: share ≥ 0.70 with its 90% lower bound ≥ 0.60.
-const anchors = json(join(hist, "anchors.json"));
-check(k1.anchorMoved && k1.share.all.share >= 0.7 && k1.share.all.lo90 >= 0.6 && anchors.length === 2 && anchors[1].id === "A1" && anchors[1].sha === c[1] && near(anchors[1].Q, k1.Q.value), `ck-01 (share ${k1.share.all.share.toFixed(2)}, lo90 ${k1.share.all.lo90.toFixed(2)}) didn't freeze A1: ${JSON.stringify(anchors)}`);
-check(!k3.anchorMoved && k3.share.all.share >= 0.7 && k3.share.all.lo90 < 0.6 && !k0.anchorMoved && !k2.anchorMoved && !k4.anchorMoved, `the anchor moved on a share whose lower bound is under 0.60 (ck-03: ${JSON.stringify(k3.share.all)})`);
-check(lines(join(hist, "markers.jsonl")).filter((x) => x.kind === "anchor").map((x) => x.ref).join() === "ck-01", "the anchor move isn't one marker at ck-01");
-// Q chains: Q(anchor) + logit(share), the anchor's Q frozen with it.
-check(near(k0.Q.value, logit(k0.share.all.share)) && near(k1.Q.value, logit(k1.share.all.share)) && k2.anchor === "A1" && near(k2.Q.value, k1.Q.value + logit(k2.share.all.share)) && near(k4.Q.value, anchors[1].Q + logit(k4.share.all.share)),
-  `Q doesn't chain: ${[k0, k1, k2, k3, k4].map((k) => `${k.id} ${k.anchor} ${k.Q.value.toFixed(3)}`).join(", ")}`);
-// Latency debt through the move, on first drawing: ck-02's champion is as fast as A1, but A1 was 1.10× A0 in ck-01's own run.
-// ck-01 alone is only the signal: the debt starts on a second checkpoint in a row surely slower (LOOP-V2.md D2), ck-02.
-check(!k1.latency.debt && k1.debts.latency.signal && k1.latency.vsLatencyCheckpoint.L === "ck-00" && k1.latency.vsLatencyCheckpoint.ttfd.lo90 > 1, `ck-01 (1.10× slower) isn't the debt's first signal, short of debt: ${JSON.stringify(k1.debts.latency)}, ${JSON.stringify(k1.latency.vsLatencyCheckpoint)}`);
-const debtAsk = asked.find((x) => x.run === "ck-02-debt");
-check(k2.debtCheck?.confirmed && k2.debtCheck.run === "ck-02-debt" && debtAsk?.anchor === c[0] && debtAsk?.champion === c[2] && !asked.some((x) => x.run === "ck-01-debt"), `ck-02's debt wasn't checked against the champion at L in one run: ${JSON.stringify(k2.debtCheck)}, ${JSON.stringify(debtAsk)}`);
-check(k2.latency.debt && Math.abs(k2.latency.ratioTtfd.est - 1) < 0.03 && Math.abs(k2.latency.vsLatencyCheckpoint.ttfd.est - 1.1) < 0.03 && Math.abs(k2.latency.chainedTtfd - 1.1) < 0.03,
-  `ck-02's debt isn't the chain through ck-01's anchor move: ratio ×${k2.latency.ratioTtfd.est.toFixed(3)}, vs L ×${k2.latency.vsLatencyCheckpoint.ttfd.est.toFixed(3)}, chained ×${k2.latency.chainedTtfd.toFixed(3)}`);
-check(!k3.latency.debt && k3.debts.latency.L === "ck-03" && Math.abs(k3.latency.chainedTtfd - 0.968) < 0.03, `ck-03 (0.88× A1) didn't clear the debt and become L: ${JSON.stringify(k3.debts)}, chained ×${k3.latency.chainedTtfd.toFixed(3)}`);
-// Quality debt: ΔQ against P = ck-00 is this run's log-odds minus P's plus the move's (ck-01), all same-run shares.
-const dQ = logit(share(rowsOf("ck-04"))) - logit(share(rowsOf("ck-00"))) + logit(share(rowsOf("ck-01")));
-const q4 = k4.quality.vsQualityCheckpoint;
-check(k4.quality.debt && q4.P === "ck-00" && near(q4.dQ, dQ, 1e-6) && q4.hi90 < 0 && !k2.quality.debt && near(k2.quality.vsQualityCheckpoint.dQ, logit(share(rowsOf("ck-01"))) + logit(share(rowsOf("ck-02"))) - logit(share(rowsOf("ck-00"))), 1e-6),
-  `quality debt isn't the same-run chain through the move: ck-04 ${JSON.stringify(q4)} (want dQ ${dQ.toFixed(3)}), ck-02 ${JSON.stringify(k2.quality)}`);
-console.error(`t20: ck-01 share ${k1.share.all.share.toFixed(3)} lo90 ${k1.share.all.lo90.toFixed(3)} (moved); ck-03 share ${k3.share.all.share.toFixed(3)} lo90 ${k3.share.all.lo90.toFixed(3)} (kept A1); ck-02 first drawing ×${k2.latency.ratioTtfd.est.toFixed(3)} vs L ×${k2.latency.vsLatencyCheckpoint.ttfd.est.toFixed(3)} lo90 ${k2.latency.vsLatencyCheckpoint.ttfd.lo90.toFixed(3)}; ck-04 dQ ${q4.dQ.toFixed(3)} hi90 ${q4.hi90.toFixed(3)}`);
+// A0 is checkpoint 0's champion and never moves: every checkpoint runs against it, however well the champion does.
+check(JSON.stringify(json(join(hist, "anchors.json"))) === JSON.stringify([{ id: "A0", sha: c[0] }]) && asked.every((a) => a.anchor === c[0]) && k1.share.all.share >= 0.7,
+  `A0 moved, or a checkpoint ran against something else: ${JSON.stringify(json(join(hist, "anchors.json")))}, ${JSON.stringify(asked.map((a) => a.anchor.slice(0, 7)))}`);
+// The champion surely slower than A0 in the same run goes to the owner list; faster doesn't.
+const ownerList = () => readFileSync(join(hist, "owner-list.md"), "utf8");
+check(/^latency veto: surely slower.*most on (ttfd|render)/.test(k1.latency.slower ?? "") && ownerList().includes("ck-01: the champion is surely slower than A0") && !k3.latency.slower && !ownerList().includes("ck-03:"),
+  `ck-01 (1.10× A0) isn't surely slower on the owner list, or ck-03 (0.88×) is: ${k1.latency.slower}, ${k3.latency.slower}`);
+check(Math.abs(k1.latency.ratioTtfd.est - 1.1) < 0.03 && Math.abs(k3.latency.ratioTtfd.est - 0.88) < 0.03 && k1.latency.ratioTtfd.p.slower < 0.05 && k3.latency.ratioTtfd.p.faster < 0.05,
+  `the same-run ratios against A0: ck-01 ${JSON.stringify(k1.latency.ratioTtfd)}, ck-03 ${JSON.stringify(k3.latency.ratioTtfd)}`);
+console.error(`t20: ck-01 share ${k1.share.all.share.toFixed(3)} first drawing ×${k1.latency.ratioTtfd.est.toFixed(3)} (${k1.latency.slower}); ck-03 ×${k3.latency.ratioTtfd.est.toFixed(3)}`);
 // The overfitting gap above 0.15 at two checkpoints in a row → the owner list.
-check(k3.overfitGap > 0.15 && k4.overfitGap > 0.15 && /overfitting.*ck-04/.test(readFileSync(join(hist, "owner-list.md"), "utf8")), `the overfitting gap (${k3.overfitGap.toFixed(2)}, ${k4.overfitGap.toFixed(2)}) twice didn't reach the owner list`);
+check(k3.overfitGap > 0.15 && k4.overfitGap > 0.15 && /overfitting.*ck-04/.test(ownerList()), `the overfitting gap (${k3.overfitGap.toFixed(2)}, ${k4.overfitGap.toFixed(2)}) twice didn't reach the owner list`);
 
-// ---- A harness re-pin and a new served model are markers only; measuring code starts an era, bridged by re-running the last pair.
+// ---- A harness re-pin, a new served model and new judge code are markers or nothing: only a new judgeId or bench starts an era.
 commits(1);
 commitIn(repo, { "evals/README.md": "re-pinned\n" }, "harness 2");
 git("-C", repo, "tag", "eval-harness-2");
 served = "claude-x-2";
-// ck-04 and ck-05 are back at A1's speed, 1/0.88 of L's (ck-03's champion): the second in a row starts debt, checked.
-plans["ck-05-debt"] = { win: even(0.5), ratio: 1 / 0.88 };
 const k5 = await run("ck-05", c[5], { win: even(0.5) });
-check(!k4.latency.debt && k4.debts.latency.signal && k5.latency.debt && k5.debtCheck?.confirmed && asked.find((x) => x.run === "ck-05-debt")?.anchor === c[3], `ck-04 and ck-05 (slower than L ck-03 twice) didn't start a checked debt: ${JSON.stringify(k4.debts.latency)}, ${JSON.stringify(k5.debtCheck)}`);
 const marks5 = lines(join(hist, "markers.jsonl")).filter((x) => x.at === k5.at);
-check(marks5.some((x) => x.kind === "harness" && x.ref === "eval-harness-2") && marks5.some((x) => x.kind === "served-model" && x.ref === "claude-x-2") && json(join(hist, "eras.json")).length === 1 && k5.era === 1,
-  `a harness tag or served-model change did more than add a marker: markers ${JSON.stringify(marks5)}, eras ${json(join(hist, "eras.json")).length}`);
+check(marks5.some((x) => x.kind === "harness" && x.ref === "eval-harness-2") && marks5.some((x) => x.kind === "served-model" && x.ref === "claude-x-2") && k5.era === 1,
+  `a harness tag or served-model change did more than add a marker: markers ${JSON.stringify(marks5)}, era ${k5.era}`);
 commits(1);
 commitIn(repo, { "evals/judge/judge.ts": "// judge, changed\n" }, "harness 3: judge code");
 git("-C", repo, "tag", "eval-harness-3");
-plans["ck-06-bridge"] = { win: even(0.6), ratio: 1.2 };
 const k6 = await run("ck-06", c[6], { win: even(0.5) });
-const eras = json(join(hist, "eras.json"));
-const e2 = eras[1];
-check(eras.length === 2 && e2.why === "measure" && e2.measureHash === C.measureHash() && e2.measureHash !== eras[0].measureHash && k6.era === 2 && e2.bridge?.run === "ck-06-bridge", `a measuring-code change didn't start a bridged era: ${JSON.stringify(eras)}`);
-check(asked.some((a) => a.run === "ck-06-bridge" && a.anchor === c[1] && a.champion === c[5]) && near(e2.bridge.step.Q, logit(share(rowsOf("ck-06-bridge"))) - logit(k5.share.all.share)) && Math.abs(e2.bridge.step.ttd - 1.2 / k5.latency.ratioTtd.est) < 1e-9 && Math.abs(e2.bridge.step.ttfd - 1.2 / k5.latency.ratioTtfd.est) < 1e-9,
-  `the bridge didn't re-run ck-05's pair (A1 against its champion) or its step is off: ${JSON.stringify(e2.bridge)}`);
+check(k6.era === 1 && !lines(join(hist, "markers.jsonl")).some((x) => x.kind === "era" || x.kind === "anchor") && !existsSync(join(hist, "eras.json")), `judge code without a new judgeId started an era: ${k6.era}`);
 
 // ---- An owner step: a checkpoint, an owner-step DecisionRow and a labelled marker.
 commits(1);
@@ -312,11 +297,11 @@ const wt = join(home, "wt-cand");
 git("-C", repo, "worktree", "add", "-q", "-b", "cand/e1-h1", wt, c[7]);
 const cand = commitIn(wt, { "src/app.ts": "export const v = 'a candidate';\n" }, "candidate: resolve with fewer words");
 const { decide } = await import("../loop/verdict.ts");
-const card = { id: "e1-h1", component: "draw", kind: "code", change: "draw prose opener", goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: ["src/app.ts"] };
+const card = { id: "e1-h1", component: "draw", kind: "code", change: "draw prose opener", goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "", files: ["src/app.ts"] };
 const dRows = bench.filter(tuningOf).slice(0, 16).map((x, i) => ({ case: x.id, cluster: info.get(x.id).originSession, affected: true, class: "Q", s: -1, ttfc: [1000, 1010], ttd: [3000, 3030], ttfd: [1000, 1010], render: [8, 8], work: [1, 1], usd: [0.03, 0.03], thought: [false, false], overuse: [false, false], pics: [[0, 0], [0, 0]], ask: info.get(x.id).ask, firstArm: i % 2 ? "B" : "A" }));
 write(join(p.run("e1-h1-g2"), "rows.jsonl"), dRows.map((x) => JSON.stringify(x)).join("\n") + "\n");
 write(join(p.run("e1-h1-g2"), "run.json"), { id: "e1-h1-g2", kind: "ab", meter: { calls: 40, listUsd: 1.5, minutes: 9 } });
-const decision = decide({ tuning: dRows, exhausted: true, flips: { audited: 0, flipped: 0 }, cold: [0, 0], invariants: 0 }, card, { latencyDebt: false, qualityDebt: false });
+const decision = decide({ tuning: dRows, exhausted: true, flips: { audited: 0, flipped: 0 }, cold: [{ n: 0, of: 0 }, { n: 0, of: 0 }], invariants: 0 }, card);
 const d = H.decisionRow({ id: "e1-h1", epoch: 8, card, candSha: cand, baseSha: c[7], run: "e1-h1-g2", judgeId: "j-check", result: { rows: dRows, decision }, affected: { tuning: 16, of: 64, topUp: 0 } });
 const head = H.recordDecision(d, { owner: ["3 failures in a row on draw"] });
 const patch = readFileSync(join(hist, "tried", "e1-h1.patch"), "utf8");
@@ -336,28 +321,9 @@ write(p.machine, { host: "check-host", slots: 2, dispatchLimitMs: 25 });
 H.recordMachine();
 check(json(join(hist, "machine", "check-host.json")).dispatchLimitMs === 25, "machine.json wasn't kept as machine/<host>.json");
 
-// ---- A debt check that doesn't confirm spends the signal; one metric's debt is checked against its own chain's start.
-// ck-08 clears ck-05's debt (first drawing back at L's speed) and becomes L, with no render; render is first measured at
-// ck-09, so its chain runs from ck-09, not L. ck-10 and ck-11 are render 1.2× slower than ck-09: the second starts debt,
-// checked against ck-09's champion (not L's), and the check finds them alike, so L moves to ck-11 and ck-12 is no signal.
-commits(5);
-const k8 = await run("ck-08", c[8], { win: even(0.5), ratio: 0.88, render: null });
-const k9 = await run("ck-09", c[9], { win: even(0.5), ratio: 0.88 });
-const k10 = await run("ck-10", c[10], { win: even(0.5), ratio: 0.88, render: 1.2 });
-plans["ck-11-debt"] = { win: even(0.5), flat: true };
-const k11 = await run("ck-11", c[11], { win: even(0.5), ratio: 0.88, render: 1.2 });
-const k12 = await run("ck-12", c[12], { win: even(0.5), ratio: 0.88, render: 1.2 });
-check(!k8.latency.debt && k8.debts.latency.L === "ck-08" && !k9.debts.latency.signal && k9.latency.vsLatencyCheckpoint.render?.since === "ck-09", `ck-08 didn't clear the debt and become L, or render's chain doesn't start at ck-09: ${JSON.stringify(k8.debts.latency)}, ${JSON.stringify(k9.latency.vsLatencyCheckpoint)}`);
-const ask11 = asked.find((x) => x.run === "ck-11-debt");
-check(k10.debts.latency.signal && !k10.latency.debt && !asked.some((x) => x.run === "ck-10-debt") && ask11?.anchor === c[9] && ask11.champion === c[11], `render's debt wasn't checked against ck-09's champion (its chain's start): ${JSON.stringify(k10.debts.latency)}, ${JSON.stringify(ask11)}`);
-check(k11.debtCheck && !k11.debtCheck.confirmed && k11.debtCheck.against === "ck-09" && !k11.latency.debt && JSON.stringify(k11.debts.latency) === JSON.stringify({ debt: false, signal: false, L: "ck-11" }), `an unconfirmed debt check didn't spend the signal and move L: ${JSON.stringify(k11.debtCheck)}, ${JSON.stringify(k11.debts.latency)}`);
-check(!k12.debts.latency.signal && !k12.latency.debt, `ck-12, as slow as the new L, signalled debt again: ${JSON.stringify(k12.debts.latency)}`);
-// ck-08 has no render on purpose (a checkpoint from before the metric); the rest are whole rows.
-for (const k of [k9, k10, k11, k12]) check(!invalid(k).length, `${k.id}'s row isn't a valid CheckpointRow: ${invalid(k).join(", ")}`);
-
 // ---- Everything above is on the branch: one commit per record, nothing left uncommitted.
 const log = git("-C", hist, "log", "--format=%s");
-check(["bench freeze: B1", ...["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"].map((n) => `ck-${n}: share`), "e1-h1: revert", "adopt what was written"].every((s) => log.includes(s)) && Number(git("-C", hist, "rev-list", "--count", "HEAD")) >= 17,
+check(["bench freeze: B1", ...["00", "01", "02", "03", "04", "05", "06", "07"].map((n) => `ck-${n}: share`), "ck-01: share 0.80 against A0, surely slower", "e1-h1: revert", "adopt what was written"].every((s) => log.includes(s)) && Number(git("-C", hist, "rev-list", "--count", "HEAD")) >= 12,
   `eval/history's log is missing a record:\n${log}`);
-check(JSON.parse(git("-C", repo, "show", "eval/history:anchors.json")).length === 2 && git("-C", repo, "show", "eval/history:checkpoints.jsonl").split("\n").length === 13, "the committed anchors or checkpoints differ from the worktree's");
+check(JSON.parse(git("-C", repo, "show", "eval/history:anchors.json")).length === 1 && git("-C", repo, "show", "eval/history:checkpoints.jsonl").split("\n").length === 8, "the committed anchors or checkpoints differ from the worktree's");
 finish();

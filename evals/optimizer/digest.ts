@@ -39,7 +39,7 @@ const read = <T>(file: string): T | undefined => {
 const cut = (s: string | undefined, n = DIGEST.textChars) => (!s ? "" : s.length > n ? `${s.slice(0, n - 1)}…` : s).replace(/\s+/g, " ");
 const q = (s?: string) => `"${cut(s)}"`;
 
-/** A banked case's folder: the bank, or the archive it retired to. */
+/** A banked case's folder: the bank, or the archive (cases from before 2026-10-26 could retire there). */
 const bankDir = (id: string) => (existsSync(paths().bankCase(id)) ? paths().bankCase(id) : join(paths().bankArchive, id));
 const bank = <T>(id: string, f: string) => read<T>(join(bankDir(id), f));
 /** Only tuning cases (the bank's, refreshes' and top-ups') are ever digested: held-out ones would teach the optimizer the yardstick. */
@@ -233,8 +233,6 @@ export type DigestInput = {
   wont?: string[];
   /** Reverted cards that leaned the right way without proving it (run.ts' nearWins): to combine or retry. */
   nearWins?: string[];
-  /** In latency debt: how slow, and the keeps since the latency checkpoint (run.ts' debtLines). */
-  debt?: string[];
 };
 
 /** The analyst's input: champion misses first, then candidate losses, trace patterns, latency, failures, ledger, tried. */
@@ -253,8 +251,7 @@ export function analystDigest(o: DigestInput): string {
     ],
     budget(DIGEST.share.rest));
   const wont = o.wont?.length ? `# 0. What the loop won't run now (don't propose it)\n${o.wont.map((w) => `- ${w}`).join("\n")}` : undefined;
-  const debt = o.debt?.length ? `# 0. Latency debt (repay it first)\n${o.debt.join("\n")}` : undefined;
-  return [...(wont ? [wont] : []), ...(debt ? [debt] : []), missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
+  return [...(wont ? [wont] : []), missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
 }
 
 // ---- The failure analyst's digest: at most 12 cases in full

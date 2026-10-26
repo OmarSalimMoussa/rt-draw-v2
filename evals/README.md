@@ -8,7 +8,9 @@
 In 22 hours of testing itself, rt-draw got about twice as fast. The wait for the first change on screen fell from 5.8
 to 2.4 seconds, and the wait for a finished sketch from 7.1 to 3.9 seconds. A program tried 112 changes, timed and
 judged each one against the best version so far, and kept the winners. No person timed a request or judged a drawing:
-an AI judge, checked against a person's judgment first, rated the drawings as good as before.
+an AI judge, checked against a person's judgment first, rated the drawings as good as before. (This run timed the first
+change and the finished sketch; the loop now decides on time to first drawing and the engine's render time alone, as
+`LOOP-V2.md` says.)
 
 ## The short version
 
@@ -18,7 +20,8 @@ an AI judge, checked against a person's judgment first, rated the drawings as go
   far on hundreds of recorded requests, and keeps it only if it's faster or better and nothing got worse.
 - **No person picking winners.** Ideas came from two places: the loop's own AI critic, which wrote 89 of the 112, and a
   queue a person could add to, which supplied 23. Either way, the loop built each change, measured it and decided. It
-  hands a person only the calls that aren't its to make: a change that costs more money or changes how rt-draw looks.
+  hands a person only the calls that aren't its to make: in this run, a change that cost more money or changed how
+  rt-draw looks (cost is now only reported).
 - **The result.** 112 changes tried in 64 rounds: 7 kept by the loop, 9 handed to a person (who adopted 3), and 96
   thrown away.
 
@@ -33,7 +36,7 @@ The loop is a very patient tester that never gets tired:
 3. **Test it fairly.** The best version so far and the changed one get the same recorded requests at the same moment.
    A stopwatch times both. A judge looks at both drawings side by side, without knowing which is which.
 4. **Decide.** Clearly faster or better, and nothing worse? Keep it. No clear win? Throw it away and remember not to
-   try it again. Costs more money or changes the look? Ask a person.
+   try it again. Changes the look or the model? Ask a person.
 5. **Check the big picture.** After every couple of kept changes, the best version is compared with the original on a
    fixed set of 62 requests. That's the chart above.
 
@@ -87,7 +90,8 @@ Most ideas don't work, and the loop is built for that. A few it rejected:
 - **Changes too rare to measure.** A change that affects fewer than 32 of the recorded requests can't be judged fairly,
   so it's reverted and listed for a person.
 - **13 void decisions.** The measurement itself was unfair, for example when one side started on cold processes 14% of
-  the time and the other never did. A void is never a verdict on the change; the loop re-runs or drops it.
+  the time and the other never did. A void is never a verdict on the change. The loop re-ran voids then, and every re-run
+  voided again; now a void goes to a person, and every case is warmed up before it's timed.
 
 The loop stopped for 9 hours in the middle (its proposers ran out of cards to try) until a person restarted it.
 
@@ -141,17 +145,17 @@ flowchart TD
     LAB["A person labels ~90 pairs"] --> CAL["Judge calibrated"]
   end
   subgraph rounds["Each round: 64 in 22 hours"]
-    AN["Analyst and critic read digests of where the champion fails or is slow"] --> CARDS["Up to 3 cards"]
+    AN["Analyst and critic read digests of where the champion fails or is slow"] --> CARDS["Up to 6 cards (3 in this run)"]
     PQ["A person's queued cards: 23 of 112"] --> CARDS
     CARDS --> ENG["Engineer agent edits src/core in its own worktree"]
     ENG --> G0["G0 free gates: allowed files, no new magic numbers, typecheck"]
-    G0 --> G1["G1 diffscan at 0 calls: which banked cases change?"]
+    G0 --> G1["G1 diffscan at 0 Claude calls: which banked cases change?"]
     G1 --> AB["A/B on affected cases: same moment, live calls, timed and judged in looks of 16 to 80"]
     AB --> G3["G3 on held-out cases: may only veto"]
     G3 --> V{"Verdict"}
     V -->|"better or faster, never slower"| KEEP["Keep: commit to loop/champion"]
     V -->|"no clear win"| REV["Revert: patch saved to tried/"]
-    V -->|"the look, a patch, a model switch"| OWN["Owner list"]
+    V -->|"the look, a patch"| OWN["Owner list"]
     V -->|"unfair measurement"| VOID["Void"]
   end
   setup --> rounds
@@ -176,22 +180,26 @@ decision pays for a driver. Cases are split three ways: **tuning** (the only one
 
 ### Proposing a change
 
-Each round, the **analyst** (one call) reads digests of at most 40k tokens built by frozen code from the bank and the
-runs (`optimizer/digest.ts`): where the champion itself fails first, then slow traces. The **critic** (a read-only
-Agent SDK session) turns that into up to six **cards**, each one change with its goal (latency, fidelity or craft),
-what it predicts and its risk. A sweep (one knob at several values, stopping at the first keep) and a combination of
-near wins (reverted changes that leaned the right way) are one card each (`LOOP-V2.md`, D). An **engineer** (an Agent SDK session) implements a card in its own git worktree. A
-candidate may only change `src/core/`, minus speech; every new number in it must become a named knob in `tuning.ts`.
-A person's cards go through the same queue: the seed cards (`optimizer/seed-cards.json`) start the first rounds, and
-`--seed-cards` adds more to a running loop.
+Each round, the **analyst** reads digests of at most 40k tokens built by frozen code from the bank and the runs
+(`optimizer/digest.ts`): where the champion itself fails first, then slow traces. It brainstorms hypotheses, one idea
+each, and may read the champion's code and research on the web. The **critic** turns those into up to six **cards**,
+each one change with its goal (latency, fidelity or craft) and its risk. Both are read-only Agent SDK sessions. Any
+model may be switched, or a send routed to one of several by how hard it is; each is measured like any other change. A
+sweep (one knob at several values, stopping at the first keep) and a combination of near wins (reverted changes that
+leaned the right way) are one card each (`LOOP-V2.md`, D). An **engineer** (an Agent SDK session that may also read
+docs on the web) implements a card in its own git worktree. A candidate may only change `src/core/`, minus speech;
+every new number in it must become a named knob in `tuning.ts`. A person's cards go through the same queue: the seed
+cards (`optimizer/seed-cards.json`) start the first rounds, and `--seed-cards` adds more to a running loop.
 
 ### The funnel: free first, paid last
 
 1. **G0, free gates** (`optimizer/gates.ts`, 0 calls): allowed paths, the magic-number lint, no new network or speech,
    `tsc` in the candidate's tree, and every banked scene through the candidate's `Scene.fromJSON` when `scene.ts`
    changed. A diff in the measuring side or the editor's look goes to the owner list, never back to an engineer.
-2. **G1, the diffscan** (`loop/diffscan.ts`, 0 calls): both versions run every banked case with the bank's recorded
-   replies served instantly. A case is affected when any request, the scene after or the rendered stage differs; only
+2. **G1, the diffscan** (`loop/diffscan.ts`, 0 Claude calls): both versions run every banked case with the bank's recorded
+   replies served instantly. A Jev question the bank never recorded (a router newer than the bank) is asked live, both
+   versions sharing the answer: ~0.1 s and next to free, and without it a change to how the answer is used read as N.
+   A case is affected when any request, the scene after or the rendered stage differs; only
    affected cases are ever paid for. The scan also classifies the change: N (no effect), S (speed only, from a timed
    replay), Q (a request differs), R (a render differs) or D (dialogue: state only a later send reads).
 3. **G2, the A/B** (`loop/ab.ts`): both versions start from the same fork point on freshly reloaded pages and get the
@@ -217,8 +225,8 @@ that swaps the arms of whole sessions, exact at any number of sessions; session 
   latency isn't surely slower, and
   fidelity holds: Z of at least 0 at look 32, -0.5 at 48, -1.0 at 80. A
   fidelity Z of -1.25 or worse ends it: the speed costs fidelity.
-- **Vetoes.** Surely slower at all on time to first drawing or render, at the median or a tail, on the A/B's cases
-  or the held-out ones (the swap test's p under 0.05); losing on held-out cases; more empty sends or failed pictures; a
+- **Vetoes.** Surely slower at all on time to first drawing or render, at the median or a tail: one swap test over
+  all of them, the A/B's cases and the held-out ones together, family-wise p under 0.05; losing on held-out cases; more empty sends or failed pictures; a
   render() that leaves work for after it returns. A case only one arm failed is that arm's loss (not an empty send).
   Cost is reported, never a veto (`LOOP-V2.md`).
 - **Sweeps and combos.** A sweep's values, or a combo's near-wins, share one card's chance of a false keep: each needs
@@ -230,8 +238,9 @@ that swaps the arms of whole sessions, exact at any number of sessions; session 
 
 After every second keep, `loop/checkpoint.ts` runs the champion against the frozen original (A0) on benchmark B1, live
 and unshared, judged for fidelity and craft on every case. That gives the champion's share with a 90% bootstrap, the
-latency ratios, an overfitting gap (tuning against held out), health numbers and a trust level. Changing the judge, the
-benchmark or the measuring code starts a new **era**, bridged so the numbers carry across; era 2 began at hour 0.
+latency ratios in the same run, an overfitting gap (tuning against held out), health numbers and a trust level; a
+champion surely slower than A0 goes on the owner list. Changing the judge or the benchmark starts a new **era**, charted
+apart: nothing bridges two eras. Era 2 began at hour 0.
 
 ### The judge
 
@@ -257,8 +266,8 @@ stops at the cap instead of burning a usage window.
 ### Guard rails
 
 The loop stops itself on the weekly allowance (50%), two voids in a row, a broken invariant, failed readiness or
-calibration, or a merge conflict. It pauses, before any paying case, while every token is past 60% of its five-hour
-window (and before every top-up or continuation send), and until the next night once the night cap is spent. After six reverts in a row (an epoch's cards)
+calibration, or a merge conflict. It pauses, before any paying case, while every token is past 90% of its five-hour
+window (and before every top-up or continuation send). After six reverts in a row (an epoch's cards)
 in one area it rests that area until the next checkpoint. Everything it can't decide lands in `owner-list.md`.
 
 ### Why it's built this way: v1 cost too much
@@ -267,7 +276,7 @@ rt-draw v1 had a loop too. It worked: 126 wins, 13 losses and 11 ties over 150 p
 4.0 to 1.5 s. But each decision took about 2 hours and a quarter to a third of a five-hour usage window, and two
 accounts' windows were gone in one day.
 
-- v1's coordinator was an Opus session that re-read ~375k tokens a request; here it's a script (`loop/run.ts`).
+- v1's coordinator was an Opus session that re-read ~375k tokens a request; here it's a script (`loop/coordinator.ts`).
 - Every v1 call wrote the 1-hour cache (half its use); here every call is 5-minute cached and metered.
 - v1 re-ran whole sessions for every change; here fork points are banked once and only affected cases are paid.
 - No step makes a real call without `--cap n`.
@@ -293,13 +302,18 @@ No person timed a request, judged a drawing or picked a winner from the numbers.
 
 ## The code and the data
 
+Names that look alike: **A0** is the frozen original every checkpoint runs against, **B1** the frozen benchmark,
+**U1** the owner's recorded sends and **R1** testers' real sends with gold (`real/README.md`). **G0** to **G4** are the
+funnel's gates; the case study's **A** to **G** are changes. A class (**N**, **S**, **Q**, **R**, **D**) is what the
+diffscan says a change touches; a **slot** is a case slot in a run, and also a token's place in the tokens file.
+
 | Where | What |
 | --- | --- |
 | `core/` | the driver's prompt and parsing, personas, the frozen scenario table, synthetic speech and ink |
 | `driver/` | a demo page to watch a driver use the product |
 | `bridge/` | the page each arm runs the product in, with the harness's own clock and ink overlay |
 | `fixtures/` | frozen start scenes and their baked pictures |
-| `loop/` | the coordinator (`run.ts`), gateway, bank, A/B runner, diffscan, verdicts, statistics, checkpoints |
+| `loop/` | the CLI (`run.ts`, its commands in `commands/`, one decision in `decide.ts`, the loop in `coordinator.ts`, the command line in `rte.ts`), gateway, bank, A/B runner, diffscan, verdicts, statistics, checkpoints |
 | `judge/` | the judges, their frozen prompts, calibration and a canary |
 | `optimizer/` | the analyst, critic and engineer, their digests, prompts and gates, and the seed cards |
 | `progress/`, `label/`, `pages/` | the progress page, the labeling page and their server |
@@ -315,4 +329,5 @@ No person timed a request, judged a drawing or picked a winner from the numbers.
   `./node_modules/.bin/vite --config evals/pages.vite.config.ts --port 5181` and open
   http://localhost:5181/evals/progress/.
 - **Running the loop yourself:** `evals/RUNBOOK.md` has every command, cap, cost and time. Code comments cite the
-  design spec by section (§1 to §12); the spec itself isn't in this repo.
+  design spec by section (§1 to §12); the spec itself isn't in this repo, and where they differ, `evals/LOOP-V2.md`
+  and the code are what holds.

@@ -1,7 +1,7 @@
-# rt-draw on the ember box, apart from Ember: its own project, network, volume and loopback
-# port. The factory's edge reaches it through /srv/factory/edge/sites/rtdraw.caddy, which
-# scripts/deploy.sh writes; nothing here or there is Ember's. This is v2's app in v1's place:
-# same project, container and port, its own volume (v1's rtdraw-data stays as it was).
+# rt-draw on the EmberHub box: its own project, network, volume and loopback port. The box's
+# edge reaches it through /srv/edge/sites/rtdraw.caddy, which scripts/deploy.sh writes. This is
+# v2's app in v1's place: same project, container and port, its own volume (v1's rtdraw-data
+# stays as it was).
 name: rtdraw
 
 services:
@@ -9,19 +9,23 @@ services:
     image: rtdraw:${RTDRAW_TAG:?}
     container_name: rtdraw-app
     restart: unless-stopped
-    # rtdraw.env (v1's) holds CLAUDE_CODE_OAUTH_TOKEN and ELEVENLABS_API_KEY; rtdraw-v2.env holds TYPESAFE_API_KEY (Jev),
-    # MAILER_SECRET and MAILER_URL (deploy/README.md).
-    env_file:
-      - rtdraw.env
-      - rtdraw-v2.env
+    # Keys come from the box's one shared /srv/emberhub.env (described in /srv/KEYS.md), which compose
+    # reads through the .env link beside this file. The app gets only the keys named here: never
+    # ANTHROPIC_API_KEY, which the Claude SDK would use over the subscription's token.
     environment:
       # Invite links are made with this address.
       PUBLIC_URL: https://imagine.emberhub.dev
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:?}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:?}
+      # The mailer (deploy/README.md); without it the admin page shows each link to copy.
+      MAILER_URL: ${MAILER_URL:-}
+      MAILER_SECRET: ${MAILER_SECRET:-}
     ports:
       - "127.0.0.1:8700:8200"
     volumes:
       - rtdraw-v2-data:/data
-    # Ember's agents share this machine; rt-draw must not starve them.
+    # Other apps share this machine; rt-draw must not starve them.
     mem_limit: 3g
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8200/').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]

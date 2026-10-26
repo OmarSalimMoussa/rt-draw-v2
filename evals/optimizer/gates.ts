@@ -314,52 +314,11 @@ export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?
  * element, never an outline shown before it).
  */
 export const OWNER_KNOBS = ["render.pictureBox"];
-/** A knob that picks a model: `x.model`, `router.fastModel`, `resolve.jevModel`, and who resolves (`resolve.engine`). */
-export const MODEL_KNOB = /model$|\.engine$/i;
-/** A model's share of a case's output moving this much between the arms is a switch, as is a model only one arm used. */
-const SHIFT_SHARE = 0.4;
-
-/**
- * Model switches read off what each arm called (LOOP-V2.md C3), whatever made them: a knob, a literal in code, a routing
- * rule that sends the full lane's sends to the fast lane, a call relabelled. Role labels are the candidate's own, so
- * they aren't read: per case, the models one arm called and the other didn't, or a model whose share of the case's
- * output tokens moved SHIFT_SHARE or more. Routing is deterministic, so 2 such cases are a switch. Calls sent live or
- * replayed from the bank count (a scan's don't: it reads every banked case); a shared call's follower meters no tokens,
- * so it takes its leader's, and the caller gives a replay its recorded ones.
- */
-export function modelShifts(calls: { case?: string; arm?: string; model: string; mode?: string; outTokens?: number; reqHash?: string; shared?: string }[]): string[] {
-  type Arm = { models: Map<string, number>; out: number };
-  const by = new Map<string, { A: Arm; B: Arm }>();
-  const leaders = new Map(calls.filter((c) => c.shared === "leader").map((c) => [`${c.case} ${c.reqHash}`, c.outTokens ?? 0]));
-  for (const c of calls) {
-    if (!c.case || (c.arm !== "A" && c.arm !== "B") || (c.mode !== "live" && c.mode !== "replay")) continue;
-    const e = by.get(c.case) ?? by.set(c.case, { A: { models: new Map(), out: 0 }, B: { models: new Map(), out: 0 } }).get(c.case)!;
-    const arm = e[c.arm];
-    const out = (c.shared === "follower" ? leaders.get(`${c.case} ${c.reqHash}`) : undefined) ?? c.outTokens ?? 0;
-    arm.models.set(c.model, (arm.models.get(c.model) ?? 0) + out);
-    arm.out += out;
-  }
-  let cases = 0, of = 0;
-  const gained = new Set<string>(), lost = new Set<string>(), moved = new Set<string>();
-  for (const { A, B } of by.values()) {
-    if (!A.models.size || !B.models.size) continue;
-    of++;
-    const g = [...B.models.keys()].filter((m) => !A.models.has(m)), l = [...A.models.keys()].filter((m) => !B.models.has(m));
-    const share = (x: Arm, m: string) => (x.out ? (x.models.get(m) ?? 0) / x.out : 0);
-    const mv = [...A.models.keys()].filter((m) => B.models.has(m) && Math.abs(share(B, m) - share(A, m)) >= SHIFT_SHARE);
-    if (!g.length && !l.length && !mv.length) continue;
-    cases++;
-    g.forEach((m) => gained.add(m)), l.forEach((m) => lost.add(m)), mv.forEach((m) => moved.add(m));
-  }
-  if (cases < 2) return [];
-  return [`models differ on ${cases} of ${of} cases${gained.size ? `: B used ${[...gained].sort().join("+")}` : ""}${lost.size ? `, dropped ${[...lost].sort().join("+")}` : ""}${moved.size ? `, moved output of ${[...moved].sort().join("+")}` : ""}`];
-}
-
 /**
  * The card rules of §8.4 that send a card to the owner list (the coordinator applies them: a patch question with
  * its A/B evidence, the rest before anything is built). Cost never does: it is reported, never gating (the owner,
- * LOOP-V2.md A3). The picture model may be switched under the latency and quality rules (C3), so picture.model is
- * measured; a keep of it waits for the judge's illustration calibration (the coordinator's hold).
+ * LOOP-V2.md A3), nor does a model switch or a router: those are measured like any change (C3). A keep that switches
+ * the picture model waits for the judge's illustration calibration (the coordinator's hold).
  */
 export function cardOwnerReasons(card: HypothesisCard, o: { u1: boolean }): string[] {
   const keys = Object.keys(card.knobs ?? {});
@@ -368,7 +327,6 @@ export function cardOwnerReasons(card: HypothesisCard, o: { u1: boolean }): stri
     ...(patch ? ["a patch knob proposed: the owner turns patches on"] : []),
     ...(card.touchesFrozen ? ["needs a frozen area"] : []),
     ...(keys.some((k) => OWNER_KNOBS.includes(k)) ? [`an owner's knob: ${keys.filter((k) => OWNER_KNOBS.includes(k)).join(", ")}`] : []),
-    ...(keys.some((k) => MODEL_KNOB.test(k) && k !== "picture.model") ? ["model switch: needs calibration evidence"] : []),
     ...(card.kind === "op" && !card.generality?.trim() ? ["new op without a generality note"] : []),
     ...(!o.u1 && [card.component, ...keys.map((k) => k.split(".")[0])].some((c) => INK_PARTS.includes(c)) ? ["ink-reading change and no U1 to check it on"] : []),
   ];

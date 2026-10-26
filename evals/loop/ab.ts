@@ -18,23 +18,21 @@ import { draw, positionsFor } from "../judge/judge.ts";
 import { type Positions, caseFile } from "../judge/packet.ts";
 import { OVERUSE } from "../optimizer/patterns.ts";
 import { type Chrome, type Page, capture, launchChrome, paintedCapture } from "./chrome.ts";
-import { endCase, gatewayStatus, setMode } from "./client.ts";
+import { CapReached, endCase, gatewayStatus, setMode } from "./client.ts";
 import { LOOP, configId } from "./config.ts";
 import { eachSlot } from "./drive.ts";
 import type { RunMode } from "./gateway.ts";
 import { type Machine, beforeWave, sampleLoad } from "./load.ts";
-import { appendRow, caseMetrics, readRows, rowOf } from "./metrics.ts";
+import { appendRow, caseMetrics, isProduct, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { appendLine, caseDir, isDone, put, putImage, runCaseDone, runFile, writeArm, writeRun } from "./record.ts";
-import { type ArmServer, serveArm } from "./servers.ts";
+import { ARM_PORT, type ArmServer, serveArm } from "./servers.ts";
 import { entryOrder, seedOf } from "./stats.ts";
-import { type Decision, type LoopState, decide } from "./verdict.ts";
+import { type Decision, decide } from "./verdict.ts";
 import type {
   Arm, CallLog, CaseInfo, CaseInput, DecisionClass, Engine, Fork, HypothesisCard, Readings, RecordedReply, Row, RunKind, Same, SceneJSON, SendOutcome,
 } from "./types.ts";
 
-/** The first arm server's port; each further tree takes the next (spec §7.2: 5300 + 2k, 5301 + 2k). */
-const PORT = 5300;
 /** How often a slot sitting out a busy machine checks the load gate again. */
 const SIT_OUT_POLL_MS = 1000;
 /** How often a run waiting out the budget's pause reads the gateway's pace again. */
@@ -128,7 +126,7 @@ export async function openRig(o: { trees: string[]; gateway: string; slots: numb
     for (const s of servers) await s.close();
   };
   try {
-    for (const [i, t] of trees.entries()) servers.push(await serveArm(t, (o.port ?? PORT) + i, o.gateway));
+    for (const [i, t] of trees.entries()) servers.push(await serveArm(t, (o.port ?? ARM_PORT) + i, o.gateway));
     chrome = await launchChrome({ dir: join(paths().home, "chrome", String(process.pid)), onBlocked: (url) => blocked.push(url) });
   } catch (err) {
     await close();
@@ -240,8 +238,8 @@ function meterTail(run: string) {
   };
 }
 
-/** A product call (an arm's), not the harness's own roles. */
-export const product = (c: CallLog) => !["driver", "judge", "craft", "expectation", "miss", "failure", "probe", "analyst"].includes(c.role);
+/** A product call (an arm page's), not the harness's own roles. */
+export const product = isProduct;
 
 /** Judges a case; a judge call that fails is tried once more, then the case is void (V7: why). The call cap stops the run instead. */
 export async function judgedOnce(judge: Judge, id: string, positions: Positions): Promise<string | undefined> {
@@ -250,7 +248,7 @@ export async function judgedOnce(judge: Judge, id: string, positions: Positions)
       await judge.judgeCase(id, positions);
       return;
     } catch (err) {
-      if (/call cap/.test(String(err))) throw err;
+      if (err instanceof CapReached) throw err;
       if (attempt === 2) return `V7: a judge call failed twice (${String(err).slice(0, 160)})`;
     }
   }
@@ -267,7 +265,6 @@ export function begin(rig: Rig, s: RunSpec) {
   const sampler = setInterval(() => appendLine(runFile(s.run, "load.ndjson"), sampleLoad()), 5000);
   sampler.unref();
   const warmRun = `${s.run}~warm`;
-  const warmed = new Set<number>();
   const ready = Promise.all([
     setMode(s.run, s.mode, { share: s.share, cached: s.cached, ...(s.timed ? { timed: true } : {}) }, rig.gateway),
     s.mode === "live" ? setMode(warmRun, "scan", { warm: true }, rig.gateway) : {},
@@ -276,10 +273,11 @@ export function begin(rig: Rig, s: RunSpec) {
   });
 
   /**
-   * A slot's first case in a live run goes out once first as a warm-up scan (the bank's replies at once, 0 calls) that
-   * starts the Claude processes each arm's calls take, and waits until they're up: every case then finds its processes
-   * waiting, as a send mid-session does. Cold, checkpoint 0's first 16 cases waited 0.2–0.9 s per call on starting
-   * processes (CPU pressure 32%), and a gateway kept across decisions could leave one arm's pools warm, not the other's.
+   * Every case in a live run goes out once first as a warm-up scan (the bank's replies at once, 0 calls) that starts the
+   * Claude processes each arm's calls take, and waits until they're up: the timed send then finds them waiting, as a send
+   * mid-session does. Pools key on model, system prompt and effort, so a slot's first case alone warmed only the keys it
+   * used: a candidate's new prompt or route on a later case started cold while the champion's stayed warm from earlier
+   * decisions (9 of 13 voids in history, A at 0% cold and B at 12–32%). Once a key is up, the warm-up waits for nothing.
    */
   async function warmUp(id: string, slot: number, tabs: Record<Arm, Tab>, input: CaseInput, before: SceneJSON, payload: Record<Arm, SendInput>) {
     await Promise.all(ARMS.map(async (a) => {
@@ -343,10 +341,7 @@ export function begin(rig: Rig, s: RunSpec) {
       return r;
     };
 
-    if (s.mode === "live" && !warmed.has(slot)) {
-      warmed.add(slot);
-      await warmUp(id, slot, tabs, input, before, payload);
-    }
+    if (s.mode === "live") await warmUp(id, slot, tabs, input, before, payload);
     // V7 (§2.7): a product call's transport error voids the attempt and re-sends the case once, then voids the case (never the run).
     let x = await sendBoth(id, slot, tabs, input, before, first, payload);
     if (x.transport.length || x.failed.length) x = await sendBoth(id, slot, tabs, input, before, first, payload);
@@ -470,11 +465,10 @@ export function begin(rig: Rig, s: RunSpec) {
             continue;
           }
           if (next >= ids.length || stop) return;
-          // A paying case waits out the budget's pause (a scan is 0 product calls, but its judging isn't); warm processes
-          // don't outlive hours.
+          // A paying case waits out the budget's pause (a scan is 0 product calls, but its judging isn't).
           if (s.mode !== "scan" || s.judge) {
             try {
-              if (await budgetGate(rig.gateway, s.run)) warmed.clear();
+              await budgetGate(rig.gateway, s.run);
             } catch (err) {
               stop ??= err;
               return;
@@ -488,7 +482,7 @@ export function begin(rig: Rig, s: RunSpec) {
             rows[j].catch((err) => void (stop ??= err));
             if (rig.blocked.length) throw new Error(`run ${s.run} aborted: a page requested ${rig.blocked[0]} (outside its arm and /api/model)`);
             const st = await gatewayStatus(rig.gateway);
-            if (st.capReached) throw new Error(`run ${s.run} stopped: the gateway's call cap (${st.cap}) is reached`);
+            if (st.capReached) throw new CapReached(`run ${s.run} stopped: the gateway's call cap (${st.cap}) is reached`);
           } catch (err) {
             stop ??= err;
           }
@@ -500,13 +494,13 @@ export function begin(rig: Rig, s: RunSpec) {
       return settled.map((x) => (x as PromiseFulfilledResult<Row>).value);
     },
     flips: () => s.judge?.flips?.(),
-    /** Each arm's share of upstream product calls that waited on a process still starting (the cold-start asymmetry). */
-    cold(): [number, number] {
+    /** Each arm's upstream product calls that waited on a process still starting, of all it made (the cold-start asymmetry). */
+    cold() {
       const live = meter().filter((c) => product(c) && c.mode === "live" && c.shared !== "follower");
       return ARMS.map((a) => {
         const mine = live.filter((c) => c.arm === a);
-        return mine.length ? mine.filter((c) => c.readyAtTake === false).length / mine.length : 0;
-      }) as [number, number];
+        return { n: mine.filter((c) => c.readyAtTake === false).length, of: mine.length };
+      }) as [{ n: number; of: number }, { n: number; of: number }];
     },
     /** run.json, at the end: the arms, the frozen config, the load and the meter. */
     finish(extra: { judgeId?: string } = {}) {
@@ -537,23 +531,23 @@ export function harnessTag(): string {
 /** A case's origin session, read where its inputs come from: a yardstick case (U1's) may not be in the bank. */
 const clusterOf = (s: RunSpec) => (id: string) => json<CaseInfo>(s.source?.(id) ? join(s.source(id)!, "case.json") : caseFile(id, "case.json", s.run)).originSession;
 
-/** A decision's extra stages (G2 → G3 → G4) and the loop state its vetoes read. */
+/** A decision's card and extra stages (G2 → G3 → G4). */
 export type Decide = {
-  card: HypothesisCard; state: LoopState;
+  card: HypothesisCard;
   /** G3: the affected H-gate cases (the scan's); anything else is never drawn here. */
   heldout?: string[];
   /** Live top-ups (run.ts wires bank.ts): n more fork sends, deposited in the bank; the affected ones come back judged, as rows. */
   topUp?: (n: number) => Promise<Row[]>;
   /** A resumed decision's top-ups: the sends it already paid for and their rows (rows.jsonl). */
   toppedUp?: { sends: number; rows: Row[] };
-  /** Why the decision has overrun its budget so far, if it has (§6.7): checked before each look's cases are paid for. */
-  overrun?: (measured: number) => string | undefined;
+  /** Why the decision has overrun its time so far, if it has (§6.7): checked before each look's cases are paid for. */
+  overrun?: () => string | undefined;
   /** G4, class D: the driver continues on B's result for `sends` more sends on case slot `slot`, each forked to both arms (drive.ts); their rows. */
   continueFrom?: (caseId: string, b: { run: string; after: SceneJSON; camera: View }, sends: number, slot: number) => Promise<Row[]>;
 };
 export type ABResult = {
   rows: Row[]; heldout?: Row[]; continuation?: Row[]; decision?: Decision; topUps?: number; invariants: Invariant[];
-  /** Set when the decision was closed between looks as over its budget (§6.7): never rerun, it counts toward the night's overruns. */
+  /** Set when the decision was closed between looks as over its time (§6.7). */
   overrun?: string;
 };
 
@@ -574,9 +568,8 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
     const done = (dec: Decision) => (put(runFile(s.run, "verdict.json"), { ...dec, invariantsTripped: r.invariants.length, timingVoids: r.invariants.filter((x) => x.timing).length, topUps }), { rows, heldout, continuation, decision: dec, topUps, invariants: r.invariants });
     for (;;) {
       const exhausted = taken >= order.length && !resumed.length && (!d.topUp || topUps >= LOOP.topUpMaxSends);
-      const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.filter((x) => !x.timing).length }, d.card, d.state);
-      // Measured from rows.jsonl: a resumed decision's finished cases count before they're read back, as their $ already do.
-      const over = (dec.verdict === "more" || dec.pending) && d.overrun?.(readRows(s.run).filter((x) => !x.void).length + topUps);
+      const dec = decide({ tuning: rows, heldout, continuation, exhausted, flips: r.flips(), cold: r.cold(), invariants: r.invariants.filter((x) => !x.timing).length }, d.card);
+      const over = (dec.verdict === "more" || dec.pending) && d.overrun?.();
       if (over) return { ...done({ ...dec, verdict: "void", pending: undefined, reasons: [...dec.reasons, over] }), overrun: over };
       if (dec.verdict === "more") {
         // The next look counts live cases: voided ones are replaced from the order, then by top-ups.

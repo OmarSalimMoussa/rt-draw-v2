@@ -11,7 +11,7 @@
 // behaves like one user's server; eval roles run at most 6 at once and never pool.
 // A run is live (fresh calls, shared inside a case unless the run says share: false),
 // replay (cached replies on their own clock) or scan (instant: a hit, else the case's
-// stand-in, else empty; a warm scan also starts the processes its calls would take; a timed
+// stand-in, else empty; a Jev question with no hit is asked live, both arms sharing it; a warm scan also starts the processes its calls would take; a timed
 // scan plays them on their recorded clock, so a render-only decision's first drawing means something). Only eval calls resume from the cache within their run: a
 // product call is a fresh sample (or the other arm's, shared) in every live run,
 // except the request hashes the run names as identical in both arms (the diffscan
@@ -40,7 +40,18 @@ export const EVAL_IN_FLIGHT = 6;
 const MAX_WARM = 4;
 /** An overload fails in ~2 s, not 102 s: the case is voided and replayed. */
 const MAX_RETRIES = 2;
+/** A product call's limit, as on the hosted app (dev/model-plugin.ts). */
 const TIMEOUT_MS = 120_000;
+/**
+ * An eval role's hang guard, never a limit on its work: gold is never throttled (the owner, 2026-10-25), so its guard is
+ * over twice the slowest gold ever drawn (38 min at max effort); every other role finished within 2 min in history.
+ */
+const evalHangMs = (role: string) => (role === "real-gold" ? 90 : 15) * 60_000;
+/**
+ * An eval role's output, at most: the model's own maximum. Only the product's calls keep MAX_TOKENS, as the hosted app
+ * does: gold is the ideal the product aims at, so nothing throttles it (nor triage, the judge or the analyst).
+ */
+const EVAL_MAX_TOKENS = 128_000;
 const LOOP_RESOLUTION_MS = 10;
 const LATE_MAX_MS = 1000;
 /** A warm scan's case end waits this long, at most, for the processes it started to finish starting. */
@@ -64,7 +75,7 @@ type Ask = {
 type Out = {
   text: string; stats: Record<string, unknown>; mode: CallMode; shared: Shared; scan?: "hit" | "standin" | "miss"; error?: string; cacheFile?: string; chunks: Chunk[];
   /** a real call was made: its list $ and token slot (none for Jev) */ upstream?: { usd: number; token?: SlotN };
-  /** refused before any call (the cap): no meter line */ refused?: boolean;
+  /** refused before any call (the cap, `capped`): no meter line */ refused?: boolean; capped?: boolean;
   /** its page dropped it (a copy that lost, a speculation that missed, a picture past its timeout): no error */ dropped?: boolean;
 };
 /** A case's loop delays by whole ms (the last bucket: LATE_MAX_MS and more), a fixed size however long the case runs. */
@@ -100,8 +111,8 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   let evalBusy = 0;
   const evalWaiting: (() => void)[] = [];
 
-  const start = (r: Req, slot: SlotN) => () =>
-    startProcess(r.model, r.system, { token: tokenOf(slot), effort: r.effort as Effort, thinking: r.thinking as Thinking, configDir: p.claudeConfig, maxRetries: MAX_RETRIES, mockApi: o.mockApi });
+  const start = (r: Req, slot: SlotN, evalRole = false) => () =>
+    startProcess(r.model, r.system, { token: tokenOf(slot), effort: r.effort as Effort, thinking: r.thinking as Thinking, configDir: p.claudeConfig, maxRetries: MAX_RETRIES, mockApi: o.mockApi, ...(evalRole ? { maxTokens: EVAL_MAX_TOKENS } : {}) });
   const spawnQueue: (() => void)[] = [];
   let lastSpawn = -Infinity;
   let spawnTimer: ReturnType<typeof setTimeout> | undefined;
@@ -154,7 +165,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   async function live(a: Ask, onText: (t: string) => void, flight?: ReturnType<Flights["lead"]>): Promise<Out> {
     const since = () => performance.now() - a.t0;
     const refuse = (error: string): Out => (flight && Flights.end(flight, { ms: since(), error }), { text: "", stats: {}, mode: "live", shared: "-", error, chunks: [], refused: true });
-    if (cap !== undefined && calls >= cap) return refuse(`call cap ${cap} reached`);
+    if (cap !== undefined && calls >= cap) return { ...refuse(`call cap ${cap} reached`), capped: true };
     const same = slots.sameAccount();
     if (same) return refuse(`slots ${same[0]} and ${same[1]} report the same resetsAt: one account`);
     calls++;
@@ -162,12 +173,16 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!a.page) await evalTurn();
     const token = a.token ?? (a.page ? slots.current : (slots.boundary() ?? slots.current));
     const key = poolKey(a, token);
-    const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token), a.page), waiting: false, readyAtTake: false };
+    const taken = a.page && pool.sizes()[key] ? pool.take(key, 0, start(a.req, token)) : { proc: await queued(start(a.req, token, !a.page), a.page), waiting: false, readyAtTake: false };
     if (a.page) topUp(key, keepOf(a.warm, MAX_WARM), start(a.req, token));
     // Closing the query ends its stream cleanly, so what stopped it is noted: a reply cut short is never a reply.
     let stopped: "page" | "timer" | undefined;
-    const late = `no reply within ${TIMEOUT_MS / 1000} s`;
-    const timer = setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), TIMEOUT_MS);
+    // A product call has the hosted app's limit; an eval role only a hang guard (Claude Code's own stream-idle watchdog
+    // ends a dead connection, and the API's pings keep a long think alive, but a process that never answers holds a
+    // step forever).
+    const limitMs = a.page ? TIMEOUT_MS : evalHangMs(a.role);
+    const late = `no reply within ${limitMs / 1000} s`;
+    const timer = setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), limitMs);
     // A page that dropped its call stops it, unless another arm's identical call is waiting on this one; none may join after.
     const stop = () => {
       if (flight?.followers.size) return;
@@ -242,7 +257,16 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const { mode, share, cached, warm, timed } = runs.get(a.run) ?? { mode: "live", share: true };
     const instant = mode === "scan" && !!a.page && !timed;
     // A warm scan (ab.ts' warm-up send, a slot's first in a live run) starts the processes each call would take.
-    if (warm && a.page) topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined);
+    if (warm && a.page) {
+      const ups = a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined;
+      topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), ups);
+      // Whether a drawing call thinks can be decided live (draw.thinkRouter asks Jev, which a scan answers with a stand-in):
+      // its other variant too, or every send the live answer flips starts cold (e70-h1: B 31% cold, A 0%, void).
+      if (a.role === "draw") {
+        const other = { ...a.req, thinking: a.req.thinking === "off" ? ("auto" as const) : ("off" as const) };
+        topUp(poolKey({ ...a, req: other }, slots.current), keepOf(a.warm, MAX_WARM), start(other, slots.current), ups);
+      }
+    }
     // A copy is another draw of the upstream wait: live, a fresh call of its own (never the cache's, never another arm's);
     // in a scan or a replay it answers nothing, so its first copy's reply decides and the page drops it.
     if (a.copy) return mode === "live" ? live(a, onText) : held(a, mode);
@@ -251,6 +275,19 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (hit) {
       await replay(hit.chunks, hit.doneMs, a.t0, onText, instant);
       return { text: hit.text, stats: hit.stats, mode: !a.page ? "resume" : mode === "live" ? "replay" : mode, shared: "-", chunks: hit.chunks, cacheFile: replyName(a.hash, a.run, !a.page), scan: mode === "scan" && a.page ? "hit" : undefined };
+    }
+    // A Jev question the bank never recorded (a router the champion took after the bank was recorded, or a new one) is
+    // asked live in a scan: ~0.1 s and next to free, where a stand-in or no answer made both arms decide alike, so a
+    // change to how its answer is used (draw.thinkYes, e74-h1a) read as no effect. Both arms share the one answer; a
+    // timed scan keeps its recorded clock.
+    if (mode === "scan" && a.page && !timed && isJev(a.req.model)) {
+      const scope = a.case && a.arm ? `${a.run}|${a.case}` : undefined;
+      const f = scope ? flights.follow(scope, a.hash, a.arm!) : undefined;
+      if (f) {
+        const done = await Flights.relay(f, a.t0, onText);
+        return { text: f.chunks.map((c) => c.text).join(""), stats: done.stats ?? {}, error: done.error, mode: "live", shared: "follower", chunks: f.chunks, cacheFile: done.cacheFile };
+      }
+      return live(a, onText, scope ? flights.lead(scope, a.hash, a.arm!) : undefined);
     }
     if (mode === "scan" && a.page) {
       const s = a.case ? standIn(p, a.case, a.role, a.ordinal, a.req.user) : undefined;
@@ -289,7 +326,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const up = out.upstream;
     const rl = (up ? s.rateLimit : undefined) as CallStats["rateLimit"];
     if (!out.refused) meterCall(p.calls, {
-      at: new Date().toISOString(), run: a.run, case: a.case, arm: a.arm as Arm | undefined, slot: a.slot, role: a.role, model: a.req.model, servedModel: s.served as string | undefined,
+      at: new Date().toISOString(), run: a.run, case: a.case, arm: a.arm as Arm | undefined, slot: a.slot, role: a.role, page: a.page, model: a.req.model, servedModel: s.served as string | undefined,
       sdk: SDK_VERSION, reqHash: a.hash, shared: out.shared, mode: out.mode, scan: out.scan,
       inTokens: up ? n(s.inTokens) : 0, cacheRead: up ? n(s.cacheRead) : 0, cacheWrite5m: up ? n(s.write5m) : 0, cacheWrite1h: up ? n(s.write1h) : 0, outTokens: up ? n(s.outTokens) : 0,
       thinkingTokens: up ? n(s.thinkingTokens) : 0, stopReason: s.stopReason as string | undefined, ms: Math.round(performance.now() - t0), firstMs: firstMs === undefined ? undefined : Math.round(firstMs),
@@ -355,7 +392,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!r) return json(res, 400, { error });
     const a: Ask = { run: (b.run as string) ?? "-", case: b.case as string | undefined, role: b.role, ordinal: 0, t0: arrived, page: false, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], token: b.token as SlotN | undefined };
     const out = await serveAndRecord(a, () => {});
-    json(res, out.error ? 502 : 200, { text: out.text, stats: { ...out.stats, reqHash: a.hash, mode: out.mode }, error: out.error });
+    json(res, out.error ? 502 : 200, { text: out.text, stats: { ...out.stats, reqHash: a.hash, mode: out.mode }, error: out.error, ...(out.capped ? { capped: true } : {}) });
   }
 
   /** The case is over: its loop delay p99 (above the timer's own resolution) and its calls per arm. */

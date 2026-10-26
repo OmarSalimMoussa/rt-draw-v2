@@ -14,7 +14,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, statfsSync, writeFileSync } from "node:fs";
-import { arch, homedir } from "node:os";
+import { arch } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -29,8 +29,8 @@ import { ask, gatewayStatus, spawnGateway } from "./client.ts";
 import { LOOP } from "./config.ts";
 import { inFactorySlice, managedSettingsHash, onAC, quiet, sampleLoad } from "./load.ts";
 import { type MeterCall, readMeter } from "./meter.ts";
-import { type Paths, paths } from "./paths.ts";
-import { serveArm } from "./servers.ts";
+import { type Paths, ownerCheckout, paths } from "./paths.ts";
+import { ARM_PORT, serveArm } from "./servers.ts";
 import { DRAW_DELAY_MS, type Stubs, fakeApiReplies, serveStubs, stubPictures, stubReply } from "./stubs.ts";
 import { type SlotN, Slots } from "./tokens.ts";
 import { evalsHash, treeOf } from "./trees.ts";
@@ -57,7 +57,6 @@ export const NAMES: Record<string, string> = {
 const ORDER = ["R1", "R7", "R9", "R10", "R13", "R3", "R11", "R12", "R2", "R4", "R5", "R8", "R6"];
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const PORT = 5300;
 const MIN_RAF = 30;
 const HEAP_CASES = 20;
 const STORM_MAX_MS = 5000;
@@ -99,7 +98,7 @@ export async function ready(o: ReadyOpts, print: (line: string) => void = consol
   process.env.RT_DATA_DIR ||= p.data;
   const ids = ORDER.filter((id) => !o.only || o.only.includes(id));
   const tag = tryGit(ROOT, "describe", "--tags", "--exact-match", "--match", "eval-harness-*", "HEAD");
-  const callLog = join(o.repo ?? join(homedir(), "projects/rt-draw-v2"), ".data", "model-calls.jsonl");
+  const callLog = join(o.repo ?? ownerCheckout(), ".data", "model-calls.jsonl");
   const logStart = existsSync(callLog) ? statSync(callLog).size : 0;
   print(`ready ${run}: ${ids.join(" ")}`);
 
@@ -113,7 +112,7 @@ export async function ready(o: ReadyOpts, print: (line: string) => void = consol
   let tp: Promise<Transport> | undefined;
   const transport = () => (tp ??= probeTransport(join(dir, "gateway"), run));
   let pp: Promise<Pages> | undefined;
-  const pages = () => (pp ??= runPages({ tree: armTree(), sha: sha(), port: o.port ?? PORT, hook: o.pageHook && readFileSync(o.pageHook, "utf8"), chrome: join(p.home, "ready", "chrome"), run, heap: ids.includes("R4") }));
+  const pages = () => (pp ??= runPages({ tree: armTree(), sha: sha(), port: o.port ?? ARM_PORT, hook: o.pageHook && readFileSync(o.pageHook, "utf8"), chrome: join(p.home, "ready", "chrome"), run, heap: ids.includes("R4") }));
   const needs = (flag: boolean | undefined, name: string, f: () => Promise<Out>) => (flag ? f() : skip(`needs ${name}`));
   const managed = managedSettingsHash();
 
@@ -122,7 +121,7 @@ export async function ready(o: ReadyOpts, print: (line: string) => void = consol
     R2: () => needs(o.stub, "--stub", async () => stubIntegrity(await pages())),
     R3: () => needs(o.mockApi, "--mock-api", async () => transportOk(await transport())),
     R4: () => needs(o.stub, "--stub", async () => pagesOk(await pages())),
-    R5: async () => voice(armTree(), o.port ?? PORT, o.stub ? await pages() : undefined),
+    R5: async () => voice(armTree(), o.port ?? ARM_PORT, o.stub ? await pages() : undefined),
     R6: () => dataDirs(p, callLog, logStart, [run, tag].filter((x): x is string => !!x)),
     R7: () => machine(p, managed),
     R8: async () => (!o.aaCheck ? skip("run.ts wires it to `aa --shared --cases 16`") : !bankCases(p).length ? skip("no bank yet") : o.aaCheck()),

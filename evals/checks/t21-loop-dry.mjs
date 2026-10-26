@@ -27,6 +27,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (s) => s.trim().split("\n").slice(-6).join(" | ").slice(0, 900);
 const HOOKS = join(ROOT, "evals/loop/node-hooks.mjs"), RUN = join(ROOT, "evals/loop/run.ts");
 const upstream = (ls) => ls.filter((l) => !l.agent && l.mode === "live" && l.shared !== "follower");
+/** The fake API requests meter lines account for: each upstream call, and each turn of an agent session (the analyst). */
+const requestsOf = (ls) => upstream(ls).length + ls.filter((l) => l.agent).reduce((n, l) => n + l.turns, 0);
 
 /** run.ts in its own process group (a SIGKILL takes its gateway, arm servers and Chrome with it). */
 const groups = new Set();
@@ -96,7 +98,7 @@ writeFileSync(FAKES, `import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const { worktreeOf } = await import(${mod("evals/loop/trees.ts")});
 const { caseDir, put } = await import(${mod("evals/loop/record.ts")});
-const card = (id, o) => ({ id, component: "draw", kind: "code", change: id, goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "p", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "r", files: [], ...o });
+const card = (id, o) => ({ id, component: "draw", kind: "code", change: id, goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: [], ...o });
 const CARDS = {
   1: [card("knob", { kind: "knob", knobs: { "draw.sendMarks": 0 }, change: "draw.sendMarks = 0" }), card("points", { component: "resolve", change: "the resolver asks what ink points at" }), card("noop", { change: "a comment in draw.ts" })],
   2: [card("frozen", { change: "a vite.config.ts comment" })],
@@ -122,11 +124,11 @@ const tokens = join(L.work, "tokens.env");
 const FLAGS = ["--tokens", tokens, "--mock-api", api.url, "--port", "5334", "--fakes", FAKES];
 
 // ---- Real-call steps refuse to start without --cap.
-for (const cmd of [["smoke"], ["bake"], ["bank", "build", "--tuning", "1"], ["checkpoint", "--zero"], ["calib", "--contrast", "draw.sendMarks=0"]]) {
+for (const cmd of [["smoke"], ["bake"], ["bank", "build", "--tuning", "1"], ["checkpoint", "--zero"], ["calib", "--contrast", "draw.sendMarks=0"], ["calib", "--illustrations", "--contrast", "picture.model=0"]]) {
   const r = spawnSync(process.execPath, ["--import", HOOKS, RUN, ...cmd, ...FLAGS], { cwd: ROOT, env: process.env, encoding: "utf8", timeout: 60_000 });
   check(r.status !== 0 && /needs --cap/.test(r.stdout + r.stderr), `${cmd.join(" ")} without --cap: exit ${r.status}: ${short(r.stdout + r.stderr)}`);
 }
-check(api.requests.length === 0, `the --cap refusals made ${api.requests.length} requests`);
+check(api.requests.length === L.bootReqs, `the --cap refusals made ${api.requests.length - L.bootReqs} requests`);
 
 // ---- Checkpoint 0, then the loop.
 const ck0 = await rte(["checkpoint", "--zero", "--cap", "400", ...FLAGS]).done;
@@ -146,12 +148,12 @@ await until(() => chromeCount(join(p.home, "chrome")) === 0, 20_000, "the killed
 const killAt = Date.now(), reqsAtKill = api.requests.length, meterAtKill = lines(p.calls).length;
 check(!existsSync(join(p.run(hit.run), "cases", hit.case, "done")), `case ${hit.case} finished before the kill (not mid-case)`);
 
-// Every slot past its five-hour pause line (60%): the resumed loop pauses until the earliest resetsAt.
+// Every slot past its five-hour pause line (90%): the resumed loop pauses until the earliest resetsAt.
 const now = Math.floor(Date.now() / 1000);
-writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, W: 170, calibrated: false, limited: false, hours: {} }))));
+writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, limited: false, hours: {} }))));
 const resumed = await rte(["loop", "--resume", ...FLAGS]).done;
 check(resumed.code === 0 && /loop: done/.test(resumed.out), `loop --resume didn't finish (exit ${resumed.code}): ${short(resumed.out)}`);
-check(/pause until .*every slot is past 60% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
+check(/pause until .*every slot is past 90% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
 const after = api.requests.slice(reqsAtKill);
 check(after.length > 0 && after[0].at >= (now + 7) * 1000, `the first call after the resume came at ${after[0]?.at}, before the earliest resetsAt ${(now + 7) * 1000}`);
 const all = lines(p.calls);
@@ -159,7 +161,7 @@ const key = (l) => `${l.run}|${l.case}|${l.arm}|${l.role}|${l.reqHash}`;
 const paidBefore = new Set(upstream(all.slice(0, meterAtKill)).map(key));
 const repaid = upstream(all.slice(meterAtKill)).filter((l) => paidBefore.has(key(l)));
 check(!repaid.length, `${repaid.length} calls paid before the kill were paid again: ${repaid.slice(0, 3).map(key).join(", ")}`);
-check(after.length === upstream(all.slice(meterAtKill)).length, `after the kill the fake API got ${after.length} requests for ${upstream(all.slice(meterAtKill)).length} upstream meter lines`);
+check(after.length === requestsOf(all.slice(meterAtKill)), `after the kill the fake API got ${after.length} requests for ${requestsOf(all.slice(meterAtKill))} metered`);
 
 // ---- What the two epochs decided, all on eval/history.
 const H = p.history;
@@ -204,7 +206,7 @@ check(bad.code !== 0 && /--notify-usd takes a number/.test(bad.out), `--notify-u
 // gets none. The server's answer brings the first back, and every slot goes to budget.jsonl with when it was read.
 const slotsFile = join(p.home, "meter", "slots.json"), slotsBefore = readFileSync(slotsFile, "utf8");
 const wNow = Date.now(), oldRead = wNow - 27 * 3600_000;
-const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {}, ...o });
+const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, limited: false, hours: {}, ...o });
 writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.6, sevenDayAt: wNow - 3600_000 })]));
 const w0 = api.requests.length;
 const wk = await rte(["week", "--cap", "5", ...FLAGS]).done;
@@ -280,20 +282,18 @@ if (process.arch === "x64") {
 
 // ---- Every §6.7 rule on crafted facts.
 const T = Date.now();
-const base = { now: T, pace: { ok: true }, nightUsd: 0, nightCapUsd: 200, nightStart: T - 3600_000, recent: [], ready: true, calib: "pass", overloads: [], diskGb: 500, onAC: true };
+const base = { now: T, pace: { ok: true }, recent: [], ready: true, calib: "pass", overloads: [], diskGb: 500, onAC: true };
 const d = (verdict, o = {}) => ({ id: "x", verdict, component: "draw", at: new Date(T).toISOString(), ...o });
 const fires = {
   "slots spent → pause": [{ pace: { ok: false, pauseUntil: T + 5000 } }, "pause", /five-hour/],
   "weekly allowance → stop": [{ pace: { ok: false, stop: "every slot past its weekly allowance" } }, "stop", /weekly/],
-  "night cap → pause until the next night": [{ nightUsd: 250 }, "pause", /night cap.*next night/],
-  "3 overruns tonight → stop": [{ recent: [d("void", { overrun: true }), d("revert"), d("void", { overrun: true }), d("keep"), d("void", { overrun: true })] }, "stop", /overran/],
   "2 voids in a row → stop": [{ recent: [d("keep"), d("void"), d("void")] }, "stop", /2 void/],
   "V9 → stop": [{ recent: [d("void", { v9: true })] }, "stop", /V9/],
   "readiness → stop": [{ ready: false }, "stop", /readiness/],
   "calibration → stop": [{ calib: "stop" }, "stop", /calibration/],
   "no passed calibration → stop": [{ calib: "more" }, "stop", /isn't calibrated/],
   "never calibrated → stop": [{ calib: undefined }, "stop", /never checked/],
-  "--cap reached → stop": [{ error: "call cap 40 reached" }, "stop", /--cap/],
+  "--cap reached → stop": [{ capped: true, error: "the call cap is reached" }, "stop", /--cap/],
   "a sync conflict → stop for the owner": [{ blocked: "sync: master conflicts" }, "stop", /paused for the owner/],
   "/api/tts → abort": [{ error: "run x aborted: a page requested http://127.0.0.1:5334/api/tts" }, "stop", /aborted/],
   // The dry well scales with the cards an epoch (LOOP-V2.md D3): 2 epochs' worth in a row, one epoch's on a component.
@@ -308,15 +308,14 @@ const fires = {
 
 // ---- The owner's notices on crafted facts: a heads-up as a step comes near, one when it's reached, each once, never a stop.
 const every = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
-const nf = (o = {}) => ({ now: T, every, nightUsd: 0, nightCapUsd: 200, ...o, leg: { start: T - 60_000, usd: 0, decisions: 0, checkpoints: [], ...o.leg } });
+const nf = (o = {}) => ({ now: T, every, ...o, leg: { start: T - 60_000, usd: 0, decisions: 0, checkpoints: [], ...o.leg } });
 const due = (f, sent = new Set()) => notices(f, sent).map((n) => `${n.kind} ${n.key}`).join();
 const want = {
   quiet: [nf(), ""], "$16.50 → soon": [nf({ leg: { usd: 16.5 } }), "soon usd:1:soon"], "$20.20 → reached": [nf({ leg: { usd: 20.2 } }), "reached usd:1"],
   "$37 → reached, the next soon": [nf({ leg: { usd: 37 } }), "reached usd:1,soon usd:2:soon"], "97 min → soon": [nf({ leg: { start: T - 97 * 60_000 } }), "soon minutes:1:soon"],
   "1 decision → none": [nf({ leg: { decisions: 1 } }), ""], "2 decisions → reached": [nf({ leg: { decisions: 2 } }), "reached decisions:1"],
   "a checkpoint → one": [nf({ leg: { checkpoints: ["ck-01"] } }), "checkpoint checkpoint:ck-01"], "a checkpoint, notices off → none": [nf({ every: { ...every, checkpoint: 0 }, leg: { checkpoints: ["ck-01"] } }), ""],
-  "night cap 82% → soon": [nf({ nightUsd: 165 }), "soon night:0.8"], "night cap 96% → both": [nf({ nightUsd: 192 }), "soon night:0.8,soon night:0.95"], "night cap reached → none (the pause rule says it)": [nf({ nightUsd: 200 }), ""],
-  "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, nightUsd: 100, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
+  "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
 };
 for (const [name, [f, keys]] of Object.entries(want)) check(due(f) === keys, `notices, ${name}: ${due(f)} (want ${keys || "none"})`);
 check(due(nf({ leg: { usd: 37 } }), new Set(["usd:1", "usd:2:soon"])) === "", "a notice already sent was sent again");
@@ -327,13 +326,16 @@ for (const [name, [facts, act, why]] of Object.entries(fires)) {
   check(out.some((a) => a.do === act && why.test(a.why) && (act !== "pause" || a.until > T) && (act !== "skip" || a.component === "draw")), `${name}: ${JSON.stringify(out)}`);
 }
 check(rules({ ...base, overloads: [T - RULES.overloadWindowMs - 1, T - 1000, T - 2000] }).every((a) => a.do !== "pause"), "an overload older than 10 min counted");
+// A pause that ran out (RULES.pauseEpochs epochs on) counts the component's reverts again from then, not from the checkpoint.
+const reverts = Array.from({ length: RULES.componentRevertsInRow }, () => d("revert"));
+check(rules({ ...base, recent: reverts }).some((a) => a.do === "skip") && !rules({ ...base, recent: reverts, wellFrom: { draw: T + 1 } }).some((a) => a.do === "skip"), "a dry well counts reverts from before its pause ran out");
 const voided = [d("void", { at: new Date(T - 60_000).toISOString() }), d("void", { at: new Date(T - 50_000).toISOString() })];
 check(rules({ ...base, recent: voided, ownerStepAt: T - 40_000 }).every((a) => !/void/.test(a.why)), "2 voids before the owner's sync still stop the loop");
 check(rules({ ...base, recent: [...voided, d("void")], ownerStepAt: T - 40_000 }).every((a) => !/void/.test(a.why)), "one void after the owner's sync stops the loop");
 
-// ---- No leak: every fake API request is a metered upstream call (but the ones the SIGKILL cut off), no Chrome left.
-const total = upstream(lines(p.calls)).length, cut = reqsAtKill - upstream(all.slice(0, meterAtKill)).length;
-check(api.requests.length === total + cut && cut <= 4, `the fake API got ${api.requests.length} requests for ${total} upstream meter lines and ${cut} cut off by the kill`);
+// ---- No leak: every fake API request is a metered upstream call or agent turn (but the ones the SIGKILL cut off), no Chrome left.
+const total = requestsOf(lines(p.calls)), cut = reqsAtKill - requestsOf(all.slice(0, meterAtKill));
+check(api.requests.length === total + cut && cut <= 4, `the fake API got ${api.requests.length} requests for ${total} metered and ${cut} cut off by the kill`);
 await api.close();
 check(chromeCount(join(p.home, "chrome")) === 0, "Chrome processes are left");
 console.error(`t21: ${total} fake calls, ${cut} cut off by the kill; decisions ${Object.values(dec).map((x) => `${x.id} ${x.verdict}`).join(", ")}; killed in ${hit.case} at ${new Date(killAt).toISOString()}`);

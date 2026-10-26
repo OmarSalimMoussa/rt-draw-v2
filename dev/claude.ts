@@ -37,7 +37,8 @@ const THINKING_OFF: Record<string, object | undefined> = {
   "claude-sonnet-5-5": { type: "between_tools" },
 };
 
-export type EnvOpts = { configDir: string; model?: string; thinking?: Thinking; maxRetries?: number; mockApi?: MockApi };
+/** `maxTokens`: the output limit, MAX_TOKENS (the product's) unless the caller says otherwise (the eval gateway's own roles). */
+export type EnvOpts = { configDir: string; model?: string; thinking?: Thinking; maxRetries?: number; maxTokens?: number; mockApi?: MockApi };
 
 /** The env of every Claude process (spec §7.3). */
 export function childEnv(token: string, o: EnvOpts): Record<string, string> {
@@ -45,7 +46,7 @@ export function childEnv(token: string, o: EnvOpts): Record<string, string> {
   for (const k of ["PATH", "HOME", "LANG", "TMPDIR"]) if (process.env[k]) env[k] = process.env[k]!;
   Object.assign(env, {
     CLAUDE_CODE_OAUTH_TOKEN: token,
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(MAX_TOKENS),
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(o.maxTokens ?? MAX_TOKENS),
     FORCE_PROMPT_CACHING_5M: "1",
     CLAUDE_CODE_PROMPT_CACHE_TTL: "5m",
     DISABLE_AUTOUPDATER: "1",
@@ -203,9 +204,16 @@ export class Pool {
     return this.o.maxWarm ?? 4;
   }
 
-  /** Tops `key` up to n waiting processes (at most maxWarm). */
+  /**
+   * Tops `key` up to n waiting processes (at most maxWarm). One the reaper closes within a minute (or half of idleMs) is
+   * closed now and replaced: counted, it left the take it was warmed for to start cold (the eval loop's 35 cold takes
+   * all came 5 to 25 min after their key's last).
+   */
   warm(key: string, n: number, start: () => Proc) {
-    const pool = this.pools.get(key) ?? [];
+    const now = Date.now(), last = this.idleMs - Math.min(60_000, this.idleMs / 2);
+    const all = this.pools.get(key) ?? [];
+    const pool = all.filter((p) => now - p.born <= last);
+    for (const p of all) if (!pool.includes(p)) p.q.close();
     this.pools.delete(key);
     this.pools.set(key, pool);
     while (pool.length < Math.min(n, this.maxWarm)) pool.push(start());

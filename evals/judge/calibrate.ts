@@ -12,8 +12,8 @@ import { LOOP } from "../loop/config.ts";
 import { beforeOf } from "../loop/metrics.ts";
 import { paths } from "../loop/paths.ts";
 import { caseDir, put, putImage, runFile } from "../loop/record.ts";
-import type { Arm, CaseInput, HealthRow, Judged, SceneJSON } from "../loop/types.ts";
-import { type Label, type PairRef, standingLabels } from "../pages/plugin.ts";
+import type { Arm, CaseInput, HealthRow, Judged, RecordedReply, SceneJSON } from "../loop/types.ts";
+import { type Label, type PairRef, labelFiles, standingLabels } from "../pages/plugin.ts";
 import { calibrationFile, combined, craftCall, draw, fidelityCall, judging, pick, positionsFor, save, swap, variants } from "./judge.ts";
 import { caseFile, readPacket } from "./packet.ts";
 import type { Variant } from "./prompts.ts";
@@ -85,13 +85,36 @@ export async function assemble(o: { aa: string; contrast: string; seed: string |
   const ref = (p: Pair, q: "fidelity" | "craft", subset: string): PairRef => ({ id: `${q[0]}:${p.run}:${p.case}`, run: p.run, case: p.case, question: q, subset });
   const probePairs = nothing.map((p) => ({ run: CALIB.probeRun, case: p.case, subset: "nothing" }));
   const fid = shuffle([...real, ...probePairs], o.seed, key).map((p) => ref(p, "fidelity", more.has(p) ? "more" : p.subset));
-  // Only pairs with room for the gap after them can be repeated.
-  const repeats = shuffle(fid.slice(0, Math.min(CALIB.repeatGap, fid.length - CALIB.repeatGap - 1)), `${o.seed}:repeats`, (r) => r.id).slice(0, LOOP.calib.repeats);
-  // From the back, so each insert leaves the earlier originals where they were.
-  for (const r of repeats.sort((a, b) => fid.indexOf(b) - fid.indexOf(a))) fid.splice(fid.indexOf(r) + CALIB.repeatGap + 1, 0, { ...r, id: `${r.id}:r`, swap: true });
+  withRepeats(fid, o.seed, LOOP.calib.repeats, CALIB.repeatGap);
   const detail = (p: Pair) => apart(shapes(p, "A"), shapes(p, "B"), 0);
   const craft = [...shuffle(real.filter(detail), o.seed, key).map((p) => ref(p, "craft", "detail")), ...shuffle(real.filter((p) => !detail(p)), o.seed, key).map((p) => ref(p, "craft", p.subset))];
   put(pairsFile(), [...fid, ...craft]);
+  return [...fid, ...craft];
+}
+
+/** Repeats: `n` of the first fidelity pairs with room after them, each shown again (sides swapped) `gap` pairs later, in place. */
+function withRepeats(fid: PairRef[], seed: string | number, n: number, gap: number) {
+  const repeats = shuffle(fid.slice(0, Math.min(gap, fid.length - gap - 1)), `${seed}:repeats`, (r) => r.id).slice(0, n);
+  // From the back, so each insert leaves the earlier originals where they were.
+  for (const r of repeats.sort((a, b) => fid.indexOf(b) - fid.indexOf(a))) fid.splice(fid.indexOf(r) + gap + 1, 0, { ...r, id: `${r.id}:r`, swap: true });
+}
+
+/**
+ * The illustrations round's label set (labels/illustrations/pairs.json): the contrast run's cases where both sides drew
+ * pictures, and only the pictures differ (the drawing call is shared), each asked as fidelity, with a few shown again,
+ * then as craft. No probes: what it measures is the judge on pictures. Judges the craft each case lacks (~1 call a case).
+ */
+export async function assembleIllustrations(o: { contrast: string; seed: string | number }): Promise<PairRef[]> {
+  const I = LOOP.calib.illustrations;
+  const drew = (c: string, arm: Arm) => json<RecordedReply[]>(join(caseDir(o.contrast, c), arm, "replies.json")).some((r) => r.role === "picture");
+  const real: Pair[] = judgedCases(o.contrast).filter((c) => drew(c, "A") && drew(c, "B")).map((c) => ({ run: o.contrast, case: c, subset: "illustrations" }));
+  const craftOf = (p: Pair) => join(caseDir(p.run, p.case), "judge", "craft.json");
+  await Promise.all(real.filter((p) => !existsSync(craftOf(p))).map(async (p) => put(craftOf(p), await craftCall(p.run, readPacket(p.run, p.case), variants().craft))));
+  const ref = (p: Pair, q: "fidelity" | "craft"): PairRef => ({ id: `${q[0]}:${p.run}:${p.case}`, run: p.run, case: p.case, question: q, subset: p.subset });
+  const fid = shuffle(real, o.seed, key).map((p) => ref(p, "fidelity"));
+  withRepeats(fid, o.seed, I.repeats, I.repeatGap);
+  const craft = shuffle(real, `${o.seed}:craft`, key).map((p) => ref(p, "craft"));
+  put(labelFiles("illustrations")!.pairs, [...fid, ...craft]);
   return [...fid, ...craft];
 }
 
@@ -106,16 +129,20 @@ const share = (rows: CalibRow[]) => (rows.length ? sum(rows.map((r) => agreement
 const preferMore = (probes: CalibRow[]) => (probes.length ? (probes.filter((r) => r.judge === r.bigger).length - probes.filter((r) => r.label === r.bigger).length) / probes.length : 0);
 const EPS = 1e-9;
 
+/** The bars a label set is held to: the calibration's, or the illustrations round's (half the labels, the same shares). */
+type Bar = Record<"clear" | "pass" | "minClear" | "selfGap" | "preferMoreMax" | "craftPairs" | "craftPass", number>;
+const ILLUSTRATIONS_BAR: Bar = { ...LOOP.calib, ...LOOP.calib.illustrations };
+
 /** §4.5's fidelity rule on the first label of each pair; `repeats` holds the owner's two labels of each repeated pair. */
-export function scoreFidelity(rows: CalibRow[], repeats: [Side, Side][]) {
-  const { clear: N, pass: K, minClear, selfGap, preferMoreMax } = LOOP.calib;
+export function scoreFidelity(rows: CalibRow[], repeats: [Side, Side][], bar: Bar = LOOP.calib) {
+  const { clear: N, pass: K, minClear, selfGap, preferMoreMax } = bar;
   const clear = rows.filter((r) => r.strength === "clear").slice(0, N);
   const score = sum(clear.map((r) => agreement(r.label, r.judge)));
   const decisive = rows.filter((r) => r.strength);
   const self = repeats.length ? repeats.filter(([a, b]) => a === b).length / repeats.length : NaN;
   const probes = rows.filter((r) => r.bigger);
   const rules = {
-    // ≥ 47 of 60 clear, or the same 78% on at least 40.
+    // ≥ 47 of 60 clear, or the same 78% on at least 40 (the illustrations round: 24 of 30, or 80% on at least 20).
     clear: clear.length >= N ? score >= K : score / clear.length >= K / N - EPS,
     // The bar follows how decidable the pairs really are: the owner's own repeat agreement − 0.10.
     self: share(decisive) >= self - selfGap - EPS,
@@ -134,8 +161,8 @@ export function scoreFidelity(rows: CalibRow[], repeats: [Side, Side][]) {
 }
 
 /** The craft rule: ≥ 22 of 30 craft labels (the same share on at least 20, as fidelity's 40 of 60), and the more-detail probe rule. */
-export function scoreCraft(rows: CalibRow[]) {
-  const { craftPairs: N, craftPass: K, clear, minClear, preferMoreMax } = LOOP.calib;
+export function scoreCraft(rows: CalibRow[], bar: Bar = LOOP.calib) {
+  const { craftPairs: N, craftPass: K, clear, minClear, preferMoreMax } = bar;
   const first = rows.slice(0, N);
   const score = sum(first.map((r) => agreement(r.label, r.judge)));
   const probes = first.filter((r) => r.bigger);
@@ -177,7 +204,7 @@ async function verdictFor(p: PairRef, v: Variant): Promise<Side> {
   return combined(first, second);
 }
 
-type Calibration = { use: { fidelity: Variant | null; craft: Variant | null }; outcome: Outcome; checks: unknown[] };
+type Calibration = { use: { fidelity: Variant | null; craft: Variant | null; illustrations?: boolean }; outcome: Outcome; checks: unknown[] };
 
 /**
  * `rte calib --check [--variant 2]`: the owner's labels against the judge (0 calls with variant 1, the
@@ -211,9 +238,46 @@ export async function checkCalibration(variant: Variant = 1) {
   const fidelity = scoreFidelity(rows.filter((r) => r.question === "fidelity"), repeats);
   const craft = scoreCraft(rows.filter((r) => r.question === "craft"));
   const outcome = outcomeOf(variant, fidelity, craft);
-  const use = { fidelity: fidelity.pass ? vOf("fidelity") : null, craft: craft.pass ? vOf("craft") : null };
+  // The illustrations round's result stands: it has labels of its own (checkIllustrations).
+  const use = { fidelity: fidelity.pass ? vOf("fidelity") : null, craft: craft.pass ? vOf("craft") : null, ...(prior?.use?.illustrations ? { illustrations: true } : {}) };
   const at = new Date().toISOString();
   save(calibrationFile(), { use, outcome, checks: [...(prior?.checks ?? []), { at, variant, outcome, fidelity, craft }] });
   const health: HealthRow = { at, kind: "calib", pass: outcome === "pass" || outcome === "pass-no-craft", detail: { variant, outcome, use } };
+  return { outcome, use, fidelity, craft, health };
+}
+
+/**
+ * `rte calib --check --illustrations`: the owner's labels on the illustrations round against the judge, at the prompts
+ * calibration chose (0 calls: the round's verdicts exist). Sets calibration.json's use.illustrations and nothing else: a
+ * keep that switches the picture model, and R1 deciding, wait for it (LOOP-V2.md A5, C3).
+ */
+export async function checkIllustrations() {
+  const files = labelFiles("illustrations")!;
+  const pairs = new Map(json<PairRef[]>(files.pairs).map((p) => [p.id, p]));
+  const prior = maybe<Calibration>(calibrationFile());
+  const v = variants();
+  const first = new Map<string, Label>();
+  const again: Label[] = [];
+  for (const l of standingLabels(files.labels)) {
+    const p = pairs.get(l.pair);
+    if (!p || l.label === "skip") continue;
+    if (p.swap) again.push(l);
+    else if (!first.has(p.id)) first.set(p.id, l);
+  }
+  const rows = await Promise.all([...first.values()].map(async (l): Promise<CalibRow> => {
+    const p = pairs.get(l.pair)!;
+    return { pair: p.id, question: p.question, subset: p.subset, label: l.label as Side, strength: l.strength, judge: await verdictFor(p, p.question === "craft" ? v.craft : v.fidelity) };
+  }));
+  const repeats = again.flatMap((l): [Side, Side][] => {
+    const orig = first.get(l.pair.replace(/:r$/, ""));
+    return orig ? [[orig.label as Side, l.label as Side]] : [];
+  });
+  const fidelity = scoreFidelity(rows.filter((r) => r.question === "fidelity"), repeats, ILLUSTRATIONS_BAR);
+  const craft = scoreCraft(rows.filter((r) => r.question === "craft"), ILLUSTRATIONS_BAR);
+  const outcome: "pass" | "more" | "fail" = fidelity.more || craft.more ? "more" : fidelity.pass && craft.pass ? "pass" : "fail";
+  const at = new Date().toISOString();
+  const use = { fidelity: prior?.use?.fidelity ?? null, craft: prior?.use?.craft ?? null, illustrations: outcome === "pass" };
+  save(calibrationFile(), { use, outcome: prior?.outcome ?? "more", checks: [...(prior?.checks ?? []), { at, kind: "illustrations", outcome, fidelity, craft }] });
+  const health: HealthRow = { at, kind: "calib", pass: outcome === "pass", detail: { illustrations: outcome } };
   return { outcome, use, fidelity, craft, health };
 }

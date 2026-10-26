@@ -4,10 +4,10 @@
 // reach a Claude process only through dev/claude.ts' childEnv(). Nothing here
 // logs or writes a token: the slot state on disk holds slot numbers and numbers.
 //
-// Rotation: new work moves off a slot at the first of five-hour utilization (or,
-// until the server reports it, list $ since the window start over the window's
-// estimated size W) ≥ LOOP.fiveHourPauseAt (0.60: the token is shared with testers on prod), an allowed_warning, a
-// rejected event or a 429, or the slot's weekly allowance (LOOP.weekSevenDayMax). Two slots reporting the same resetsAt are one account.
+// Rotation: new work moves off a slot at the first of the server's five-hour utilization ≥ LOOP.fiveHourPauseAt
+// (0.60: the token is shared with testers on prod), an allowed_warning, a rejected event or a 429, or its weekly
+// utilization past LOOP.weekSevenDayMax. Every call on a slot brings the server's reading; a slot with none yet is
+// unspent. Two slots reporting the same resetsAt are one account.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import type { RateLimit } from "../../dev/claude.ts";
 import { LOOP, WEEK_CHECK } from "./config.ts";
+import { ownerCheckout } from "./paths.ts";
 
 export type SlotN = 1 | 2 | 3;
 export type Token = { slot: SlotN; token: string };
@@ -44,10 +45,10 @@ export function loadTokens(file = join(homedir(), ".config/rt-eval/tokens.env"),
 }
 
 /**
- * The token the owner's dev plugin uses (CLAUDE_CODE_OAUTH_TOKEN in his checkout's .env files,
+ * The token the owner's dev plugin uses (CLAUDE_CODE_OAUTH_TOKEN in their checkout's .env files,
  * in vite's order), read into memory only, as slot 1. Refused unless the step's cap is ≤ 60.
  */
-export function loadDevToken(cap: number | undefined, dir = join(homedir(), "projects/rt-draw-v2")): Token[] {
+export function loadDevToken(cap: number | undefined, dir = ownerCheckout()): Token[] {
   if (!(cap !== undefined && cap > 0 && cap <= DEV_TOKEN_MAX_CAP)) throw new Error(`--dev-token needs --cap ${DEV_TOKEN_MAX_CAP} or less`);
   let token: string | undefined;
   for (const f of [".env", ".env.local", ".env.development", ".env.development.local"])
@@ -67,7 +68,7 @@ export function loadJevKey(o: { file?: string } | { dev: true; dir?: string }): 
     if ((statSync(file).mode & 0o777) !== 0o600 || inRepo(dirname(file))) return undefined;
     return parseEnv(readFileSync(file, "utf8")).TYPESAFE_API_KEY || undefined;
   }
-  const dir = o.dir ?? join(homedir(), "projects/rt-draw-v2");
+  const dir = o.dir ?? ownerCheckout();
   let key: string | undefined;
   for (const f of [".env", ".env.local", ".env.development", ".env.development.local"])
     if (existsSync(join(dir, f))) key = parseEnv(readFileSync(join(dir, f), "utf8")).TYPESAFE_API_KEY || key;
@@ -79,8 +80,8 @@ type SlotState = {
   status?: string; fiveHour?: number; sevenDay?: number; /** unix seconds */ resetsAt?: number;
   /** when the server last sent sevenDay (ms) */
   sevenDayAt?: number;
-  /** list $ since windowStart (ms), the window's $ size, and whether W came from an allowed_warning */
-  windowStart?: number; usdWindow: number; W: number; calibrated: boolean;
+  /** list $ since windowStart (ms), reported */
+  windowStart?: number; usdWindow: number;
   /** a 429 or rejected event, until the window resets */
   limited: boolean;
   /** list $ per hour (start ms) over the trailing week */
@@ -97,7 +98,7 @@ export class Slots {
     this.file = file;
     this.now = now;
     const saved: SlotState[] = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : [];
-    this.s = slots.map((slot) => saved.find((x) => x.slot === slot) ?? { slot, usdWindow: 0, W: LOOP.windowUsdStart, calibrated: false, limited: false, hours: {} });
+    this.s = slots.map((slot) => saved.find((x) => x.slot === slot) ?? { slot, usdWindow: 0, limited: false, hours: {} });
     this.current = slots[0];
     this.current = this.next() ?? slots[0];
   }
@@ -120,10 +121,6 @@ export class Slots {
     for (const h of Object.keys(s.hours)) if (Number(h) < now - WEEK) delete s.hours[h];
     const r = o.rateLimit;
     if (r) {
-      // The CLI sends allowed_warning at ≥ 90% of any window: the first one the five-hour window sent tells this account's
-      // window size. A warning with the five-hour reading under 90% (or none, the week's past 90%) is another window's.
-      const fiveHourWarns = r.fiveHour !== undefined ? r.fiveHour >= LOOP.rotateAt : (r.sevenDay ?? 0) < LOOP.rotateAt;
-      if (r.status === "allowed_warning" && fiveHourWarns && !s.calibrated && s.usdWindow > 0) Object.assign(s, { W: s.usdWindow / LOOP.rotateAt, calibrated: true });
       Object.assign(s, { status: r.status, fiveHour: r.fiveHour ?? s.fiveHour, sevenDay: r.sevenDay ?? s.sevenDay });
       if (r.sevenDay !== undefined) s.sevenDayAt = now;
       if (r.resetsAt) Object.assign(s, { resetsAt: r.resetsAt, windowStart: Math.min(s.windowStart, r.resetsAt * 1000 - FIVE_H) });
@@ -141,16 +138,15 @@ export class Slots {
     Object.assign(s, { status: undefined, fiveHour: undefined, resetsAt: undefined, windowStart: undefined, usdWindow: 0, limited: false });
   }
 
-  /** Five-hour use: the server's utilization, else the list-$ estimate. */
+  /** Five-hour use: the server's utilization (0 before its first reading). */
   use(slot: SlotN) {
     const s = this.get(slot);
     this.renew(s);
-    return s.fiveHour ?? s.usdWindow / s.W;
+    return s.fiveHour ?? 0;
   }
 
   private week(s: SlotState) {
-    const usd7d = Object.values(s.hours).reduce((a, b) => a + b, 0);
-    return s.sevenDay !== undefined ? s.sevenDay > LOOP.weekSevenDayMax : usd7d > LOOP.weekWindowsPerToken * s.W;
+    return (s.sevenDay ?? 0) > LOOP.weekSevenDayMax;
   }
 
   /** Slots parked for their week on no server reading, or one WEEK_CHECK.afterH hours old: a call on each reads it again. */
@@ -185,11 +181,7 @@ export class Slots {
     for (const a of known) for (const b of known) if (a.slot < b.slot && a.resetsAt === b.resetsAt) return [a.slot, b.slot];
   }
 
-  /**
-   * What run.ts and each paying step pace by: stop (every slot past its week) or pause until the earliest five-hour
-   * reset (LOOP-V2.md A4). The night cap is the loop's own rule between steps (state.ts), counted from the loop's meter
-   * with its --night-windows: this process's start and default would be a second, different night.
-   */
+  /** What run.ts and each paying step pace by: stop (every slot past its week) or pause until the earliest five-hour reset (LOOP-V2.md A4). */
   pace(): { ok: true } | { ok: false; stop?: string; pauseUntil?: number } {
     if (this.s.every((s) => this.week(s))) return { ok: false, stop: "every slot past its weekly allowance" };
     if (this.s.every((s) => this.why(s.slot))) return { ok: false, pauseUntil: Math.min(...this.s.map((s) => (s.resetsAt ? s.resetsAt * 1000 : (s.windowStart ?? this.now()) + FIVE_H))) };
@@ -198,7 +190,7 @@ export class Slots {
 
   /** Numbers only, for /status and budget.jsonl. */
   status() {
-    return this.s.map((s) => ({ slot: s.slot, current: s.slot === this.current, use: this.use(s.slot), fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, resetsAt: s.resetsAt, status: s.status, usdThisWindow: s.usdWindow, windowUsd: s.W, calibrated: s.calibrated, usd7d: Object.values(s.hours).reduce((a, b) => a + b, 0), why: this.why(s.slot) }));
+    return this.s.map((s) => ({ slot: s.slot, current: s.slot === this.current, use: this.use(s.slot), fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, resetsAt: s.resetsAt, status: s.status, usdThisWindow: s.usdWindow, usd7d: Object.values(s.hours).reduce((a, b) => a + b, 0), why: this.why(s.slot) }));
   }
 
   private save() {

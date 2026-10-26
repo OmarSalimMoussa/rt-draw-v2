@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { caseFile } from "../judge/packet.ts";
 import { type ForkFile, type Rig, type RunSpec, runAB } from "./ab.ts";
 import { LOOP } from "./config.ts";
-import { gatedStats, pairedRatio, tailsOf } from "./latency.ts";
+import { gatedStats, pairedRatio, shiftTest, tailsOf } from "./latency.ts";
 import { caseDir, put, runFile } from "./record.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import type { CaseInfo, DecisionClass, Ratio, RecordedReply, SceneJSON, SetId } from "./types.ts";
@@ -97,12 +97,17 @@ export async function scan(rig: Rig, o: Pick<RunSpec, "run" | "arms" | "seed" | 
     timed = { run, ttfc: pairedRatio(t.rows, "ttfc"), ttd: pairedRatio(t.rows, "ttd"), ttfd: pairedRatio(t.rows, "ttfd"), render: pairedRatio(t.rows, "render"), tails: tailsOf(t.rows) };
     // The slow sends too: a schedule change on a few sends (the picture-heavy ones) moves a tail, not the median. Only the
     // deciding latencies make it S, read as the veto reads them (a tail once it holds LOOP.latTailMinSends sends): a change
-    // that moves time to done alone has nothing a latency card could keep. Flat: within the band, or not surely moved
-    // (its interval holds 1), so one noisy case can't make an identical candidate a schedule change.
-    const flat = (r: Ratio) => Math.abs(r.est - 1) <= LOOP.nTimingBand || (r.lo95 <= 1 && (r.hi95 ?? r.hi90) >= 1);
+    // that moves time to done alone has nothing a latency card could keep. Flat: both medians within the band (one noisy
+    // case can't move a median), and the tails within it or none surely moved (the veto's one swap test, two-sided at
+    // LOOP.latVeto.p): one slow send can move a tail alone. A swap test alone can't read a few sessions as moved (4 give
+    // 1/16 at best), so a schedule change that halves every first drawing would read flat on them.
+    const stats = Object.entries(gatedStats(t.rows)), band = (r: Ratio) => Math.abs(r.est - 1) <= LOOP.nTimingBand;
+    const shift = shiftTest(t.rows);
+    const flat = stats.every(([k, r]) => k.includes(" ") || band(r))
+      && (stats.every(([, r]) => band(r)) || !shift || Math.min(shift.slower, shift.faster) >= LOOP.latVeto.p / 2);
     // On the recorded clock the arms must still draw the same: a change that only moves time, else what it draws moved
     // with the timing ("keep the guess when the resolver is late") and only the judged path may keep it.
-    cls = !sameOnTheClock(run, t.rows) ? "Q" : Object.values(gatedStats(t.rows)).every(flat) ? "N" : "S";
+    cls = !sameOnTheClock(run, t.rows) ? "Q" : flat ? "N" : "S";
   }
   const affected: ScanResult["affected"] = {};
   for (const c of cases.filter((x) => x.affected)) (affected[c.set] ??= []).push(c.case);

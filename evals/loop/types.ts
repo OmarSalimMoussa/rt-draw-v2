@@ -153,7 +153,9 @@ export type Verdict = {
 // ---- Call records: meter/calls.jsonl, written by the gateway (§3.4)
 
 export type CallLog = {
-  at: string; run: string; case?: string; arm?: Arm; slot?: number; role: string; model: string; servedModel?: string; sdk: string;
+  at: string; run: string; case?: string; arm?: Arm; slot?: number; role: string;
+  /** An arm page's call (the product's), not an eval role's; absent in lines before 2026-10-26 (metrics.ts isProduct). */ page?: boolean;
+  model: string; servedModel?: string; sdk: string;
   reqHash: string; shared: Shared; mode: CallMode;
   inTokens: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; outTokens: number; thinkingTokens: number;
   stopReason?: string; ms: number; firstMs?: number; waitMs?: number; readyAtTake?: boolean; retries: number; apiError?: string;
@@ -171,11 +173,11 @@ export type AgentLog = {
 // ---- History: branch eval/history (§5.3)
 
 export type Ratio = {
-  est: number; lo90: number; hi90: number; lo95: number; /** the tails' (LOOP.latTails) keep bound */ hi95?: number;
+  est: number;
   /**
    * What latency decides on (LOOP-V2.md A3): the session-swap test's one-sided p-values, `slower` that B is above A by
-   * chance, `faster` that it's below the keep line by chance (A for the median, LOOP.latTailKeepHi95·A for a tail). The
-   * bootstrap bounds above are reported only. Absent in rows written before it.
+   * chance, `faster` that it's below the keep line by chance (A for the median, LOOP.latTailKeepHi95·A for a tail).
+   * Absent in rows written before it; rows before 2026-10-26 also carry session-bootstrap bounds (lo90, hi90, lo95).
    */
   p?: { slower: number; faster: number };
 };
@@ -183,13 +185,23 @@ export type Lat = { ttfcP50: number; ttfcP75: number; ttdP50: number; ttdP75: nu
 type Share = { n: number; share: number; lo90: number; hi90: number };
 export type EpochRow = { epoch: number; at: string; era: number; machine: "pgx" | "laptop"; championSha: string; configId: string;
   decisions: string[]; checkpoint?: string;
-  cost: { listUsd: number; windowShare: number; calls: number; agentUsd: number; byRole: Record<string, { calls: number; usd: number }>;
+  cost: { listUsd: number; calls: number; agentUsd: number; byRole: Record<string, { calls: number; usd: number }>;
           tokens: { in: number; cacheRead: number; write5m: number; write1h: number; out: number; thinking: number } };
   minutes: { total: number; agents: number; measure: number; idle: number };
   slots: { slot: 1 | 2 | 3; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; usdThisWindow: number; status: string }[] };
+/**
+ * Why a decision went the way it did, as data (search.ts reads these, never the reasons' words): a veto ("latency",
+ * "empty", "pictures", "deferred", "heldout", "direction": G3 didn't lean the card's way, "continuation", "schedule": a
+ * schedule change drew differently on the held-out cases), a fidelity floor or futility that reverted it ("floor"),
+ * "no-change", or an owner hold ("owner").
+ */
+export type Code = "latency" | "empty" | "pictures" | "deferred" | "heldout" | "direction" | "continuation" | "schedule" | "floor" | "no-change" | "owner";
+
 export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: number; card?: HypothesisCard; candSha: string; baseSha: string;
   class: DecisionClass | "owner"; goal: Goal | "owner";
-  verdict: "keep" | "revert" | "void" | "owner"; reasons: string[]; trust: "green" | "amber" | "void";
+  verdict: "keep" | "revert" | "void" | "owner"; reasons: string[];
+  /** The reasons as data (absent before 2026-10-26: search.ts reads those rows' words). */ codes?: Code[];
+  trust: "green" | "amber" | "void";
   looks: { n: number; decisive: number; z: number }[]; counts: { wins: number; losses: number; ties: number; exactTies: number };
   affected: { tuning: number; of: number; topUp: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
   overuse?: { detector: string; a: number; b: number }; checkpoint?: string /* owner steps */;
@@ -198,29 +210,31 @@ export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: numb
   cost: { usdPerCaseRatio: number; listUsd: number; calls: number }; minutes: number; run: string; judgeId: string; configId: string;
   /** Bench R1 at a keep (evals/real/shadow.ts' Shadow): reported, decides nothing yet. */
   real?: { run: string; hash: string; cases: number; void: number; lost?: number; checks: [number, number]; casesPassing: [number, number]; share?: number; shareHold?: number; ttfd?: Ratio; render?: Ratio } };
-export type CheckpointRow = { id: string; epoch: number; era: number; at: string; machine: string; trust: "green" | "amber" | "void";
-  champion: string; anchor: string; anchorMoved: boolean;
+export type CheckpointRow = { id: string; epoch: number;
+  /** The yardstick's era: a new judgeId or bench starts the next, charted apart (nothing bridges two eras). */
+  era: number; at: string; machine: string; trust: "green" | "amber" | "void";
+  /** The champion, and A0: checkpoint 0's champion, which never moves (rows before 2026-10-26 may name a later anchor). */
+  champion: string; anchor: string;
   share: Record<"all" | "heldout" | "tuning" | "human", Share | undefined>;
-  craft: Share; Q: { value: number; lo90: number; hi90: number };
-  latency: { champion: Lat; anchor: Lat; ratioTtfc: Ratio; ratioTtd: Ratio; chainedTtfc: number; chainedTtd: number;
-             /** The deciding latencies (LOOP-V2.md), chained from the first checkpoint that measured them. */
-             ratioTtfd?: Ratio; ratioRender?: Ratio; chainedTtfd?: number; chainedRender?: number;
-             debt: boolean; vsLatencyCheckpoint: { ttfd?: Ratio & { since?: string }; render?: Ratio & { since?: string }; ttfc?: Ratio; ttd?: Ratio; L: string } };
-  quality: { debt: boolean; vsQualityCheckpoint: { dQ: number; lo90: number; hi90: number; P: string } };
+  craft: Share;
+  latency: { champion: Lat; anchor: Lat; ratioTtfc: Ratio; ratioTtd: Ratio;
+             /** The deciding latencies (LOOP-V2.md), champion over A0 in this run. */
+             ratioTtfd?: Ratio; ratioRender?: Ratio;
+             /** The latency veto's test on this run: what the champion is surely slower than A0 on, if it is (a notice to the owner). */
+             slower?: string };
   /** Checkpoint 0's: ttfd, render, order and share since LOOP-V2 (ttfc and ttd before). */
   aa?: { pass: boolean; ci: number; tests: Record<string, { est: number; lo: number; hi: number; halfWidth: number }> } /* checkpoint 0 */;
   productUsdPerSend: { champion: number; anchor: number }; overfitGap: number;
   health: { voidPct: number; flipPct: number; hedgePct: number; beatCompliance: number; thinking: Record<string, number>; coldShare: number; psiMedian: number };
   realism?: Record<string, { driver: number; human: number }>;
-  /** Bench R1, anchor against champion (evals/real/shadow.ts' Shadow): reported, decides nothing yet. */
+  /** Bench R1, A0 against the champion (evals/real/shadow.ts' Shadow): reported, decides nothing yet. */
   real?: DecisionRow["real"] };
-export type Era = { era: number; from: string; why: "judge" | "bench" | "measure"; judgeId: string; bench: string; measureHash: string;
-  bridge?: { run: string; step: { Q: number; ttfc: number; ttd: number; ttfd?: number; render?: number } } };
-export type Marker = { at: string; era: number; kind: "harness" | "served-model" | "owner-step" | "anchor"; label: string; ref?: string };
+/** markers.jsonl: what moved under the chart without being a decision ("anchor" in rows before 2026-10-26). */
+export type Marker = { at: string; era: number; kind: "harness" | "served-model" | "owner-step" | "era"; label: string; ref?: string };
 /** budget.jsonl: one meter snapshot per epoch per slot. */
 export type BudgetRow = { at: string; epoch: number; slot: 1 | 2 | 3; usdThisWindow: number; fiveHour?: number; sevenDay?: number;
   /** when the server sent sevenDay (ms) */ sevenDayAt?: number;
-  /** W_k, the window's $ estimate */ windowUsd: number; status: string; resetsAt?: number; usd7d: number };
+  status: string; resetsAt?: number; usd7d: number };
 /** health.jsonl: A/A, canary, readiness and calibration outcomes. */
 export type HealthRow = { at: string; kind: "aa" | "canary" | "ready" | "calib"; pass: boolean; detail: Record<string, unknown> };
 /** smoke.jsonl: §11 step 1, the page's first point before any epoch: its A/B's share and median latency, and its cost. */
@@ -280,8 +294,8 @@ export type HypothesisCard = { id: string; component: string /* "resolve" | "dra
   combines?: string[];
   /** A latency card's metric: the deciding ones only (LOOP-V2.md). */
   goal: Goal; metric?: "ttfd" | "render"; classGuess: "S" | "R" | "Q" | "D"; dialogue: boolean;
-  predicts: string; overuseDetector?: string /* a detector name from patterns.ts' OVERUSE, §1.4 item 8 */;
+  overuseDetector?: string /* a detector name from patterns.ts' OVERUSE: its rate on the cards' other cases is reported */;
   targets?: { asks?: AskType[]; beats?: BeatId[] } /* the cases the card is for; the over-use rate is read off the rest */;
   generality?: string /* new ops */;
-  isPatch: boolean; raisesCost: boolean; touchesFrozen: boolean; risk: string; files: string[];
+  isPatch: boolean; touchesFrozen: boolean; risk: string; files: string[];
   /** rte decide --owner-ok: the owner's say-so on findings that are the owner's call (G0 waives them; a reject stands) */ ownerOk?: boolean };
