@@ -204,9 +204,16 @@ export class Pool {
     return this.o.maxWarm ?? 4;
   }
 
-  /** Tops `key` up to n waiting processes (at most maxWarm). */
+  /**
+   * Tops `key` up to n waiting processes (at most maxWarm). One the reaper closes within a minute (or half of idleMs) is
+   * closed now and replaced: counted, it left the take it was warmed for to start cold (the eval loop's 35 cold takes
+   * all came 5 to 25 min after their key's last).
+   */
   warm(key: string, n: number, start: () => Proc) {
-    const pool = this.pools.get(key) ?? [];
+    const now = Date.now(), last = this.idleMs - Math.min(60_000, this.idleMs / 2);
+    const all = this.pools.get(key) ?? [];
+    const pool = all.filter((p) => now - p.born <= last);
+    for (const p of all) if (!pool.includes(p)) p.q.close();
     this.pools.delete(key);
     this.pools.set(key, pool);
     while (pool.length < Math.min(n, this.maxWarm)) pool.push(start());

@@ -178,6 +178,17 @@ const later = pool2.take(kB, 0, start("pool B"));
 check(later.waiting && later.readyAtTake, `a spare that had finished starting: waiting ${later.waiting}, readyAtTake ${later.readyAtTake}`);
 later.proc.q.close();
 pool2.closeAll();
+// A spare the reaper would close before its take is replaced when the key is warmed again, so the take finds one.
+const pool3 = new Pool({ idleMs: 1000 });
+const kC = keyOf("claude-sonnet-5-5", "pool C");
+pool3.warm(kC, 1, start("pool C"));
+await sleep(600);
+pool3.warm(kC, 1, start("pool C"));
+await sleep(500);
+const due = pool3.take(kC, 0, start("pool C"));
+check(due.waiting, "a spare near its idle limit counted as warm, and its take started cold");
+due.proc.q.close();
+pool3.closeAll();
 
 // ---- The dev plugin through a Vite server on this check's port: NDJSON, warm default, keys, log, config dir.
 const root = mkdtempSync(join(tmpdir(), "rt-t1-root-"));
