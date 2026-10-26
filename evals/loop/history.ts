@@ -125,7 +125,7 @@ export function saveRun(run: string) {
 
 /** Bench R1's report (evals/real/shadow.ts) as one line, for the ledger and the log. */
 export const realLine = (x: NonNullable<DecisionRow["real"]>) =>
-  `R1 (shadow, ${x.cases} cases${x.void ? `, ${x.void} void` : ""}${x.lost ? `, ${x.lost} one arm failed` : ""}): checks ${(100 * x.checks[0]).toFixed(0)}% → ${(100 * x.checks[1]).toFixed(0)}%, cases passing all ${(100 * x.casesPassing[0]).toFixed(0)}% → ${(100 * x.casesPassing[1]).toFixed(0)}%` +
+  `R1 ${x.hash.slice(0, 12)} (shadow, ${x.cases} cases${x.void ? `, ${x.void} void` : ""}${x.lost ? `, ${x.lost} one arm failed` : ""}): checks ${(100 * x.checks[0]).toFixed(0)}% → ${(100 * x.checks[1]).toFixed(0)}%, cases passing all ${(100 * x.casesPassing[0]).toFixed(0)}% → ${(100 * x.casesPassing[1]).toFixed(0)}%` +
   `${x.share !== undefined ? `, judge share ${x.share.toFixed(2)}${x.shareHold !== undefined ? ` (R-hold ${x.shareHold.toFixed(2)})` : ""}` : ""}${x.ttfd ? `, first drawing ×${x.ttfd.est.toFixed(2)}` : ""}${x.render ? `, render ×${x.render.est.toFixed(2)}` : ""}`;
 
 /** One ledger.md entry per decision: card, class, goal, verdict, looks, vetoes, $ and minutes, the run. */

@@ -6,10 +6,16 @@
 # (claude-config/) is never copied.
 #   bash evals/real/pull.sh            # both
 #   bash evals/real/pull.sh --live     # the box only
+# The machines are this laptop's, not the repo's: ~/.config/rt-eval/hosts.env sets RTDRAW_BOX (ssh target of the
+# hosted app's box) and RT_PGX (ssh target of the PGX), and may set RTDRAW_CONTAINER (default rtdraw-app).
 set -euo pipefail
 
-BOX=${RTDRAW_BOX:-deploy@31.220.50.146}
-PGX=${RT_PGX:-omar-salim-moussa@thinkstationpgx-0eea}
+HOSTS=${RT_HOSTS:-$HOME/.config/rt-eval/hosts.env}
+# shellcheck disable=SC1090
+[ -f "$HOSTS" ] && . "$HOSTS"
+BOX=${RTDRAW_BOX:?set RTDRAW_BOX in $HOSTS}
+PGX=${RT_PGX:?set RT_PGX in $HOSTS}
+CONTAINER=${RTDRAW_CONTAINER:-rtdraw-app}
 # The dev server's data is in the main checkout, also when this runs from a worktree.
 LOCAL=${RT_LOCAL_DATA:-$(dirname "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)")/.data}
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -19,7 +25,7 @@ want_local=1
 [ "${1:-}" = "--live" ] && want_local=0
 
 echo "== live: $BOX → $PGX:$DEST/live"
-ssh "$BOX" 'docker exec rtdraw-app sh -c "cd /data && tar -cf - access app model-calls.jsonl"' |
+ssh "$BOX" "docker exec $CONTAINER sh -c 'cd /data && tar -cf - access app model-calls.jsonl'" |
   ssh "$PGX" "umask 077 && mkdir -p ~/$DEST/live && tar -C ~/$DEST/live -xf - && du -sh ~/$DEST/live | cut -f1"
 
 if [ "$want_local" = 1 ] && [ -d "$LOCAL/app" ]; then

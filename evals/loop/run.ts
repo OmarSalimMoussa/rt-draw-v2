@@ -62,14 +62,14 @@ import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, DecisionRow, EpochRow, Fork, HypothesisCard, Judged, Ratio, Row, SceneJSON, SendOutcome } from "./types.ts";
 import { type Decision, type LoopState, decide } from "./verdict.ts";
 import * as real from "../real/real.ts";
-import { realBaseline, realShadow } from "../real/shadow.ts";
+import { realShadow } from "../real/shadow.ts";
 
 const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (evals/RUNBOOK.md)
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway) | bank rerecord --cap n (replies on today's champion)
   aa --shared --cases n                bench freeze                         human freeze
-  real ingest [--raw stamp] | render | triage --cap n | gold --cap n [--run real-gold-…] | review [--host ip] [--review-port n] | freeze | baseline --cap n
+  real ingest [--raw stamp] | render | triage --cap n | gold --cap n [--run real-gold-…] [--regold] | review [--host ip] [--review-port n] | freeze
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render | --card <decision id>] [--owner-ok] --cap n
@@ -669,7 +669,7 @@ async function realCmd() {
     // --run resumes an earlier gold run: the calls it finished come back from the cache, unpaid.
     const run = str("run") ?? `real-gold-${stampNow()}`;
     if (!run.startsWith("real-gold-")) throw new Error("real gold --run takes an earlier gold run's name (real-gold-…)");
-    const todo = real.wantGold(since, only);
+    const todo = real.wantGold(since, only, !!o.f.regold);
     const batch = real.nextBatch();
     let failed = 0;
     await withGateway(() => pool(todo, REAL_PARALLEL, async (c) => {
@@ -693,17 +693,8 @@ async function realCmd() {
     openHistory();
     const r = real.freezeReal();
     commitHistory(`real freeze: R1 = ${r.cases} cases (${r.tune} tune, ${r.hold} hold), ${r.hash.slice(0, 12)}`);
-    say(`real freeze: R1, ${r.cases} cases (${r.tune} R-tune from ${r.people.tune} people, ${r.hold} R-hold from ${r.people.hold}), ${r.merged} repeats merged, ${r.fixed} already fixed (real/fixed.json), ${r.inkWaiting} waiting for synthesized ink, hash ${r.hash.slice(0, 12)}`);
-  } else if (step === "baseline") {
-    // R1 on the champion twice, live and unshared: what it already does right is no case (LOOP-V2.md A5).
-    needCap("real baseline");
-    const champ = championArm();
-    const run = `real-baseline-${stampNow()}`;
-    // The tree listed twice: each arm its own Vite, as every A/A (openRig: one Vite for both puts B behind A).
-    const r = await withGateway((gw) => withRig(gw, [champ.tree, champ.tree], (rig) => realBaseline(rig, { run, arms: { A: champ, B: champ }, seed: run, champion: champ.sha })));
-    const x = (v?: Ratio) => (v ? `×${v.est.toFixed(3)} (${v.lo95.toFixed(3)}–${(v.hi95 ?? v.hi90).toFixed(3)})` : "-");
-    say(`real baseline: ${r.found.length} of ${r.cases} R1 cases the champion already does right (of ${r.passing.length} where both runs pass every check, those where the judge finds both as good as gold), ${r.ids.length} listed in all${r.void ? `, ${r.void} void` : ""}; A/A first drawing ${x(r.ttfd)}, render ${x(r.render)} (${run}); the next rte real freeze leaves them out`);
-  } else throw new Error("real ingest | render | triage | gold | review | freeze | baseline");
+    say(`real freeze: R1, ${r.cases} cases (${r.tune} R-tune from ${r.people.tune} people, ${r.hold} R-hold from ${r.people.hold}), ${r.merged} repeats merged, ${r.inkWaiting} waiting for synthesized ink${r.moved ? `, ${r.moved} left out (their gold was drawn for a send a later pull moved)` : ""}, hash ${r.hash.slice(0, 12)}`);
+  } else throw new Error("real ingest | render | triage | gold | review | freeze");
 }
 
 /** A checkpoint of today's champion (an owner step for `sync`), then the champion-miss digest from its losses. */

@@ -190,14 +190,6 @@ export const captureVariance = (page: Page, jpeg: Buffer) =>
     for (let i = 0; i < d.length; i += 4) { const y = (d[i] + d[i + 1] + d[i + 2]) / 3; s += y; s2 += y * y; }
     return s2 / (d.length / 4) - (s / (d.length / 4)) ** 2; })()`);
 
-/** A JPEG scaled to `width` by the page itself, as a capture of that width would be. */
-export const resized = async (page: Page, jpeg: Buffer, width: number, quality: number) =>
-  Buffer.from(await page.eval<string>(`(async () => {
-    const img = new Image(); img.src = "data:image/jpeg;base64,${jpeg.toString("base64")}"; await img.decode();
-    const c = Object.assign(document.createElement("canvas"), { width: ${width}, height: Math.round(img.naturalHeight * ${width} / img.naturalWidth) });
-    const g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", ${quality}).split(",")[1]; })()`), "base64");
-
 /** Whether a rendered shape lies on the stage: only then can a capture be told blank (an empty board is one colour). */
 const SHOWS_SHAPES = `(() => { const s = document.querySelector(${JSON.stringify(STAGE_CLIP)}).getBoundingClientRect();
   return [...document.querySelectorAll(${JSON.stringify(`${STAGE_CLIP} > g[data-id]`)})].some((g) => { const r = g.getBoundingClientRect();

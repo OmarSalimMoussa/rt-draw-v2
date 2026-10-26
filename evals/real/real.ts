@@ -5,7 +5,7 @@
 // $RT_EVAL_HOME/real/ on this machine: the repo and its eval/history branch are public, so history gets
 // only R1's hash and counts, never a case.
 import { createHash } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import { SCREEN, type View } from "../../src/core/board.ts";
@@ -22,9 +22,8 @@ import { GOLD_SYSTEM, TRIAGE_SYSTEM, goldUser, triageTurns } from "./prompts.ts"
 import { type RealSend, type Session, afterOf, beforeOf, ingest } from "./sessions.ts";
 import { reviewPage } from "./review.ts";
 
+/** Triage and gold. Gold is the ideal the product aims at with cheap, fast models: no product limit applies to it. */
 export const OPUS = { model: "opus", effort: "high" } as const;
-/** Gold is the ideal the product aims at with cheap, fast models: nothing throttles it, so it thinks at the most effort there is. */
-export const GOLD = { model: "opus", effort: "max" } as const;
 /** Sends judged per triage call: two images each. */
 const TRIAGE_WINDOW = 11;
 const ASPECT = SCREEN.w / SCREEN.h;
@@ -37,6 +36,8 @@ export type GoldCase = {
   key: string; session: string; n: number; batch: number; at: string; prompt: string;
   meant: string; categories: string[]; evidence: string;
   gold?: Gold; error?: string; problems: string[];
+  /** The send gold was drawn for (sendHash): a later pull that moves a send under the same key can't pass this gold off as its own. */
+  sendHash?: string;
   /** The free checks on the app's result and on gold's (gold should pass all of its own). */
   appChecks: { check: Check; pass: boolean; why: string }[]; goldChecks: { check: Check; pass: boolean; why: string }[];
 };
@@ -198,7 +199,8 @@ export async function triageSession(dir: string, s: Session, run: string): Promi
     const got = (jsonIn(text)?.sends ?? []) as Partial<TriageRow>[];
     for (let i = 0; i < win.length; i++) {
       const r = got.find((g) => Number(g.n) === from + i + 1);
-      if (!r) throw new Error(`triage of ${s.id} left out send ${from + i + 1}: ${text.slice(0, 160)}`);
+      // Never the reply itself in the message: it quotes the tester, and errors reach logs/.
+      if (!r) throw new Error(`triage of ${s.id} left out send ${from + i + 1} (${text.length} characters of reply)`);
       const landed = (["yes", "partly", "no"] as const).find((l) => l === r.landed) ?? "no";
       rows.push({ n: from + i + 1, meant: String(r.meant ?? ""), landed, categories: Array.isArray(r.categories) ? r.categories.map(String) : [], evidence: String(r.evidence ?? ""), gold: r.gold === true && landed !== "yes" });
     }
@@ -218,16 +220,23 @@ export const nextBatch = () => {
   return Math.max(0, ...batches) + 1;
 };
 
-/** Every triaged send that wants gold and has none current (same prompt). */
-export function wantGold(since: string, only?: string): { dir: string; s: Session; x: RealSend; n: number; t: TriageRow }[] {
-  const prompt = sha(GOLD_SYSTEM());
+/** What identifies a send beyond its position: its words, ink and time. */
+const sendHash = (x: RealSend) => sha(js([x.words, x.strokes, x.at]));
+
+/**
+ * Every triaged send that wants gold and has none (or only a failed one). A send whose ink is lost is left out: it
+ * can't replay, so it can't enter R1. Gold isn't redrawn when a prompt changes (the product's draw manual is part of
+ * gold's, and the loop changes it): `regold` redraws every unreviewed one, as the owner asks.
+ */
+export function wantGold(since: string, only?: string, regold = false): { dir: string; s: Session; x: RealSend; n: number; t: TriageRow }[] {
   const seen = reviewed();
   return chosen(since, only).flatMap(({ dir, s }) => {
     const tr = triageOf(dir);
     if (!tr || tr.keys !== keysOf(s)) return [];
     return tr.sends.filter((t) => t.gold).flatMap((t) => {
       const x = s.sends[t.n - 1];
-      return seen.has(x.key) || goldOf(x.key)?.prompt === prompt ? [] : [{ dir, s, x, n: t.n, t }];
+      const had = goldOf(x.key);
+      return x.replay === "ink" || seen.has(x.key) || (had && !had.error && !regold) ? [] : [{ dir, s, x, n: t.n, t }];
     });
   });
 }
@@ -240,9 +249,9 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   const before = beforeOf(dir, x), after = afterOf(dir, x);
   const out = goldCaseDir(x.key);
   mkdirSync(out, { recursive: true });
-  const base = { key: x.key, session: s.id, n, batch, at: new Date().toISOString(), prompt: sha(GOLD_SYSTEM()), meant: t.meant, categories: t.categories, evidence: t.evidence };
+  const base = { key: x.key, session: s.id, n, batch, at: new Date().toISOString(), prompt: sha(GOLD_SYSTEM()), sendHash: sendHash(x), meant: t.meant, categories: t.categories, evidence: t.evidence };
   const { text } = await ask({
-    role: "real-gold", ...GOLD, system: GOLD_SYSTEM(), user: goldUser(s, x, n, t, boardOps(before)),
+    role: "real-gold", ...OPUS, system: GOLD_SYSTEM(), user: goldUser(s, x, n, t, boardOps(before)),
     images: [dataUrl(join(dir, "img", img.before)), dataUrl(join(dir, "img", img.after))], run, case: x.key,
   });
   writeFileSync(join(out, "reply.txt"), text);
@@ -432,22 +441,25 @@ function manifest(root: string) {
  * by person (case.json's originSession is the person): one person's sends move together. History gets R1.json:
  * the hash, the counts and the case ids, nothing a tester said or drew.
  */
-/** Cases today's champion already does right (shadow.ts' realBaseline): a later commit fixed them, so they're no case (LOOP-V2.md A5). */
-export const fixedFile = () => join(realHome(), "fixed.json");
-
-export function freezeReal(): { cases: number; tune: number; hold: number; inkWaiting: number; merged: number; fixed: number; people: { tune: number; hold: number }; hash: string } {
-  const root = benchDir();
-  const fixed = new Set(existsSync(fixedFile()) ? (JSON.parse(readFileSync(fixedFile(), "utf8")) as { ids: string[] }).ids : []);
-  rmSync(root, { recursive: true, force: true });
-  mkdirSync(root, { recursive: true });
+export function freezeReal(): { cases: number; tune: number; hold: number; inkWaiting: number; merged: number; moved: number; people: { tune: number; hold: number }; hash: string } {
+  if (existsSync(paths().lock)) throw new Error(`${paths().lock} is held: a loop is running (or stopped mid-way: loop --resume first); R1 can't change under it`);
+  // Built aside and swapped in whole: a freeze that fails half way leaves the last R1 as it was.
+  const root = benchDir(), next = `${root}.next`;
+  rmSync(next, { recursive: true, force: true });
+  mkdirSync(next, { recursive: true });
   const sessions = new Map(readSessions().map((x) => [x.s.id, x]));
-  let inkWaiting = 0, merged = 0, fixedN = 0;
+  let inkWaiting = 0, merged = 0, moved = 0;
   const seen = new Set<string>();
   const picked: { g: GoldCase; ss: { dir: string; s: Session }; x: RealSend; before: SceneJSON; who: string }[] = [];
   for (const g of goldCases().filter(accepted).sort((a, b) => (a.key < b.key ? -1 : 1))) {
     const ss = sessions.get(g.session);
     const x = ss?.s.sends[g.n - 1];
-    if (!ss || !x || x.key !== g.key) continue;
+    if (!ss || !x) continue;
+    // Gold drawn for another send that a later pull moved to this key (older gold has no sendHash).
+    if (g.sendHash && g.sendHash !== sendHash(x)) {
+      moved++;
+      continue;
+    }
     if (x.replay === "ink") {
       inkWaiting++;
       continue;
@@ -459,11 +471,6 @@ export function freezeReal(): { cases: number; tune: number; hold: number; inkWa
       continue;
     }
     seen.add(k);
-    // After the repeat check: a fixed case's repeats are the same input, and stay out with it.
-    if (fixed.has(g.key.replace("#", "-"))) {
-      fixedN++;
-      continue;
-    }
     picked.push({ g, ss, x, before, who: whoOf(ss.s) });
   }
   const counts = new Map<string, number>();
@@ -472,7 +479,7 @@ export function freezeReal(): { cases: number; tune: number; hold: number; inkWa
   const ids: Record<string, string> = {};
   for (const { g, ss, x, before, who } of picked) {
     const id = g.key.replace("#", "-");
-    const d = join(root, id);
+    const d = join(next, id);
     const camera = cameraOf(x, before);
     const split = sides.get(who)!;
     put(join(d, "case.json"), { id, set: "real", split, originSession: who, session: ss.s.id, send: g.n, recordedAt: x.at, replay: x.replay, source: ss.s.source, admin: ss.s.admin, categories: g.categories, hedged: false, beatDone: false });
@@ -481,16 +488,16 @@ export function freezeReal(): { cases: number; tune: number; hold: number; inkWa
     put(join(d, "meant.json"), { meant: g.meant, hedged: false } satisfies Meant);
     put(join(d, "rubric.json"), g.gold!.rubric);
     put(join(d, "checks.json"), g.gold!.checks);
-    copyFileSync(join(goldCaseDir(g.key), "gold.scene.json"), join(d, "gold.scene.json"));
-    copyFileSync(join(goldCaseDir(g.key), "gold.jpg"), join(d, "gold.jpg"));
     copyFileSync(join(ss.dir, "img", imagesOf(ss.dir)[x.key].before), join(d, "before-ink.jpg"));
     ids[id] = split;
   }
-  const m = manifest(root);
-  put(join(root, "manifest.json"), m);
+  const m = manifest(next);
+  put(join(next, "manifest.json"), m);
+  rmSync(root, { recursive: true, force: true });
+  renameSync(next, root);
   const tune = Object.values(ids).filter((s) => s === "tune").length;
   const people = { tune: [...sides.values()].filter((s) => s === "tune").length, hold: [...sides.values()].filter((s) => s === "hold").length };
-  const r = { cases: Object.keys(ids).length, tune, hold: Object.keys(ids).length - tune, inkWaiting, merged, fixed: fixedN, people, hash: m.hash };
+  const r = { cases: Object.keys(ids).length, tune, hold: Object.keys(ids).length - tune, inkWaiting, merged, moved, people, hash: m.hash };
   historyWrite("bench/R1.json", { ...r, at: new Date().toISOString(), splits: ids });
   return r;
 }
