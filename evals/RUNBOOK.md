@@ -164,7 +164,7 @@ accounts. `run.ts` reads it itself and never prints a token; one or two tokens w
 `--dev-token` uses the dev plugin's own token from `~/projects/rt-draw-v2/.env`, only with `--cap 60` or less, and never for `loop` (its critic and engineers run outside the cap).
 
 Also: `rte status` (slots, cap, cwd, node, launched, inhibitor), `rte decide <branch> --cap n` (one branch through the
-funnel), `rte checkpoint --cap n`, `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`,
+funnel; `--card <decision id>` decides a loop card's candidate again with that card, its over-use detector included), `rte checkpoint --cap n`, `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`,
 `rte gc --trees`, `rte loop --resume` (a stale lock resumes by itself).
 
 A loop stops on §6.7's rules (night cap, weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not

@@ -133,7 +133,7 @@ const rows = (n, o = {}) =>
     s: (o.s ?? ((i) => [1, 1, 1, 0][i % 4]))(i), sCraft: o.sCraft?.(i),
     ttfc: [2000 * noise(i) * (o.latA?.(i) ?? 1), 2000 * noise(i) * (o.latA?.(i) ?? 1) * (o.lat?.(i) ?? 1)], ttd: [6000, 6000 * (o.ttd?.(i) ?? 1)],
     ttfd: [2000 * noise(i) * (o.latA?.(i) ?? 1), 2000 * noise(i) * (o.latA?.(i) ?? 1) * (o.lat?.(i) ?? 1)], render: [8 * noise(i + 3), 8 * noise(i + 3) * (o.render?.(i) ?? 1)],
-    work: [o.workA?.(i) ?? 3, o.workB?.(i) ?? 3], usd: [0.02, 0.02 * (o.usd ?? 1)], thought: [false, false], overuse: [false, o.overB?.(i) ?? false],
+    work: [o.workA?.(i) ?? 3, o.workB?.(i) ?? 3], usd: [0.02, 0.02 * (o.usd ?? 1)], thought: [false, false], overuse: [o.overA?.(i) ?? false, o.overB?.(i) ?? false],
     pics: [[1, 0], [1, o.failB?.(i) ?? 0]], ask: o.ask?.(i) ?? "add", firstArm: o.first?.(i) ?? (i % 2 ? "B" : "A"),
     ...(o.void?.(i) ? { void: "invariant" } : {}),
   }));
@@ -171,6 +171,8 @@ const vetoCases = {
   continuation: [() => run(rows(32, { class: "D" }), card({ dialogue: true }), STATE, { continuation: rows(20, { class: "D", s: (i) => [-1, -1, 0, 1][i % 4] }) }), "revert", /continuation/],
   "over-use": [() => run(rows(32, { overB: (i) => i % 10 < 3 }), card({ overuseDetector: "new-style", targets: { asks: ["restyle"] } })), "owner", /over-use/],
   "over-use (over A)": [() => run(rows(32, { overB: (i) => i % 7 === 0 }), card({ overuseDetector: "new-style", targets: { asks: ["restyle"] } })), "owner", /over-use/],
+  // A 25%, B 31%: under 10 points over A, but B takes it over the cap.
+  "over-use (over the cap)": [() => run(rows(32, { overA: (i) => i % 4 === 0, overB: (i) => i % 4 === 0 || i % 16 === 1 }), card({ overuseDetector: "new-style", targets: { asks: ["restyle"] } })), "owner", /over-use/],
   "void rate": [() => run(rows(32, { void: (i) => i % 5 === 0 })), "void", /voided/],
   "position flips": [() => run(rows(32), card(), STATE, { flips: { audited: 16, flipped: 6 } }), "void", /flips/],
   "dispatch order": [() => run(rows(32, { first: (i) => (i % 4 ? "A" : "B") })), "void", /dispatched first/],
@@ -187,6 +189,9 @@ const nearMisses = {
   "TTD ×1.3 (reported, never decides)": run(rows(32, { ttd: (i) => 1.3 * noise(i) })),
   "TTFC ×1.3 with first drawing unchanged (reported)": run(rows(32).map((r) => ({ ...r, ttfc: [r.ttfc[0], r.ttfc[1] * 1.3] }))),
   "cost ×1.3 (reported, never decides)": run(rows(32, { usd: 1.3 })),
+  // e65-h2 and e45-h1: the champion over the cap itself, the card no higher (44% both), or under 10 points higher (44%, 50%).
+  "over-use the champion's own": run(rows(32, { overA: (i) => i % 5 < 2, overB: (i) => i % 5 < 2 }), card({ overuseDetector: "camera-move", targets: { asks: ["restyle"] } })),
+  "over-use the champion's own, a little higher": run(rows(32, { overA: (i) => i % 5 < 2, overB: (i) => i % 5 < 2 || i === 2 || i === 7 }), card({ overuseDetector: "camera-move", targets: { asks: ["restyle"] } })),
   "over-use only on its target asks": run(rows(32, { overB: (i) => i % 10 < 3, ask: (i) => (i % 10 < 3 ? "restyle" : "add") }), card({ overuseDetector: "new-style", targets: { asks: ["restyle"] } })),
   "8 audited, 4 flipped (too few to judge)": run(rows(32), card(), STATE, { flips: { audited: 8, flipped: 4 } }),
   "an empty send in both arms": run(rows(32, { workA: (i) => (i === 5 ? 0 : 3), workB: (i) => (i === 5 ? 0 : 3) })),

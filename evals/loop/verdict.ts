@@ -241,7 +241,9 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
     const off = at.filter((r) => !(t?.asks?.includes(r.ask) || (r.beat && t?.beats?.includes(r.beat))));
     if (off.length) {
       const [a, b] = ([0, 1] as const).map((k) => off.filter((r) => r.overuse[k]).length / off.length);
-      if (b > LOOP.overuse.max || b > a + LOOP.overuse.overA) owner.push(`over-use: ${card.overuseDetector} fired on ${(100 * b).toFixed(0)}% of B's non-target cases (A ${(100 * a).toFixed(0)}%)`);
+      // The cap holds a card that takes the rate over it. A champion already over it would hold every card for what the
+      // champion does itself (camera-move fires on its own camera follows), so there only a rise over A counts.
+      if (b > a + LOOP.overuse.overA || (a <= LOOP.overuse.max && b > LOOP.overuse.max)) owner.push(`over-use: ${card.overuseDetector} fired on ${(100 * b).toFixed(0)}% of B's non-target cases (A ${(100 * a).toFixed(0)}%)`);
     }
   }
   const pending: Decision["pending"] = [];
