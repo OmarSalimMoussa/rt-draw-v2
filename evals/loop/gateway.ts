@@ -11,7 +11,7 @@
 // behaves like one user's server; eval roles run at most 6 at once and never pool.
 // A run is live (fresh calls, shared inside a case unless the run says share: false),
 // replay (cached replies on their own clock) or scan (instant: a hit, else the case's
-// stand-in, else empty; a warm scan also starts the processes its calls would take; a timed
+// stand-in, else empty; a Jev question with no hit is asked live, both arms sharing it; a warm scan also starts the processes its calls would take; a timed
 // scan plays them on their recorded clock, so a render-only decision's first drawing means something). Only eval calls resume from the cache within their run: a
 // product call is a fresh sample (or the other arm's, shared) in every live run,
 // except the request hashes the run names as identical in both arms (the diffscan
@@ -275,6 +275,19 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (hit) {
       await replay(hit.chunks, hit.doneMs, a.t0, onText, instant);
       return { text: hit.text, stats: hit.stats, mode: !a.page ? "resume" : mode === "live" ? "replay" : mode, shared: "-", chunks: hit.chunks, cacheFile: replyName(a.hash, a.run, !a.page), scan: mode === "scan" && a.page ? "hit" : undefined };
+    }
+    // A Jev question the bank never recorded (a router the champion took after the bank was recorded, or a new one) is
+    // asked live in a scan: ~0.1 s and next to free, where a stand-in or no answer made both arms decide alike, so a
+    // change to how its answer is used (draw.thinkYes, e74-h1a) read as no effect. Both arms share the one answer; a
+    // timed scan keeps its recorded clock.
+    if (mode === "scan" && a.page && !timed && isJev(a.req.model)) {
+      const scope = a.case && a.arm ? `${a.run}|${a.case}` : undefined;
+      const f = scope ? flights.follow(scope, a.hash, a.arm!) : undefined;
+      if (f) {
+        const done = await Flights.relay(f, a.t0, onText);
+        return { text: f.chunks.map((c) => c.text).join(""), stats: done.stats ?? {}, error: done.error, mode: "live", shared: "follower", chunks: f.chunks, cacheFile: done.cacheFile };
+      }
+      return live(a, onText, scope ? flights.lead(scope, a.hash, a.arm!) : undefined);
     }
     if (mode === "scan" && a.page) {
       const s = a.case ? standIn(p, a.case, a.role, a.ordinal, a.req.user) : undefined;

@@ -78,6 +78,14 @@ check(m.model === "jev-1.13.0" && m.role === "draw-refs-jev" && m.inTokens > 0 &
 await setMode("r2", "replay", {}, gw.url);
 const again = await product({ run: "r2", case: "c1", arm: "A", slot: 0 }, JEV);
 check(again.text === live.text && again.done?.mode === "replay" && jevReqs().length === 1, `a replayed Jev call: mode ${again.done?.mode}, ${jevReqs().length} requests`);
+// A scan asks a Jev question the bank never recorded live (a change to how its answer is used must show), both arms
+// sharing one answer; a recorded one is a hit, not asked again.
+await setMode("s1", "scan", {}, gw.url);
+const unseen = { ...JEV, user: JEV.user.replace("t22", "t22 scan") };
+const n1 = jevReqs().length;
+const [sa, sb] = await Promise.all(["A", "B"].map((arm) => product({ run: "s1", case: "c1", arm, slot: 0 }, unseen)));
+const sh = await product({ run: "s1", case: "c2", arm: "A", slot: 0 }, JEV);
+check(jevReqs().length === n1 + 1 && sa.text === sb.text && JSON.parse(sa.text || "{}").a?.noul === 0.9 && sh.text === live.text && sh.done?.mode === "scan", `a scan's Jev questions: ${jevReqs().length - n1} asked, ${sa.text} / ${sb.text}, the recorded one ${sh.done?.mode}`);
 // Warming a Jev model starts nothing.
 const warm = await product({ run: "r1", case: "c1", arm: "A", slot: 0 }, { model: "jev-1.13.0", system: "", warm: 2 });
 check(warm.done?.warming === 0 && !Object.keys((await gatewayStatus(gw.url)).pools).length, `warming Jev: ${JSON.stringify(warm.done)}`);

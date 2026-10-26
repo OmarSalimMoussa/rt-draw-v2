@@ -128,7 +128,7 @@ for (const cmd of [["smoke"], ["bake"], ["bank", "build", "--tuning", "1"], ["ch
   const r = spawnSync(process.execPath, ["--import", HOOKS, RUN, ...cmd, ...FLAGS], { cwd: ROOT, env: process.env, encoding: "utf8", timeout: 60_000 });
   check(r.status !== 0 && /needs --cap/.test(r.stdout + r.stderr), `${cmd.join(" ")} without --cap: exit ${r.status}: ${short(r.stdout + r.stderr)}`);
 }
-check(api.requests.length === 0, `the --cap refusals made ${api.requests.length} requests`);
+check(api.requests.length === L.bootReqs, `the --cap refusals made ${api.requests.length - L.bootReqs} requests`);
 
 // ---- Checkpoint 0, then the loop.
 const ck0 = await rte(["checkpoint", "--zero", "--cap", "400", ...FLAGS]).done;

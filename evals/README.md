@@ -149,7 +149,7 @@ flowchart TD
     PQ["A person's queued cards: 23 of 112"] --> CARDS
     CARDS --> ENG["Engineer agent edits src/core in its own worktree"]
     ENG --> G0["G0 free gates: allowed files, no new magic numbers, typecheck"]
-    G0 --> G1["G1 diffscan at 0 calls: which banked cases change?"]
+    G0 --> G1["G1 diffscan at 0 Claude calls: which banked cases change?"]
     G1 --> AB["A/B on affected cases: same moment, live calls, timed and judged in looks of 16 to 80"]
     AB --> G3["G3 on held-out cases: may only veto"]
     G3 --> V{"Verdict"}
@@ -196,8 +196,10 @@ cards (`optimizer/seed-cards.json`) start the first rounds, and `--seed-cards` a
 1. **G0, free gates** (`optimizer/gates.ts`, 0 calls): allowed paths, the magic-number lint, no new network or speech,
    `tsc` in the candidate's tree, and every banked scene through the candidate's `Scene.fromJSON` when `scene.ts`
    changed. A diff in the measuring side or the editor's look goes to the owner list, never back to an engineer.
-2. **G1, the diffscan** (`loop/diffscan.ts`, 0 calls): both versions run every banked case with the bank's recorded
-   replies served instantly. A case is affected when any request, the scene after or the rendered stage differs; only
+2. **G1, the diffscan** (`loop/diffscan.ts`, 0 Claude calls): both versions run every banked case with the bank's recorded
+   replies served instantly. A Jev question the bank never recorded (a router newer than the bank) is asked live, both
+   versions sharing the answer: ~0.1 s and next to free, and without it a change to how the answer is used read as N.
+   A case is affected when any request, the scene after or the rendered stage differs; only
    affected cases are ever paid for. The scan also classifies the change: N (no effect), S (speed only, from a timed
    replay), Q (a request differs), R (a render differs) or D (dialogue: state only a later send reads).
 3. **G2, the A/B** (`loop/ab.ts`): both versions start from the same fork point on freshly reloaded pages and get the
