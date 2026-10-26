@@ -37,6 +37,8 @@ export type FakeOpts = {
   resetsAt?: number;
   /** slow: ms before the first text, then between chunks. */
   slowMs?: number; chunkMs?: number;
+  /** ms before the first text for a --replies role, in any mode (a check's resolver slower than Jev's guess, as live). */
+  roleMs?: Record<string, number>;
   /** The fake Jev's answers: probability of yes by question id ("*" for the rest), and how long it takes. */
   jev?: Record<string, number>; jevMs?: number;
 };
@@ -155,7 +157,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
     ev("message_start", { message: { id: `msg_fake_${requests.length}`, type: "message", role: "assistant", model: `${b.model}-fake`, content: [], stop_reason: null, stop_sequence: null,
       usage: { input_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: write, cache_creation: { ephemeral_5m_input_tokens: oneHour ? 0 : write, ephemeral_1h_input_tokens: oneHour ? write : 0 }, output_tokens: 1 } } });
     const slow = mode === "slow";
-    await sleep(timed ? timed.firstMs : slow ? o.slowMs! : 0);
+    await sleep(timed ? timed.firstMs : slow ? o.slowMs! : (o.roleMs?.[rec.role ?? ""] ?? 0));
     const end = Date.now() + (timed?.restMs ?? 0);
     let outTokens = 0;
     for (const [i, block] of turn.content.entries()) {

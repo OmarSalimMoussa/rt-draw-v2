@@ -163,13 +163,15 @@ check(plain.thinking === undefined && plain.features.thinkP === undefined && !as
 
 // ---- resolve.speculate: the drawing call starts on Jev's guess, its ops held until the resolver answers; the same
 // prompt lets them land (one drawing call), another drops that call and draws again on the answer.
-// Speculation guesses only for Claude's resolver (resolve.engine 0): Jev alone has nothing to wait for.
+// Speculation guesses only for Claude's resolver (resolve.engine 0): Jev alone has nothing to wait for. The fake resolver
+// answers a second late, as a live one does: answering at once (3 ms, before Jev's 90) drops a wrong guess's call
+// before its request goes out, so the call dropped in flight is never seen.
 const spec = tune({ "resolve.speculate": 1, "resolve.engine": 0, "resolve.jevHints": 0, "draw.addHint": 0, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
 const fresh = () => runScript(asPage(readFileSync(join(ROOT, "src/fixtures/clowns.ops.txt"), "utf8"), "page", "Home")).scene;
 const said = "make the clown with the balloon bigger";
 const draws = () => api.requests.filter((r) => r.role === "draw").length;
 async function speculated(jev) {
-  api.set({ jev });
+  api.set({ jev, roleMs: { resolver: 1000 } });
   run = `p${++k}`;
   const sc = fresh(), d0 = draws(), j0 = jevReqs().length, ops = [];
   const { prompt, result } = await send(sc, { strokes: [], words: said }, spec, { onOp: (r) => ops.push(r) });
@@ -184,6 +186,7 @@ check(miss.prompt.features.spec === "miss" && miss.draws === 2 && miss.ops.lengt
   `a wrong guess: spec ${miss.prompt.features.spec}, ${miss.draws} drawing calls, ${miss.ops.length} ops applied`);
 const none = await speculated({});
 check(none.prompt.features.spec === "miss" && none.draws === 2, `a guess of nothing against the answer ${B}: spec ${none.prompt.features.spec}, ${none.draws} drawing calls`);
+api.set({ roleMs: {} });
 // The gate itself: ops wait for it; a shut gate applies none.
 for (const open of [true, false]) {
   const sc = fresh(), at = [];
