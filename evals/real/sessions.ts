@@ -83,7 +83,9 @@ export function readPrompt(user: string): { request: string; camera?: View; mark
   const request = /\nRequest: ([\s\S]*?)(?:\n\n|$)/.exec(user)?.[1]?.trim() ?? "";
   const c = /The screen shows (-?[\d.]+) (-?[\d.]+) ([\d.]+) ([\d.]+) of it/.exec(user);
   const marks = (/\nMarks \([^)]*\):\n([\s\S]*?)(?:\n\n|$)/.exec(user)?.[1] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
-  const refs = /References \(resolved before this call\): (.*)/.exec(user)?.[1]?.trim();
+  // One line of ids (resolve.speculate on), or a line per phrase under the heading (off).
+  const r = /References \(resolved before this call(?:, [^)]*)?\):(?: (.*)|\n([\s\S]*?)(?:\n\n|$))/.exec(user);
+  const refs = (r?.[1] ?? r?.[2]?.split("\n").map((l) => l.trim()).filter(Boolean).join("; "))?.trim();
   return { request, camera: c ? { x: +c[1], y: +c[2], w: +c[3], h: +c[4] } : undefined, marks, refs };
 }
 
@@ -127,6 +129,8 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
       mkdirSync(dir, { recursive: true });
       const docs = new Map<number, SceneJSON>([[0, blankBoard()], ...versions.map((v) => [v.n, v.doc] as [number, SceneJSON])]);
       const sends: RealSend[] = [];
+      /** An exact send's own before board: two sends from one version (a stop, then a send after a hand edit) each have theirs. */
+      const own = new Map<RealSend, SceneJSON>();
       const restores: Session["restores"] = [];
       const used = new Set<typeof draws[number]>();
       const key = () => `${id}#${sends.length + 1}`;
@@ -138,8 +142,9 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
         }
         const exact = logged.find((s) => s.afterVersion === v.n && s.landed > 0);
         if (exact) {
-          sends.push({ key: key(), at: exact.at, label: exact.label, kind: exact.kind, replay: "exact", words: exact.words, strokes: exact.strokes, enterAtMs: exact.enterAtMs, camera: exact.camera, marks: [], before: exact.beforeVersion, after: v.n, pictures: [], status: exact.status, error: exact.error });
-          docs.set(-exact.beforeVersion - 1, exact.before);
+          const x: RealSend = { key: key(), at: exact.at, label: exact.label, kind: exact.kind, replay: "exact", words: exact.words, strokes: exact.strokes, enterAtMs: exact.enterAtMs, camera: exact.camera, marks: [], before: exact.beforeVersion, after: v.n, pictures: [], status: exact.status, error: exact.error };
+          sends.push(x);
+          own.set(x, exact.before);
           continue;
         }
         // The latest unused drawing call that ended by this version's save and asked for what it's labeled with.
@@ -148,7 +153,8 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
         const pics = d ? pictures.filter((x) => x.end >= d.start && x.end <= v.at + 2000) : [];
         sends.push({
           key: key(), at: iso(d?.start ?? v.at), label: v.label, kind: /^preview click/i.test(v.label) ? "build" : "send",
-          replay: d?.p.marks.length ? "ink" : "typed", words: d ? d.p.request : v.label, strokes: [], enterAtMs: 0,
+          // Ink shows as its Marks section, or (draw.sendMarks off) only as [ink n] in the words.
+          replay: d?.p.marks.length || /\[ink \d+\]/.test(d?.p.request ?? "") ? "ink" : "typed", words: d ? d.p.request : v.label, strokes: [], enterAtMs: 0,
           camera: d?.p.camera, marks: d?.p.marks ?? [], refs: d?.p.refs, before: i ? versions[i - 1].n : 0, after: v.n, reply: d?.c.reply,
           pictures: pics.map(({ c }) => {
             const box = /The box is (\d+) wide and (\d+) tall/.exec(c.user!);
@@ -158,17 +164,15 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
       }
       // Logged sends that changed nothing (a camera move, a failure, a stop): no version, but what happened.
       for (const s of logged.filter((s) => s.landed === 0)) {
-        sends.push({ key: key(), at: s.at, label: s.label, kind: s.kind, replay: "exact", words: s.words, strokes: s.strokes, enterAtMs: s.enterAtMs, camera: s.camera, marks: [], before: s.beforeVersion, after: s.beforeVersion, pictures: [], status: s.status, error: s.error });
-        docs.set(-s.beforeVersion - 1, s.before);
+        const x: RealSend = { key: key(), at: s.at, label: s.label, kind: s.kind, replay: "exact", words: s.words, strokes: s.strokes, enterAtMs: s.enterAtMs, camera: s.camera, marks: [], before: s.beforeVersion, after: s.beforeVersion, pictures: [], status: s.status, error: s.error };
+        sends.push(x);
+        own.set(x, s.before);
       }
       sends.sort((a, b) => a.at.localeCompare(b.at));
       sends.forEach((s, k) => (s.key = `${id}#${k + 1}`));
       for (const [n, doc] of docs) if (n >= 0 && sends.some((s) => s.before === n || s.after === n)) writeFileSync(join(dir, `v${n}.json`), JSON.stringify(doc));
       // An exact send's own before (the board as it was, which a version may not hold), as before-<key n>.json.
-      for (const s of sends.filter((s) => s.replay === "exact")) {
-        const own = docs.get(-s.before - 1);
-        if (own) writeFileSync(join(dir, `before-${s.key.split("#")[1]}.json`), JSON.stringify(own));
-      }
+      for (const [s, before] of own) if (before) writeFileSync(join(dir, `before-${s.key.split("#")[1]}.json`), JSON.stringify(before));
       const session: Session = {
         id, source, person: `p-${sha(owner).slice(0, 8)}`, admin: source === "local" || !!who?.admin, project: { id: meta.id, name: meta.name }, sends, restores,
         feedback: feedback.filter((f) => who && f.person === who.id && f.project?.id === meta.id).map((f) => ({ at: iso(f.at), text: f.text, version: f.project?.version })),

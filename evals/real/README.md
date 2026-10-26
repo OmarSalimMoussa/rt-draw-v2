@@ -26,7 +26,9 @@ the hosted app); live ones always count. `--only <session>` runs one session.
 ## Gold review
 
 The owner approves the first batch of gold case by case. Later batches go in unless rejected, and the page
-stays open for spot checks. A rejected case stays out of R1.
+stays open for spot checks. A rejected case stays out of R1. Redrawn gold (`--regold`) keeps its batch, so batch 1's
+still waits for the owner; failed gold is retried in the next run's batch. A verdict counts only for the gold it was
+given on: one given on failed gold doesn't carry over to its retry.
 
 ## What stays private
 

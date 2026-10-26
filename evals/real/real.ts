@@ -236,7 +236,8 @@ export function wantGold(since: string, only?: string, regold = false): { dir: s
     return tr.sends.filter((t) => t.gold).flatMap((t) => {
       const x = s.sends[t.n - 1];
       const had = goldOf(x.key);
-      return x.replay === "ink" || seen.has(x.key) || (had && !had.error && !regold) ? [] : [{ dir, s, x, n: t.n, t }];
+      // Failed gold is drawn again, whatever was said of it: there was nothing to approve.
+      return x.replay === "ink" || (had && !had.error && (seen.has(x.key) || !regold)) ? [] : [{ dir, s, x, n: t.n, t }];
     });
   });
 }
@@ -249,7 +250,9 @@ export async function goldSend(c: ReturnType<typeof wantGold>[number], run: stri
   const before = beforeOf(dir, x), after = afterOf(dir, x);
   const out = goldCaseDir(x.key);
   mkdirSync(out, { recursive: true });
-  const base = { key: x.key, session: s.id, n, batch, at: new Date().toISOString(), prompt: sha(GOLD_SYSTEM()), sendHash: sendHash(x), meant: t.meant, categories: t.categories, evidence: t.evidence };
+  // A redrawn gold keeps its batch: batch 1's still waits for the owner. Failed gold had nothing to show, so its retry is this run's.
+  const had = goldOf(x.key);
+  const base = { key: x.key, session: s.id, n, batch: had?.gold ? had.batch : batch, at: new Date().toISOString(), prompt: sha(GOLD_SYSTEM()), sendHash: sendHash(x), meant: t.meant, categories: t.categories, evidence: t.evidence };
   const { text } = await ask({
     role: "real-gold", ...OPUS, system: GOLD_SYSTEM(), user: goldUser(s, x, n, t, boardOps(before)),
     images: [dataUrl(join(dir, "img", img.before)), dataUrl(join(dir, "img", img.after))], run, case: x.key,
@@ -326,7 +329,7 @@ export async function shootGold(shot: Shot): Promise<number> {
 
 // ---- review
 
-/** Every gold case with its latest verdict. */
+/** Every gold case with its latest verdict on the gold drawn now (one given before a retry was of the failed gold). */
 export function goldCases(): (GoldCase & { verdict?: Verdict; note?: string })[] {
   const dir = goldDir();
   const verdicts = new Map<string, Verdict>();
@@ -339,7 +342,8 @@ export function goldCases(): (GoldCase & { verdict?: Verdict; note?: string })[]
   }
   return (existsSync(dir) ? readdirSync(dir) : []).sort().flatMap((k) => {
     const g = maybe<GoldCase>(join(dir, k, "gold.json"));
-    return g ? [{ ...g, verdict: verdicts.get(g.key), note: notes.get(g.key) }] : [];
+    const v = g && verdicts.get(g.key);
+    return g ? [{ ...g, verdict: v && v.at >= g.at ? v : undefined, note: notes.get(g.key) }] : [];
   });
 }
 /** Keys the owner has looked at: gold for them is never drawn again, whatever the prompt became. */
