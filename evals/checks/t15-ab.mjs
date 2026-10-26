@@ -63,21 +63,22 @@ export async function fakeLoop({ port, slots = 2 }) {
   const { openRig, runAB } = await import("../loop/ab.ts");
   const { judgeId } = await import("../judge/judge.ts");
   const P = await import("../judge/prompts.ts");
-  const { PROMPTS } = await import("../../src/core/prompts.ts");
+  const { promptOf } = await import("../../src/core/prompts.ts");
   const { DEFAULTS } = await import("../../src/core/tuning.ts");
   const { SCREEN } = await import("../../src/core/board.ts");
   const p = paths();
   const champSha = git("-C", repo, "rev-parse", "HEAD");
   const champ = { sha: champSha, tree: treeOf(champSha) };
 
-  // ---- The fake API: canned replies for live runs, keyed by each role's real system prompt.
+  // ---- The fake API: canned replies for live runs, keyed by each role's real system prompt: the one today's defaults
+  // send (promptOf), so a new default variant can't leave the fake answering "ok" to every draw.
   const replies = join(work, "fake-replies");
   mkdirSync(replies);
   const note = (fill, x) => `shape(live-note, rect, ${x} 120 320 60, "a short note the live drawing reply adds near the top", fill:${fill})`;
   const files = {
-    [`draw.${sha(PROMPTS.draw[0].system(true, 1280, 800, 0, SCREEN.w)).slice(0, 12)}.json`]: [note("#ffc9c9", 100), note("#a5d8ff", 140)],
-    [`resolver.${sha(PROMPTS.resolve[0].system).slice(0, 12)}.txt`]: '{"refs": []}',
-    [`picture.${sha(PROMPTS.picture[0].system(DEFAULTS)).slice(0, 12)}.txt`]: stubReply("picture"),
+    [`draw.${sha(promptOf("draw", DEFAULTS).system(true, 1280, 800, 0, SCREEN.w)).slice(0, 12)}.json`]: [note("#ffc9c9", 100), note("#a5d8ff", 140)],
+    [`resolver.${sha(promptOf("resolve", DEFAULTS).system).slice(0, 12)}.txt`]: '{"refs": []}',
+    [`picture.${sha(promptOf("picture", DEFAULTS).system(DEFAULTS)).slice(0, 12)}.txt`]: stubReply("picture"),
     // One system prompt for every judge role: each reply reads as a verdict and as an expectation.
     [`judge.${sha(P.SYSTEM).slice(0, 12)}.json`]: ["left", "right", "tie", "left", "right"].map((w, i) => JSON.stringify({ winner: w, confidence: 2 + (i % 2), why: `fake ${w}`, should: ["the asked change is made"], mustNot: ["nothing else moves"] })),
   };
