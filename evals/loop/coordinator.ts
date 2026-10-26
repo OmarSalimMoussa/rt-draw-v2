@@ -192,6 +192,7 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
   });
   const tree = treeOf(sha);
   const analysis = await rte.engine().analyst({ run, token: await agents.slotToken(rte.tokens(), gw), digest, tree, mockApi: await rte.agentMock() });
+  put(runFile(run, "analyst.json"), { text: analysis });
   const criticRun = `${st.stamp}-e${st.epoch}-critic`;
   const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tried: triedIndex(), tree, mockApi: await rte.agentMock() });
   // Its answer as written, so a dropped or empty epoch can be read back.
