@@ -296,9 +296,9 @@ export async function critic(o: Session & { analysis: string; digest: string; tr
 }
 
 /** The engineer: one card's change in $RT_EVAL_HOME/wt/<branch> (made off loop/champion); the coordinator commits it. */
-export async function engineer(o: Session & { card: HypothesisCard; branch: string }): Promise<AgentResult & { wt: string }> {
+export async function engineer(o: Session & { card: HypothesisCard; branch: string; note?: string }): Promise<AgentResult & { wt: string }> {
   const wt = worktreeOf(o.branch);
-  const prompt = `The card:\n${JSON.stringify(o.card, null, 2)}\n\nIts files: ${o.card.files.join(", ") || "(none named)"}. Read them before you change them.`;
+  const prompt = `The card:\n${JSON.stringify(o.card, null, 2)}\n\nIts files: ${o.card.files.join(", ") || "(none named)"}. Read them before you change them.${o.note ? `\n\n${o.note}` : ""}`;
   const result = await runAgent({ role: "engineer", run: o.run, cwd: wt, system: ENGINEER_SYSTEM, prompt, rule: toolRule(wt, { root: join(wt, "src/core"), edit: true }), caps: o.caps ?? CAPS.engineer, token: o.token, mockApi: o.mockApi });
   return { ...result, wt };
 }

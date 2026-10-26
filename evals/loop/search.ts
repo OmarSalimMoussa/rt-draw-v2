@@ -52,24 +52,35 @@ export function applyKnobs(wt: string, knobs: Record<string, number>) {
   writeFileSync(file, src);
 }
 
+/** A tried card's patch as git format-patch wrote it (history's tried/<id>.patch, after its header). */
+export function triedPatch(id: string, history: string): string {
+  const f = join(history, "tried", `${id}.patch`);
+  if (!existsSync(f)) throw new Error(`no tried card ${id}`);
+  const text = readFileSync(f, "utf8");
+  const body = text.slice(text.indexOf("\n---\n") + 5);
+  if (!body.startsWith("From ")) throw new Error(`tried card ${id} changed nothing`);
+  return body;
+}
+
+/** A tried patch that doesn't apply: it edits the lines an earlier one did, or the champion moved under it. */
+export class TriedConflict extends Error {}
+
 /**
- * A combo card's change (LOOP-V2.md D4): the tried cards' patches (history's tried/<id>.patch) applied in turn on
- * the champion, each with a three-way merge, as they were measured. One that no longer applies drops the card.
+ * A combo card's change (LOOP-V2.md D4): the tried cards' patches applied in turn on the champion, each with a
+ * three-way merge, as they were measured. One that doesn't apply throws TriedConflict, and the caller has an engineer
+ * make them together by hand: near wins that each add a Jev question to one decide call always overlapped.
  */
 export function applyTried(wt: string, ids: string[], history: string, tmp: string) {
-  for (const id of ids) {
-    const f = join(history, "tried", `${id}.patch`);
-    if (!existsSync(f)) throw new Error(`no tried card ${id}`);
-    const text = readFileSync(f, "utf8");
-    const body = text.slice(text.indexOf("\n---\n") + 5);
-    if (!body.startsWith("From ")) throw new Error(`tried card ${id} changed nothing`);
+  for (const [i, id] of ids.entries()) {
+    const body = triedPatch(id, history);
     const patch = join(tmp, `combo-${id}.patch`);
     mkdirSync(dirname(patch), { recursive: true });
     writeFileSync(patch, body);
     try {
       git(wt, "apply", "--3way", patch);
     } catch (err) {
-      throw new Error(`tried card ${id} doesn't apply on today's champion: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`);
+      const why = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      throw new TriedConflict(`tried card ${id} doesn't apply on today's champion${i ? ` after ${ids.slice(0, i).join(", ")}` : ""}: ${why}`);
     } finally {
       rmSync(patch, { force: true });
     }

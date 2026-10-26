@@ -18,7 +18,7 @@ import { decisionRow, historyRows, openHistory, realLine, recordDecision } from 
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { caseDir, put, runFile } from "./record.ts";
-import { applyKnobs, applyTried } from "./search.ts";
+import { TriedConflict, applyKnobs, applyTried, triedPatch } from "./search.ts";
 import { type CardState, type Decided, type Facts, RULES, type State, newState, overrun, readState, saveState } from "./state.ts";
 import type { Token } from "./tokens.ts";
 import { LockfileDiffers, treeOf, worktreeOf } from "./trees.ts";
@@ -280,14 +280,27 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
     const wt = worktreeOf(c.branch);
     if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
     if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
-      if (c.card.kind === "knob") applyKnobs(wt, c.card.knobs ?? {});
-      else if (c.card.kind === "combo") applyTried(wt, c.card.combines ?? [], paths().history, join(paths().home, "tmp"));
-      else {
+      const engineer = async (note?: string) => {
         const token = await freeSlot(rte, gw);
         // The budget stopped the loop: the card stays to build when it resumes.
-        if (!token) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
-        await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token, mockApi: await rte.agentMock() });
-      }
+        if (!token) return false;
+        await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token, mockApi: await rte.agentMock(), note });
+        return true;
+      };
+      let built = true;
+      if (c.card.kind === "knob") applyKnobs(wt, c.card.knobs ?? {});
+      else if (c.card.kind === "combo") {
+        try {
+          applyTried(wt, c.card.combines ?? [], paths().history, join(paths().home, "tmp"));
+        } catch (err) {
+          if (!(err instanceof TriedConflict)) throw err;
+          git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
+          rte.say(`${c.id}: ${msg(err)}: an engineer makes them together`);
+          const patches = (c.card.combines ?? []).map((id) => `# ${id}\n\`\`\`diff\n${triedPatch(id, paths().history)}\`\`\``).join("\n\n");
+          built = await engineer(`Its tried patches don't apply one after another on today's champion (they edit the same lines, or the code moved). Make all of them together by hand, each one's intent kept:\n\n${patches}`);
+        }
+      } else built = await engineer();
+      if (!built) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
       if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     }
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });

@@ -271,6 +271,23 @@ const kc = (o) => ({ id: "s", component: "draw", change: "c", goal: "fidelity", 
 const faults = (o) => readCards(JSON.stringify([kc(o)])).dropped.join();
 check(!faults({ kind: "sweep", sweep: { knob: "picture.fill", values: [0.8, 1] } }) && /sweep without/.test(faults({ kind: "sweep" })) && /at most 4/.test(faults({ kind: "sweep", sweep: { knob: "picture.fill", values: [0.5, 0.6, 0.7, 0.8, 1] } })), "sweep cards aren't read as well-formed, or their faults aren't caught");
 check(!faults({ kind: "combo", combines: ["e1-h1", "e2-h3"] }) && /two tried ids/.test(faults({ kind: "combo", combines: ["e1-h1"] })) && /at most 3/.test(faults({ kind: "combo", combines: ["a", "b", "c", "d"] })), "combo cards aren't read as well-formed, or their faults aren't caught");
+// A combo's tried patches that edit the same lines don't apply in turn: TriedConflict, so an engineer makes them by hand.
+{
+  const g = join(home, "combo-git"), hist = join(home, "combo-history");
+  mkdirSync(join(hist, "tried"), { recursive: true });
+  sh(`git init -q -b main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m base && printf '1\\n2\\n3\\n' > a.txt && git add a.txt && git -c user.name=t -c user.email=t@t commit -q -m a`, (mkdirSync(g, { recursive: true }), g));
+  for (const [id, line] of [["t1", "two"], ["t2", "deux"]]) {
+    sh(`git checkout -q -B ${id} main && sed -i 's/^2$/${line}/' a.txt && git -c user.name=t -c user.email=t@t commit -qam ${id}`, g);
+    writeFileSync(join(hist, "tried", `${id}.patch`), `rt-eval tried: ${id}\n---\n${sh(`git format-patch -1 --stdout ${id}`, g)}`);
+  }
+  sh("git checkout -q main", g);
+  search.applyTried(g, ["t1"], hist, join(home, "combo-tmp"));
+  check(readFileSync(join(g, "a.txt"), "utf8") === "1\ntwo\n3\n" && search.triedPatch("t2", hist).startsWith("From "), "a tried patch doesn't apply, or its text isn't read back");
+  sh("git checkout -q -- . && git reset -q --hard", g);
+  let conflict;
+  try { search.applyTried(g, ["t1", "t2"], hist, join(home, "combo-tmp")); } catch (err) { conflict = err; }
+  check(conflict instanceof search.TriedConflict && /t2 doesn't apply on today's champion after t1/.test(conflict.message), `overlapping tried patches: ${conflict}`);
+}
 const tsrc = readFileSync(join(ROOT, "src/core/tuning.ts"), "utf8");
 const lit = (k) => search.knobLiteral(tsrc, k);
 check(lit("picture.fill")?.value === DEFAULTS["picture.fill"] && lit("render.pictureBox")?.max === 1 && lit("picture.prompt")?.value === DEFAULTS["picture.prompt"] && lit("draw.prompt")?.value === DEFAULTS["draw.prompt"] && lit("resolve.jevPrompt")?.value === DEFAULTS["resolve.jevPrompt"] && lit("draw.thinkPrompt") && !lit("no.such"), "knobLiteral doesn't read today's defaults (P(role, n) prompt knobs included)");
