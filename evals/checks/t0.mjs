@@ -61,8 +61,9 @@ process.env.RT_EVAL_HOME = home;
 // any run: a latency keep's fidelity floor by look), then the owner's v2 rules (2026-10-25, evals/LOOP-V2.md: first drawing
 // and render decide with no allowance, no cost cap, the 60% / 50% budget, the search's numbers), then the cleanup's
 // deletions (2026-10-26: the debts, the night cap, the window share, the over-use and cost thresholds, sampled craft,
-// the void rerun's knobs; one pooled latency test). Changing a frozen number changes what decides: update this on purpose.
-const SPEC_CONFIG_ID = "c0b68573572ee89443176d84553ef08d8525abf354c722b75052c0d016fd0c7b";
+// the void rerun's knobs; one pooled latency test), then the illustrations round's bars (2026-10-26, RUNBOOK 7b). Changing
+// a frozen number changes what decides: update this on purpose.
+const SPEC_CONFIG_ID = "1f9c481b81b17df710686b542c101e1306922a22b6604d73523fe11de1967c2d";
 const cfg = await import("../loop/config.ts");
 check(cfg.configId === SPEC_CONFIG_ID, "config.ts' LOOP or DRIVE_VIEW differ from spec §1.6");
 check(cfg.configId === sha(JSON.stringify({ LOOP: cfg.LOOP, DRIVE_VIEW: cfg.DRIVE_VIEW })), "configId isn't sha256(JSON.stringify({ LOOP, DRIVE_VIEW }))");

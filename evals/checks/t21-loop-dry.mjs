@@ -124,7 +124,7 @@ const tokens = join(L.work, "tokens.env");
 const FLAGS = ["--tokens", tokens, "--mock-api", api.url, "--port", "5334", "--fakes", FAKES];
 
 // ---- Real-call steps refuse to start without --cap.
-for (const cmd of [["smoke"], ["bake"], ["bank", "build", "--tuning", "1"], ["checkpoint", "--zero"], ["calib", "--contrast", "draw.sendMarks=0"]]) {
+for (const cmd of [["smoke"], ["bake"], ["bank", "build", "--tuning", "1"], ["checkpoint", "--zero"], ["calib", "--contrast", "draw.sendMarks=0"], ["calib", "--illustrations", "--contrast", "picture.model=0"]]) {
   const r = spawnSync(process.execPath, ["--import", HOOKS, RUN, ...cmd, ...FLAGS], { cwd: ROOT, env: process.env, encoding: "utf8", timeout: 60_000 });
   check(r.status !== 0 && /needs --cap/.test(r.stdout + r.stderr), `${cmd.join(" ")} without --cap: exit ${r.status}: ${short(r.stdout + r.stderr)}`);
 }

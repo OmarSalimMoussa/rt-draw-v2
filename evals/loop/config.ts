@@ -48,7 +48,9 @@ export const LOOP = {
   // judges (§4)
   judgePx: 640, judgeQuality: 0.8, auditShare: 0.2, lowConfidence: 1, flipFallbackAfter: 16,
   calib: { clear: 60, pass: 47, minClear: 40, selfGap: 0.10, preferMoreMax: 0.10, repeats: 8, contrast: 24,
-           craftPairs: 30, craftPass: 22 },
+           craftPairs: 30, craftPass: 22,
+           // The illustrations round (rte calib --illustrations): the same bars on half the labels, from this many cases with pictures.
+           illustrations: { clear: 30, pass: 24, minClear: 20, craftPairs: 15, craftPass: 11, repeats: 4, repeatGap: 15, cases: 48 } },
   canary: { packets: 20, alarmAtMost: 16 },
   // checkpoints (§5.2): the champion against A0, which never moves. bootstrap: the share band's draws of whole sessions,
   // and the swap test's random patterns past 11 sessions.

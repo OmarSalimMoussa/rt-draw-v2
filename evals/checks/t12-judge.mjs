@@ -370,6 +370,48 @@ check(fresh.every((p) => { const j = json(judgeFile(p.run, p.case, "v2/fidelity-
   "variant 2's verdicts aren't in judge/v2/ with their own judgeId, or replaced the run's own");
 check(json(J.calibrationFile()).checks.length === 2 && c2.health.kind === "calib" && !c2.health.pass, "calibration.json or its health row");
 
+// ---- The illustrations round: a label set of its own beside the calibration's, from the cases where both sides drew pictures.
+const IL = "calib-illustrations", ilIds = Array.from({ length: 36 }, (_, i) => `c-il-${i}`), ilPos = J.positionsFor(ilIds, SC);
+const reply = (role) => ({ role, ordinal: 0, reqHash: role, cacheFile: "", offsets: [] });
+ilIds.forEach((id, i) => {
+  bankCase(id);
+  runCase(IL, id);
+  // Every 6th case: B drew no picture, so it's no illustration pair.
+  for (const arm of ["A", "B"]) rec.put(join(rec.caseDir(IL, id), arm, "replies.json"), [reply("draw"), ...(i % 6 === 5 && arm === "B" ? [] : [reply("picture")])]);
+  K.writePacket(IL, id, ilPos.get(id), exp(id));
+  rec.put(judgeFile(IL, id, "fidelity-1.json"), judged("left", 3, ilPos.get(id)));
+});
+const mainPairs = readFileSync(join(home, "labels", "pairs.json"), "utf8"), calBefore = json(J.calibrationFile());
+const u3 = up2();
+const il = await C.assembleIllustrations({ contrast: IL, seed: SC });
+const ilFid = il.filter((p) => p.question === "fidelity"), ilFirsts = ilFid.filter((p) => !p.swap), ilCraft = il.filter((p) => p.question === "craft");
+const I = LOOP.calib.illustrations;
+check(ilFirsts.length === 30 && ilFid.length === 30 + I.repeats && ilCraft.length === 30 && il.every((p) => Number(p.case.split("-").at(-1)) % 6 !== 5 && p.subset === "illustrations"),
+  `the illustrations round: ${ilFirsts.length} fidelity, ${ilFid.length - ilFirsts.length} repeats, ${ilCraft.length} craft, cases ${il.map((p) => p.case).join(",").slice(0, 120)}`);
+check(up2() - u3 === 30 && JSON.stringify(json(join(home, "labels", "illustrations", "pairs.json"))) === JSON.stringify(il) && readFileSync(join(home, "labels", "pairs.json"), "utf8") === mainPairs,
+  `the round made ${up2() - u3} craft calls (want 30), or its pairs aren't in labels/illustrations/, or it touched the calibration's`);
+const ilLabels = (against) => {
+  const out = [];
+  const add = (p, arm) => out.push({ id: `il${out.length}`, pair: p.id, packet: `runs/${p.run}/cases/${p.case}/judge/packet.json`, subset: p.subset, question: p.question, side: "left", label: arm, strength: "clear", ms: 900, at: new Date(Date.now() + out.length).toISOString() });
+  const left = (p) => json(judgeFile(p.run, p.case, "packet.json")).positions.left;
+  const given = new Map(ilFirsts.map((p, i) => [p.id, i < against ? (left(p) === "A" ? "B" : "A") : left(p)]));
+  for (const p of ilFid) add(p, given.get(p.id.replace(/:r$/, "")));
+  for (const p of ilCraft.slice(0, I.craftPairs)) add(p, left(p));
+  writeFileSync(join(home, "labels", "illustrations", "labels.jsonl"), out.map((l) => JSON.stringify(l)).join("\n") + "\n");
+};
+ilLabels(0);
+const u4 = up2();
+const ci = await C.checkIllustrations();
+const calAfter = json(J.calibrationFile());
+check(ci.outcome === "pass" && calAfter.use.illustrations === true && calAfter.use.fidelity === calBefore.use.fidelity && calAfter.use.craft === calBefore.use.craft && calAfter.outcome === calBefore.outcome && up2() === u4 && J.variants().illustrationsCalibrated,
+  `illustrations agreeing: ${ci.outcome}, use ${JSON.stringify(calAfter.use)} (was ${JSON.stringify(calBefore.use)}), ${up2() - u4} calls`);
+// A later calibration check keeps the round's result; 7 of 30 clear against the judge (77%) fails the round's 80%.
+await C.checkCalibration(1);
+check(json(J.calibrationFile()).use.illustrations === true, "a calibration check dropped use.illustrations");
+ilLabels(7);
+const cf = await C.checkIllustrations();
+check(cf.outcome === "fail" && !cf.fidelity.pass && cf.craft.pass && json(J.calibrationFile()).use.illustrations === false && !J.variants().illustrationsCalibrated, `illustrations at 23 of 30: ${cf.outcome}, fidelity ${JSON.stringify(cf.fidelity.clear)}`);
+
 // ---- The canary, in a home of its own: 24 stable packets; 4 of the 20 picked now go the other way, so 16 agree.
 const home2 = tempHome();
 const ST = "old-run", SK = "seed-canary";

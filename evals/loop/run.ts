@@ -26,6 +26,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
        | update (all but review, each paying step capped at 1.5× its calls)
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
+       | --illustrations --contrast picture.k=v [--cases n] --cap n | --check --illustrations   (the judge on pictures: labels/illustrations/)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render | --card <decision id>] [--owner-ok] --cap n
   loop [--epochs n] [--seed-cards f] [--quality-only] [--resume]
        [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)

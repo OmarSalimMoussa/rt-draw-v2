@@ -68,7 +68,7 @@ the anchor on the frozen bench) are what say the loop is really improving.
 |---|---|---|
 | C1 | `illustration(id, box, "what it shows")`: one line makes a shape whose description and picture are what it shows, its box never drawn. On an existing shape it turns it into one (its fill and outline go); it never lands on a page, and an id that happens to be a page's name makes a new shape. Draw variant 1 "illustrated" (the default) teaches it: a subject is one illustration, early in the reply, not assembled from boxes, never a plain box standing in for it; detail matched to the ask; a sketch made real goes where the sketch is. Variant 0 is unchanged | `src/core/ops.ts`, `prompts.ts`, `tuning.ts` |
 | C2 | `picture.context` (default 2): the picture call's user text ends with what they said, the most-used colors of the board's shapes (not of its pictures, which would pull every picture toward one palette), and (at 2) their marks read as sketches inside the shape's box, as polylines in the picture's coordinates, clamped to it, at most `picture.contextPoints` (300) points in all. Only the user text varies, so warm processes still serve it | `src/core/picture.ts` (`contextLines`), `draw.ts` (`Prompt.sketches`), `send.ts` |
-| C3 | Every model is open to the loop, and so is routing a send between models (the owner, 2026-10-26): a switch or a router (a model knob, a literal in code, Jev or a rule picking the model per send) is measured like any change, under the latency and quality rules. A keep that switches the picture model (a `picture.*Model` knob in `tuning.ts`) waits for the owner until the judge is calibrated on illustrations (`calibration.json` `use.illustrations`) | `evals/optimizer/gates.ts`, `evals/loop/decide.ts`, `evals/judge/judge.ts` |
+| C3 | Every model is open to the loop, and so is routing a send between models (the owner, 2026-10-26): a switch or a router (a model knob, a literal in code, Jev or a rule picking the model per send) is measured like any change, under the latency and quality rules. A keep that switches the picture model (a `picture.*Model` knob in `tuning.ts`) waits for the owner until the judge is calibrated on illustrations (`calibration.json` `use.illustrations`, set by `rte calib --check --illustrations` on the owner's labels of a round where only the pictures differ, RUNBOOK 7b) | `evals/optimizer/gates.ts`, `evals/loop/decide.ts`, `evals/judge/judge.ts` |
 
 ## D. The search
 
@@ -208,4 +208,4 @@ end on invented sessions), and t0's `SPEC_CONFIG_ID`. `npm run checks` runs the 
 5. One live, unshared A/A within the noise band.
 6. `rte bank rerecord --cap n` (E10), then `rte real freeze` again.
 7. The owner sees all of it before the loop starts. Still the owner's: labeling illustrations for the judge's
-   calibration (about 25 minutes), and deploying a champion to prod.
+   calibration (about 15 minutes, RUNBOOK 7b), and deploying a champion to prod.

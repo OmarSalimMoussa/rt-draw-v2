@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renam
 import { dirname, join } from "node:path";
 import type { View } from "../../../src/core/board.ts";
 import { changeFrame, hidden } from "../../core/diff.ts";
-import { assemble, checkCalibration, topUpContrast } from "../../judge/calibrate.ts";
+import { assemble, assembleIllustrations, checkCalibration, checkIllustrations, topUpContrast } from "../../judge/calibrate.ts";
 import { combined, judging } from "../../judge/judge.ts";
 import { caseFile, framed, readPacket } from "../../judge/packet.ts";
 import type { Label, PairRef } from "../../pages/plugin.ts";
@@ -20,7 +20,7 @@ import { paths } from "../paths.ts";
 import { caseDir, put, putImage, runFile, voidCase } from "../record.ts";
 import { type State, newState, readState, saveState } from "../state.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "../trees.ts";
-import type { Arm, Judged, Ratio, SceneJSON } from "../types.ts";
+import type { Arm, Judged, Ratio, RecordedReply, SceneJSON } from "../types.ts";
 import { CO_AUTHOR, IDENT, type Rte, banked, championArm, championSha, git, isAncestor, js, maybe, needBank, nextEpoch, ordered, tryGit, upstream } from "../rte.ts";
 
 /** A checkpoint of today's champion (an owner step for `sync`), then the champion-miss digest from its losses. */
@@ -110,9 +110,42 @@ export async function packetsCmd(rte: Rte) {
   }
 }
 
+/**
+ * `rte calib --illustrations --contrast picture.model=0 --cap n`: the champion's pictures against another picture model's,
+ * on banked cases whose pictures were drawn, the drawing call shared so only the pictures differ; the round's pairs go to
+ * labels/illustrations/. `--check --illustrations`: the owner's labels there against the judge (0 calls), use.illustrations.
+ */
+async function illustrations(rte: Rte) {
+  if (rte.o.f.check) {
+    const r = await rte.withGateway(() => checkIllustrations(), rte.o.cap === undefined);
+    historyAdd("health.jsonl", r.health);
+    commitHistory(`calibration: illustrations ${r.outcome}`);
+    rte.say(`calib: illustrations ${r.outcome}; fidelity ${r.fidelity.clear.score} of ${r.fidelity.clear.n} clear, craft ${r.craft.score} of ${r.craft.n}${r.outcome === "more" ? "; label more at /evals/label/?set=illustrations (or rerun the round with --cases n)" : ""}`);
+    return r.outcome === "pass" ? 0 : 1;
+  }
+  const [knob, value] = (rte.str("contrast") ?? "").split("=");
+  if (!knob?.startsWith("picture.") || value === undefined) throw new Error("calib --illustrations --contrast picture.<knob>=<value> --cap n | calib --check --illustrations");
+  rte.needCap("calib --illustrations");
+  needBank();
+  const champ = championArm();
+  const run = "calib-illustrations";
+  const drew = (id: string) => {
+    const f = join(paths().bankCase(id), "replies.json");
+    return existsSync(f) && (JSON.parse(readFileSync(f, "utf8")) as RecordedReply[]).some((r) => r.role === "picture");
+  };
+  const ids = ordered(banked(["tuning", "fresh"]).filter(drew), run).slice(0, rte.num("cases") ?? LOOP.calib.illustrations.cases);
+  await rte.withGateway((gw) => rte.withRig(gw, [champ.tree], async (rig) => {
+    await runAB(rig, { run, kind: "calib", arms: { A: champ, B: { ...champ, tuning: { [knob]: Number(value) } } }, mode: "live", share: true, seed: run, judge: judging(run, { seed: run, craft: "none" }), cases: ids });
+    const pairs = await assembleIllustrations({ contrast: run, seed: run });
+    const I = LOOP.calib.illustrations;
+    rte.say(`calib: ${pairs.length} pairs from ${ids.length} cases in labels/illustrations/pairs.json: label them at /evals/label/?set=illustrations (${I.clear} clear fidelity, ${I.craftPairs} craft), then rte calib --check --illustrations`);
+  }));
+}
+
 export async function calib(rte: Rte) {
   openHistory();
   if (rte.o.f["fake-labels"]) return fakeLabels(rte);
+  if (rte.o.f.illustrations) return illustrations(rte);
   if (rte.o.f.check) {
     const variant = rte.num("variant") === 2 ? 2 : 1;
     if (variant === 2) rte.needCap("calib --check --variant 2");
