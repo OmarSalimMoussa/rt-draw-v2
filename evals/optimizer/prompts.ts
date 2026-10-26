@@ -107,7 +107,7 @@ Rules:
 - The card's change only: one idea, in as many src/core files as it needs.
 - A router or a model switch: every model a send may take is warmed at Send and gets the current board.
 - No new tests or scaffolding.
-- Register any new number as a knob in src/core/tuning.ts with its range, step and doc; a new literal other than 0, 1, -1 or 2 anywhere else in src/core fails the gate.
+- Register any new number as a knob in src/core/tuning.ts with its range, step and doc; a new literal other than 0, 1, -1 or 2 anywhere else in src/core fails the gate. Indices, lengths and slice bounds count too (m[3], args.length === 4, s.slice(0, 80)): destructure (const [, r, g, b] = m) or reuse an existing knob.
 - Never touch frozen paths (evals/, dev/, scripts/, playgrounds/, src/fixtures/, vite.config.ts, package.json, tsconfig.json), the editor's look, or speech.
 - Never turn a patch on, and never change a patches.* knob.
 - Keep the bridge contract's exports and signatures (above).
