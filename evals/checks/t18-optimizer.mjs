@@ -77,6 +77,7 @@ for (const [file, added, removed] of [["src/core/render.ts", ["    roughness: 0,
   ["src/core/prompts.ts", ["Give every shape roughness:0 so it reads clean."], []], ["src/core/draw.ts", ["  const x = 1;"], ['  const r = t["picture.roughness"];']]])
   check(verdict(diff(file, added, removed)).verdict === "owner", `a crisp outline in ${file} isn't an owner-list item: ${verdict(diff(file, added, removed)).reasons}`);
 check(verdict(diff("src/core/render.ts", [`${KNOB} // the shape's own style first`], [KNOB])).verdict === "pass", "a render edit that keeps the knob read isn't passed");
+check(verdict(diff("src/core/prompts.ts", ["When the ink is a rough box, fill that box with the shape it stands for."], [])).verdict === "pass", "a prompt line about the user's rough ink is held as a look change");
 
 // ---- G0 in a candidate tree: the typecheck with the bridge, and the scene round trip (0 calls)
 const tree = join(home, "trees", "cand");
