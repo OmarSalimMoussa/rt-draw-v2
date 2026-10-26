@@ -19,7 +19,8 @@ branch=$(git rev-parse --abbrev-ref HEAD)
 echo "== push $branch → pgx"
 git push -q pgx "$branch"
 # shellcheck disable=SC2087
-ssh "$PGX" bash -s -- "$branch" <<'EOF'
+# Keepalives: a connection that drops after the PGX finished (Tailscale) ends here in 2 minutes, not never (2026-10-26: 70).
+ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=4 "$PGX" bash -s -- "$branch" <<'EOF'
 set -euo pipefail
 branch=$1
 export PATH=$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH RT_EVAL_HOME=$HOME/rt-eval
