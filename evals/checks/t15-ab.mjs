@@ -105,9 +105,10 @@ export async function fakeLoop({ port, slots = 2 }) {
   for (const [set, tag, sessions, sends] of sets)
     for (let k = 1; k <= sessions; k++) for (let n = 1; n <= sends; n++) cases.push({ id: `c-${tag}-s${k}-${n}`, set, session: `${tag}-s${k}`, n, start: k % 2 ? "toyshop-home" : "blank" });
   cases.push({ id: "c-x-stray", set: "tuning", session: "x-s1", n: 1, start: "toyshop-home", stray: true });
+  // Each stand-in records its output tokens as a real bank does: the keep's model check reads a replayed reply's.
   const standIn = (id, role, text, chunks, subject) => {
     const name = sha(`standin|${id}|${role}|${subject ?? ""}`);
-    put(p.reply(name), { reqHash: name, run: "bank", role, at: new Date().toISOString(), request: { model: "", system: "", user: "", images: [], effort: "low", thinking: "auto" }, text, chunks, doneMs: chunks.at(-1).ms + 20, stats: {} });
+    put(p.reply(name), { reqHash: name, run: "bank", role, at: new Date().toISOString(), request: { model: "", system: "", user: "", images: [], effort: "low", thinking: "auto" }, text, chunks, doneMs: chunks.at(-1).ms + 20, stats: { outTokens: Math.ceil(text.length / 4) } });
     return { role, ordinal: 0, ...(subject ? { subject } : {}), reqHash: name, cacheFile: `${name}.json`, offsets: chunks.map((c) => c.ms) };
   };
   for (const [i, c] of cases.entries()) {
