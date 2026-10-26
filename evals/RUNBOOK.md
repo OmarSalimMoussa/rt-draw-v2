@@ -11,7 +11,7 @@ $0.22, 1.5 min**, every line passed. The rest of the numbers are the spec's esti
 ## 0. Once, before anything
 
 **Tokens.** One to three tokens (`claude setup-token` on each account). Today one token is shared with testers on
-prod (the owner, 2026-10-24): the loop pauses at 60% of its five-hour window, leaving testers the rest, and stops at 50%
+prod (the owner, 2026-10-24): the loop pauses at 90% of its five-hour window (60% until 2026-10-26), leaving testers the rest, and stops at 50%
 of its week. Put the tokens in a file outside every repo:
 
 ```bash
@@ -129,7 +129,7 @@ bash evals/loop/launch.sh loop --resume # continues at the next undone case; fin
 A crash or a reboot leaves a stale lock: the next `loop` resumes by itself. A laptop suspend voids the decision in
 flight. The loop stops by itself on the weekly allowance (50% of each token's week), two voids in a row, a failed
 readiness or calibration, a sync conflict, the call cap or a blocked request, and pauses (until the earliest reset) when
-every token is past 60% of its five-hour window (testers share the token); each one lands in the owner list.
+every token is past 90% of its five-hour window (testers share the token); each one lands in the owner list.
 
 ## 5. The morning check
 

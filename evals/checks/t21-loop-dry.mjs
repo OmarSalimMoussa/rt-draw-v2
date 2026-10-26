@@ -146,12 +146,12 @@ await until(() => chromeCount(join(p.home, "chrome")) === 0, 20_000, "the killed
 const killAt = Date.now(), reqsAtKill = api.requests.length, meterAtKill = lines(p.calls).length;
 check(!existsSync(join(p.run(hit.run), "cases", hit.case, "done")), `case ${hit.case} finished before the kill (not mid-case)`);
 
-// Every slot past its five-hour pause line (60%): the resumed loop pauses until the earliest resetsAt.
+// Every slot past its five-hour pause line (90%): the resumed loop pauses until the earliest resetsAt.
 const now = Math.floor(Date.now() / 1000);
 writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, limited: false, hours: {} }))));
 const resumed = await rte(["loop", "--resume", ...FLAGS]).done;
 check(resumed.code === 0 && /loop: done/.test(resumed.out), `loop --resume didn't finish (exit ${resumed.code}): ${short(resumed.out)}`);
-check(/pause until .*every slot is past 60% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
+check(/pause until .*every slot is past 90% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
 const after = api.requests.slice(reqsAtKill);
 check(after.length > 0 && after[0].at >= (now + 7) * 1000, `the first call after the resume came at ${after[0]?.at}, before the earliest resetsAt ${(now + 7) * 1000}`);
 const all = lines(p.calls);

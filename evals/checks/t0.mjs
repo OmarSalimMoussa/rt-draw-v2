@@ -62,7 +62,7 @@ process.env.RT_EVAL_HOME = home;
 // and render decide with no allowance, no cost cap, the 60% / 50% budget, the search's numbers), then the cleanup's
 // deletions (2026-10-26: the debts, the night cap, the window share, the over-use and cost thresholds, sampled craft,
 // the void rerun's knobs; one pooled latency test). Changing a frozen number changes what decides: update this on purpose.
-const SPEC_CONFIG_ID = "df4676f56dc069452592bf3af393148cb02ea8a9ee111dd9aeef8d8bee9ef43c";
+const SPEC_CONFIG_ID = "c0b68573572ee89443176d84553ef08d8525abf354c722b75052c0d016fd0c7b";
 const cfg = await import("../loop/config.ts");
 check(cfg.configId === SPEC_CONFIG_ID, "config.ts' LOOP or DRIVE_VIEW differ from spec §1.6");
 check(cfg.configId === sha(JSON.stringify({ LOOP: cfg.LOOP, DRIVE_VIEW: cfg.DRIVE_VIEW })), "configId isn't sha256(JSON.stringify({ LOOP, DRIVE_VIEW }))");

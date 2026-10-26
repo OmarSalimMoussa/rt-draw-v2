@@ -239,7 +239,7 @@ check(dr2.find((l) => l.arm === "A")?.dropped === true && !dr2.find((l) => l.arm
   `a call cut short mid-stream: A ${JSON.stringify(dr2.find((l) => l.arm === "A") && { dropped: dr2.find((l) => l.arm === "A").dropped, apiError: dr2.find((l) => l.arm === "A").apiError })}, B ${whole.done?.shared} ${JSON.stringify(whole.text.slice(0, 30))}, banked ${JSON.stringify(bankedDr2.text.slice(0, 30))} (want dropped; B its own call; the whole reply banked)`);
 check(dropLine?.dropped === true && !dropLine.apiError, `a call its page dropped was metered as ${JSON.stringify(dropLine && { dropped: dropLine.dropped, apiError: dropLine.apiError, ms: dropLine.ms, outTokens: dropLine.outTokens, stopReason: dropLine.stopReason, mode: dropLine.mode })} (want dropped, no error)`);
 
-// ---- Rotation end to end: off a slot past five-hour LOOP.fiveHourPauseAt (0.60) and on a 429, at the next case boundary.
+// ---- Rotation end to end: off a slot past five-hour LOOP.fiveHourPauseAt (0.90) and on a 429, at the next case boundary.
 api.set({ util5h: 0.95 });
 await product({ run: "rot", case: "rot1", arm: "A", slot: 0 }, { model: "haiku", system: "rot", user: tag("rot-1"), warm: 0 });
 api.set({ util5h: 0.42, mode: "limit" });
@@ -264,12 +264,12 @@ check(s.boundary() === 2, "allowed_warning didn't move work to slot 2");
 const s2 = new Slots([1, 2], undefined, () => now);
 s2.record(1, { usd: 500 });
 check(!s2.why(1) && s2.status()[0].usdThisWindow === 500, `$500 with no reading paused slot 1: ${s2.why(1)}`);
-// The token is shared with testers on prod: new work stops at 0.60 of the five-hour window (LOOP.fiveHourPauseAt).
+// The token is shared with testers on prod: new work stops at 0.90 of the five-hour window (LOOP.fiveHourPauseAt).
 const s2r = new Slots([1, 2], undefined, () => now);
-s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.59 } });
+s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.89 } });
 const under = s2r.why(1);
-s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.61 } });
-check(!under && /five-hour/.test(s2r.why(1) ?? ""), `the server's five-hour reading doesn't pause at 0.60: ${under} / ${s2r.why(1)}`);
+s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.91 } });
+check(!under && /five-hour/.test(s2r.why(1) ?? ""), `the server's five-hour reading doesn't pause at 0.90: ${under} / ${s2r.why(1)}`);
 const s3 = new Slots([1, 2, 3], undefined, () => now);
 // The loop's week stops at half the account's (LOOP.weekSevenDayMax 0.50): 0.49 runs, 0.51 parks.
 const s3w = new Slots([1], undefined, () => now);

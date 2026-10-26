@@ -262,7 +262,7 @@ stops at the cap instead of burning a usage window.
 ### Guard rails
 
 The loop stops itself on the weekly allowance (50%), two voids in a row, a broken invariant, failed readiness or
-calibration, or a merge conflict. It pauses, before any paying case, while every token is past 60% of its five-hour
+calibration, or a merge conflict. It pauses, before any paying case, while every token is past 90% of its five-hour
 window (and before every top-up or continuation send). After six reverts in a row (an epoch's cards)
 in one area it rests that area until the next checkpoint. Everything it can't decide lands in `owner-list.md`.
 
