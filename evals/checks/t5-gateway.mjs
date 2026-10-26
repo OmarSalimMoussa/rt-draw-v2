@@ -174,9 +174,12 @@ const wPic = await (await fetch(`${gw.url}/api/model`, { method: "POST", headers
 await endCase("warm1", "bank-c1");
 const wKeys = Object.entries((await gatewayStatus()).pools).filter(([k]) => k.startsWith("A|6|"));
 check(upstream() === n6 && wDraw.done?.scan === "standin" && wPic.warming === 2, `a warm scan: ${upstream() - n6} upstream, ${wDraw.done?.scan}, warming ${wPic.warming}`);
-check(wKeys.map(([, n]) => n).sort().join() === "1,2", `a warm scan's pools for A slot 6: ${JSON.stringify(wKeys)} (want one draw process, two picture)`);
+// A drawing call's thinking can be decided live (draw.thinkRouter): its thinking-off variant is warmed too.
+check(wKeys.map(([, n]) => n).sort().join() === "1,1,2" && wKeys.some(([k]) => k.includes(":off:")), `a warm scan's pools for A slot 6: ${JSON.stringify(wKeys)} (want a draw process thinking and one not, two picture)`);
 const wLive = await product({ run: "w2", case: "c9", arm: "A", slot: 6 }, { model: "sonnet", system: DRAW, user: `${tag("w2")} the timed send`, from: "draw" });
 check(wLive.done?.warm === true && wLive.done?.readyAtTake === true, `the timed send after a warm scan didn't take a started process: warm ${wLive.done?.warm}, readyAtTake ${wLive.done?.readyAtTake}`);
+const wOff = await product({ run: "w2", case: "c9", arm: "A", slot: 6 }, { model: "sonnet", system: DRAW, user: `${tag("w2")} the timed send, no thinking`, from: "draw", thinking: "off" });
+check(wOff.done?.warm === true, `a no-think timed send after a warm scan didn't take a started process: warm ${wOff.done?.warm}`);
 await endCase("w2", "c9");
 check((await setMode("warm2", "live", { warm: true })).error === "only a scan warms", "a warm live run was accepted");
 

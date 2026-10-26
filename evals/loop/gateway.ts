@@ -257,7 +257,16 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const { mode, share, cached, warm, timed } = runs.get(a.run) ?? { mode: "live", share: true };
     const instant = mode === "scan" && !!a.page && !timed;
     // A warm scan (ab.ts' warm-up send, a slot's first in a live run) starts the processes each call would take.
-    if (warm && a.page) topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined);
+    if (warm && a.page) {
+      const ups = a.case ? cases.get(`${a.run}|${a.case}`)?.ups : undefined;
+      topUp(poolKey(a, slots.current), keepOf(a.warm, MAX_WARM), start(a.req, slots.current), ups);
+      // Whether a drawing call thinks can be decided live (draw.thinkRouter asks Jev, which a scan answers with a stand-in):
+      // its other variant too, or every send the live answer flips starts cold (e70-h1: B 31% cold, A 0%, void).
+      if (a.role === "draw") {
+        const other = { ...a.req, thinking: a.req.thinking === "off" ? ("auto" as const) : ("off" as const) };
+        topUp(poolKey({ ...a, req: other }, slots.current), keepOf(a.warm, MAX_WARM), start(other, slots.current), ups);
+      }
+    }
     // A copy is another draw of the upstream wait: live, a fresh call of its own (never the cache's, never another arm's);
     // in a scan or a replay it answers nothing, so its first copy's reply decides and the page drops it.
     if (a.copy) return mode === "live" ? live(a, onText) : held(a, mode);
