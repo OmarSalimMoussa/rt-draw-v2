@@ -105,13 +105,6 @@ export function frame(host: HTMLElement, o: { title: string; height: number; x: 
       g.setAttribute("opacity", "0.16");
       put(g, data, true);
     },
-    /** A vertical strip over an x range (a debt band), labelled at its top. */
-    xband(x0: number, x1: number, label: string, color: string, data: Record<string, string>) {
-      const g = rc.rectangle(sx(x0), pad.t, Math.max(4, sx(x1) - sx(x0)), h - pad.t - pad.b, opts({ stroke: "none", fill: color, fillStyle: "hachure", hachureGap: 7, fillWeight: 1, roughness: 0.4 }));
-      g.setAttribute("opacity", "0.45");
-      put(g, data, true);
-      text(sx(x0) + 3, pad.t + 11, label, { "font-size": 11, fill: color });
-    },
     /** A horizontal strip over a y range across the whole chart (v1's band). */
     yband(y0: number, y1: number, label: string, color: string, data: Record<string, string>) {
       const g = rc.rectangle(pad.l, sy(y1), w - pad.l - pad.r, Math.max(3, sy(y0) - sy(y1)), opts({ stroke: "none", fill: color, fillStyle: "solid", roughness: 0.3 }));
@@ -130,13 +123,27 @@ export function frame(host: HTMLElement, o: { title: string; height: number; x: 
       put(rc.rectangle(sx(x) - 5, sy(y) - 5, 10, 10, opts({ stroke: INK, fill: "#ffd43b", fillStyle: "solid" })), data);
       text(sx(x) + 9, sy(y) + 4, label, { "font-size": 11 });
     },
-    /** A labelled vertical step on a line at x: an era bridge, an anchor move, an owner step. */
+    /**
+     * A ring around a point with a short label under it, on the side that has room, the full
+     * story on hover (a checkpoint surely slower than A0).
+     */
+    ring(x: number, y: number, label: string, full: string, color: string, data: Record<string, string>, right = false) {
+      const [cx, cy] = [sx(x), (right ? sy2 : sy)(y)];
+      const g = rc.circle(cx, cy, 22, opts({ stroke: color, strokeWidth: 2.5, fill: "none" }));
+      const title = el("title");
+      title.textContent = full;
+      g.append(title);
+      put(g, data);
+      const left = cx > w / 2;
+      text(cx + (left ? -10 : 10), cy + 24, label, { "font-size": 11, fill: color, "text-anchor": left ? "end" : "start" });
+    },
+    /** A labelled vertical step on a line at x: an owner step into his checkpoint. */
     step(x: number, from: number, to: number, label: string, kind: string, right = false) {
       const y = right ? sy2 : sy;
       put(rc.line(sx(x), y(from), sx(x), y(to), opts({ stroke: "#5f3dc4", strokeWidth: 1.5, strokeLineDash: [4, 3] })), { step: kind });
       text(sx(x) + 4, Math.min(y(from), y(to)) - 4, label, { "font-size": 11, fill: "#5f3dc4" });
     },
-    /** A marker tick on the x axis (a harness tag, a served model, an A/A…) with a one-letter glyph, its full label on hover. */
+    /** A marker tick on the x axis (a harness tag, a served model, an era, an A/A…) with a one-letter glyph, its full label on hover. */
     tick(x: number, label: string, kind: string, glyph = "·") {
       const g = rc.line(sx(x), h - pad.b - 7, sx(x), h - pad.b + 3, opts({ stroke: "#e8590c", strokeWidth: 2 }));
       const title = el("title");

@@ -72,9 +72,13 @@ export type AskRequest = {
   token?: SlotN;
 };
 
-/** One eval-role call through the gateway. Throws on any error (never an empty success). */
+/** The gateway's --cap is reached: the step stops, never just the call or the case (a typed error, so no one reads the words). */
+export class CapReached extends Error {}
+
+/** One eval-role call through the gateway. Throws on any error (never an empty success); CapReached at the cap. */
 export async function ask(r: AskRequest, url = gatewayUrl): Promise<{ text: string; stats: Record<string, unknown> }> {
   const j = await post("/call", r, url);
+  if (j.capped) throw new CapReached(j.error);
   if (j.error) throw new Error(j.error);
   return j;
 }
@@ -109,7 +113,7 @@ async function post(path: string, body: unknown, url: string | undefined) {
 }
 /**
  * One JSON POST over node:http, not fetch: fetch gives up after 300 s without the answer's headers, and the gateway
- * answers an eval role's call only when it's done (gold at its most effort takes up to 20 minutes).
+ * answers an eval role's call only when it's done (gold at max effort took up to 38 minutes; the gateway's hang guard ends a stuck one).
  */
 function postJson(url: string, body: string): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {

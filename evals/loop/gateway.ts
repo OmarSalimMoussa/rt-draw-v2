@@ -40,8 +40,13 @@ export const EVAL_IN_FLIGHT = 6;
 const MAX_WARM = 4;
 /** An overload fails in ~2 s, not 102 s: the case is voided and replayed. */
 const MAX_RETRIES = 2;
-/** A product call's limit, as on the hosted app (dev/model-plugin.ts). Eval roles have none (live()). */
+/** A product call's limit, as on the hosted app (dev/model-plugin.ts). */
 const TIMEOUT_MS = 120_000;
+/**
+ * An eval role's hang guard, never a limit on its work: gold is never throttled (the owner, 2026-10-25), so its guard is
+ * over twice the slowest gold ever drawn (38 min at max effort); every other role finished within 2 min in history.
+ */
+const evalHangMs = (role: string) => (role === "real-gold" ? 90 : 15) * 60_000;
 /**
  * An eval role's output, at most: the model's own maximum. Only the product's calls keep MAX_TOKENS, as the hosted app
  * does: gold is the ideal the product aims at, so nothing throttles it (nor triage, the judge or the analyst).
@@ -70,7 +75,7 @@ type Ask = {
 type Out = {
   text: string; stats: Record<string, unknown>; mode: CallMode; shared: Shared; scan?: "hit" | "standin" | "miss"; error?: string; cacheFile?: string; chunks: Chunk[];
   /** a real call was made: its list $ and token slot (none for Jev) */ upstream?: { usd: number; token?: SlotN };
-  /** refused before any call (the cap): no meter line */ refused?: boolean;
+  /** refused before any call (the cap, `capped`): no meter line */ refused?: boolean; capped?: boolean;
   /** its page dropped it (a copy that lost, a speculation that missed, a picture past its timeout): no error */ dropped?: boolean;
 };
 /** A case's loop delays by whole ms (the last bucket: LATE_MAX_MS and more), a fixed size however long the case runs. */
@@ -160,7 +165,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   async function live(a: Ask, onText: (t: string) => void, flight?: ReturnType<Flights["lead"]>): Promise<Out> {
     const since = () => performance.now() - a.t0;
     const refuse = (error: string): Out => (flight && Flights.end(flight, { ms: since(), error }), { text: "", stats: {}, mode: "live", shared: "-", error, chunks: [], refused: true });
-    if (cap !== undefined && calls >= cap) return refuse(`call cap ${cap} reached`);
+    if (cap !== undefined && calls >= cap) return { ...refuse(`call cap ${cap} reached`), capped: true };
     const same = slots.sameAccount();
     if (same) return refuse(`slots ${same[0]} and ${same[1]} report the same resetsAt: one account`);
     calls++;
@@ -172,10 +177,12 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (a.page) topUp(key, keepOf(a.warm, MAX_WARM), start(a.req, token));
     // Closing the query ends its stream cleanly, so what stopped it is noted: a reply cut short is never a reply.
     let stopped: "page" | "timer" | undefined;
-    // A product call has the hosted app's limit; an eval role's has none (Claude Code's own stream-idle watchdog ends a
-    // dead connection, and the API's pings keep a long think alive).
-    const late = `no reply within ${TIMEOUT_MS / 1000} s`;
-    const timer = a.page ? setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), TIMEOUT_MS) : undefined;
+    // A product call has the hosted app's limit; an eval role only a hang guard (Claude Code's own stream-idle watchdog
+    // ends a dead connection, and the API's pings keep a long think alive, but a process that never answers holds a
+    // step forever).
+    const limitMs = a.page ? TIMEOUT_MS : evalHangMs(a.role);
+    const late = `no reply within ${limitMs / 1000} s`;
+    const timer = setTimeout(() => ((stopped ??= "timer"), taken.proc.q.close()), limitMs);
     // A page that dropped its call stops it, unless another arm's identical call is waiting on this one; none may join after.
     const stop = () => {
       if (flight?.followers.size) return;
@@ -297,7 +304,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     const up = out.upstream;
     const rl = (up ? s.rateLimit : undefined) as CallStats["rateLimit"];
     if (!out.refused) meterCall(p.calls, {
-      at: new Date().toISOString(), run: a.run, case: a.case, arm: a.arm as Arm | undefined, slot: a.slot, role: a.role, model: a.req.model, servedModel: s.served as string | undefined,
+      at: new Date().toISOString(), run: a.run, case: a.case, arm: a.arm as Arm | undefined, slot: a.slot, role: a.role, page: a.page, model: a.req.model, servedModel: s.served as string | undefined,
       sdk: SDK_VERSION, reqHash: a.hash, shared: out.shared, mode: out.mode, scan: out.scan,
       inTokens: up ? n(s.inTokens) : 0, cacheRead: up ? n(s.cacheRead) : 0, cacheWrite5m: up ? n(s.write5m) : 0, cacheWrite1h: up ? n(s.write1h) : 0, outTokens: up ? n(s.outTokens) : 0,
       thinkingTokens: up ? n(s.thinkingTokens) : 0, stopReason: s.stopReason as string | undefined, ms: Math.round(performance.now() - t0), firstMs: firstMs === undefined ? undefined : Math.round(firstMs),
@@ -363,7 +370,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!r) return json(res, 400, { error });
     const a: Ask = { run: (b.run as string) ?? "-", case: b.case as string | undefined, role: b.role, ordinal: 0, t0: arrived, page: false, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], token: b.token as SlotN | undefined };
     const out = await serveAndRecord(a, () => {});
-    json(res, out.error ? 502 : 200, { text: out.text, stats: { ...out.stats, reqHash: a.hash, mode: out.mode }, error: out.error });
+    json(res, out.error ? 502 : 200, { text: out.text, stats: { ...out.stats, reqHash: a.hash, mode: out.mode }, error: out.error, ...(out.capped ? { capped: true } : {}) });
   }
 
   /** The case is over: its loop delay p99 (above the timer's own resolution) and its calls per arm. */

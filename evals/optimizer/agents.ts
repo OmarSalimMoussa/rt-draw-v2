@@ -231,11 +231,11 @@ const KINDS = ["knob", "variant", "code", "op", "newknob", "sweep", "combo"];
 const GOALS = ["fidelity", "craft", "latency"];
 /** What's wrong with a card the critic wrote, if anything. */
 function cardFault(c: Partial<HypothesisCard>): string | undefined {
-  for (const k of ["id", "component", "change", "predicts", "risk"] as const) if (typeof c[k] !== "string" || !c[k]) return `no ${k}`;
+  for (const k of ["id", "component", "change", "risk"] as const) if (typeof c[k] !== "string" || !c[k]) return `no ${k}`;
   if (!KINDS.includes(c.kind!)) return `kind ${c.kind}`;
   if (!GOALS.includes(c.goal!)) return `goal ${c.goal}`;
   if (!["S", "R", "Q", "D"].includes(c.classGuess!)) return `classGuess ${c.classGuess}`;
-  for (const k of ["dialogue", "isPatch", "raisesCost", "touchesFrozen"] as const) if (typeof c[k] !== "boolean") return `no ${k}`;
+  for (const k of ["dialogue", "isPatch", "touchesFrozen"] as const) if (typeof c[k] !== "boolean") return `no ${k}`;
   if (!Array.isArray(c.files)) return "no files";
   if (c.overuseDetector && !(c.overuseDetector in OVERUSE)) return `unknown detector ${c.overuseDetector}`;
   if (c.knobs && Object.values(c.knobs).some((v) => typeof v !== "number")) return "a knob value isn't a number";

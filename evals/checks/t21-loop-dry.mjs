@@ -96,7 +96,7 @@ writeFileSync(FAKES, `import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const { worktreeOf } = await import(${mod("evals/loop/trees.ts")});
 const { caseDir, put } = await import(${mod("evals/loop/record.ts")});
-const card = (id, o) => ({ id, component: "draw", kind: "code", change: id, goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "p", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "r", files: [], ...o });
+const card = (id, o) => ({ id, component: "draw", kind: "code", change: id, goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: [], ...o });
 const CARDS = {
   1: [card("knob", { kind: "knob", knobs: { "draw.sendMarks": 0 }, change: "draw.sendMarks = 0" }), card("points", { component: "resolve", change: "the resolver asks what ink points at" }), card("noop", { change: "a comment in draw.ts" })],
   2: [card("frozen", { change: "a vite.config.ts comment" })],
@@ -148,7 +148,7 @@ check(!existsSync(join(p.run(hit.run), "cases", hit.case, "done")), `case ${hit.
 
 // Every slot past its five-hour pause line (60%): the resumed loop pauses until the earliest resetsAt.
 const now = Math.floor(Date.now() / 1000);
-writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, W: 170, calibrated: false, limited: false, hours: {} }))));
+writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, limited: false, hours: {} }))));
 const resumed = await rte(["loop", "--resume", ...FLAGS]).done;
 check(resumed.code === 0 && /loop: done/.test(resumed.out), `loop --resume didn't finish (exit ${resumed.code}): ${short(resumed.out)}`);
 check(/pause until .*every slot is past 60% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
@@ -204,7 +204,7 @@ check(bad.code !== 0 && /--notify-usd takes a number/.test(bad.out), `--notify-u
 // gets none. The server's answer brings the first back, and every slot goes to budget.jsonl with when it was read.
 const slotsFile = join(p.home, "meter", "slots.json"), slotsBefore = readFileSync(slotsFile, "utf8");
 const wNow = Date.now(), oldRead = wNow - 27 * 3600_000;
-const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {}, ...o });
+const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, limited: false, hours: {}, ...o });
 writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.6, sevenDayAt: wNow - 3600_000 })]));
 const w0 = api.requests.length;
 const wk = await rte(["week", "--cap", "5", ...FLAGS]).done;
@@ -280,20 +280,18 @@ if (process.arch === "x64") {
 
 // ---- Every §6.7 rule on crafted facts.
 const T = Date.now();
-const base = { now: T, pace: { ok: true }, nightUsd: 0, nightCapUsd: 200, nightStart: T - 3600_000, recent: [], ready: true, calib: "pass", overloads: [], diskGb: 500, onAC: true };
+const base = { now: T, pace: { ok: true }, recent: [], ready: true, calib: "pass", overloads: [], diskGb: 500, onAC: true };
 const d = (verdict, o = {}) => ({ id: "x", verdict, component: "draw", at: new Date(T).toISOString(), ...o });
 const fires = {
   "slots spent → pause": [{ pace: { ok: false, pauseUntil: T + 5000 } }, "pause", /five-hour/],
   "weekly allowance → stop": [{ pace: { ok: false, stop: "every slot past its weekly allowance" } }, "stop", /weekly/],
-  "night cap → pause until the next night": [{ nightUsd: 250 }, "pause", /night cap.*next night/],
-  "3 overruns tonight → stop": [{ recent: [d("void", { overrun: true }), d("revert"), d("void", { overrun: true }), d("keep"), d("void", { overrun: true })] }, "stop", /overran/],
   "2 voids in a row → stop": [{ recent: [d("keep"), d("void"), d("void")] }, "stop", /2 void/],
   "V9 → stop": [{ recent: [d("void", { v9: true })] }, "stop", /V9/],
   "readiness → stop": [{ ready: false }, "stop", /readiness/],
   "calibration → stop": [{ calib: "stop" }, "stop", /calibration/],
   "no passed calibration → stop": [{ calib: "more" }, "stop", /isn't calibrated/],
   "never calibrated → stop": [{ calib: undefined }, "stop", /never checked/],
-  "--cap reached → stop": [{ error: "call cap 40 reached" }, "stop", /--cap/],
+  "--cap reached → stop": [{ capped: true, error: "the call cap is reached" }, "stop", /--cap/],
   "a sync conflict → stop for the owner": [{ blocked: "sync: master conflicts" }, "stop", /paused for the owner/],
   "/api/tts → abort": [{ error: "run x aborted: a page requested http://127.0.0.1:5334/api/tts" }, "stop", /aborted/],
   // The dry well scales with the cards an epoch (LOOP-V2.md D3): 2 epochs' worth in a row, one epoch's on a component.
@@ -308,15 +306,14 @@ const fires = {
 
 // ---- The owner's notices on crafted facts: a heads-up as a step comes near, one when it's reached, each once, never a stop.
 const every = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
-const nf = (o = {}) => ({ now: T, every, nightUsd: 0, nightCapUsd: 200, ...o, leg: { start: T - 60_000, usd: 0, decisions: 0, checkpoints: [], ...o.leg } });
+const nf = (o = {}) => ({ now: T, every, ...o, leg: { start: T - 60_000, usd: 0, decisions: 0, checkpoints: [], ...o.leg } });
 const due = (f, sent = new Set()) => notices(f, sent).map((n) => `${n.kind} ${n.key}`).join();
 const want = {
   quiet: [nf(), ""], "$16.50 → soon": [nf({ leg: { usd: 16.5 } }), "soon usd:1:soon"], "$20.20 → reached": [nf({ leg: { usd: 20.2 } }), "reached usd:1"],
   "$37 → reached, the next soon": [nf({ leg: { usd: 37 } }), "reached usd:1,soon usd:2:soon"], "97 min → soon": [nf({ leg: { start: T - 97 * 60_000 } }), "soon minutes:1:soon"],
   "1 decision → none": [nf({ leg: { decisions: 1 } }), ""], "2 decisions → reached": [nf({ leg: { decisions: 2 } }), "reached decisions:1"],
   "a checkpoint → one": [nf({ leg: { checkpoints: ["ck-01"] } }), "checkpoint checkpoint:ck-01"], "a checkpoint, notices off → none": [nf({ every: { ...every, checkpoint: 0 }, leg: { checkpoints: ["ck-01"] } }), ""],
-  "night cap 82% → soon": [nf({ nightUsd: 165 }), "soon night:0.8"], "night cap 96% → both": [nf({ nightUsd: 192 }), "soon night:0.8,soon night:0.95"], "night cap reached → none (the pause rule says it)": [nf({ nightUsd: 200 }), ""],
-  "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, nightUsd: 100, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
+  "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
 };
 for (const [name, [f, keys]] of Object.entries(want)) check(due(f) === keys, `notices, ${name}: ${due(f)} (want ${keys || "none"})`);
 check(due(nf({ leg: { usd: 37 } }), new Set(["usd:1", "usd:2:soon"])) === "", "a notice already sent was sent again");

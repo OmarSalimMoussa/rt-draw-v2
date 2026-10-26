@@ -29,12 +29,10 @@ export const CARD_SCHEMA = `type HypothesisCard = {
   metric?: "ttfd" | "render"; // latency cards: time to first drawing (the first visible stroke of anything the send keeps, a picture's first streamed stroke included, a placeholder not) or render (the engine's time from an op landing to it on screen: one op's apply plus one paint of the send's board); kept when the median send or the slow sends (p90, p95) get surely faster and neither metric gets surely slower. Time to done and $ never decide
   classGuess: "S" | "R" | "Q" | "D";   // S schedule only, R parse only, Q a request differs, D Q plus what a next send reads
   dialogue: boolean;          // does it change what a next send reads (camera continuity, scene growth, doodle reuse)?
-  predicts: string;           // what should move, by how much, and where
-  overuseDetector?: string;   // one of: ${Object.keys(OVERUSE).join(", ")}; when the change could fire where it isn't wanted
+  overuseDetector?: string;   // one of: ${Object.keys(OVERUSE).join(", ")}; when the change could fire where it isn't wanted (its rate on the other cases is reported)
   targets?: { asks?: ("add" | "remove" | "move" | "resize" | "restyle" | "retext" | "reorder" | "new-page")[]; beats?: string[] };   // the cases the card is for
   generality?: string;        // new ops: why it serves many kinds of asks, not one scenario, persona or site
   isPatch: boolean;           // a patch over a weak model's output (heavily scrutinized; the owner turns patches on)
-  raisesCost: boolean;        // a bigger model, more calls per send, more tokens
   touchesFrozen: boolean;     // needs anything outside src/core (judges, drivers, UX, speech, fixtures, dev/)
   risk: string;
   files: string[];            // the src/core files it changes

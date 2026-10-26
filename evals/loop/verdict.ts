@@ -2,13 +2,13 @@
 // rule for latency cards, then the trust check and every veto, all with LOOP's frozen numbers.
 // Only the deciding latencies (LOOP.latGated: time to first drawing, render) and quality decide;
 // TTFC, TTD and $ are reported (LOOP-V2.md).
-// Pure and seeded (bootstraps by the rows' case ids): the same rows, card and state always give
-// the same verdict.
+// Pure and seeded (swap tests by the rows' case ids): the same rows and card always give the same
+// verdict.
 import { LOOP, configId } from "./config.ts";
-import { type Gated, GATED, byThinking, gatedStats, latencyStats, pairedRatio, tailsOf } from "./latency.ts";
+import { type Gated, byThinking, latencyStats, pairedRatio, shiftTest, tailsOf } from "./latency.ts";
 import { clusteredZ, tInterval, tQuantile } from "./stats.ts";
 import type { Shadow } from "../real/shadow.ts";
-import type { Goal, HypothesisCard, Pair, Ratio, Row, Verdict } from "./types.ts";
+import type { Code, Goal, HypothesisCard, Pair, Ratio, Row, Verdict } from "./types.ts";
 
 export type DecideInput = {
   /** G2's rows in entry order, voided cases included (they count toward the void rate). */
@@ -27,9 +27,6 @@ export type DecideInput = {
   invariants?: number;
 };
 
-/** What the decision needs from the loop's state (§1.4 items 3, 4). */
-export type LoopState = { latencyDebt: boolean; qualityDebt: boolean };
-
 export type Decision = Omit<Verdict, "verdict"> & {
   /** "more": undecided, run affected cases up to `next` and decide again. */
   verdict: Verdict["verdict"] | "more";
@@ -38,6 +35,7 @@ export type Decision = Omit<Verdict, "verdict"> & {
   pending?: ("heldout" | "continuation")[];
   /** Too rare to measure: reverted, and the card goes to the owner list too. */
   ownerList?: boolean;
+  codes: Code[];
   /** Raw counts at the look it stopped at, never a share (an early-stopped share is biased). */
   counts: { wins: number; losses: number; ties: number; n: number; look: number };
   caveat?: string;
@@ -86,26 +84,28 @@ const rateRise = (rows: Row[], f: (r: Row, arm: 0 | 1) => number, of: (r: Row, a
   const rate = (arm: 0 | 1) => sum(rows.map((r) => of(r, arm))) && sum(rows.map((r) => f(r, arm))) / sum(rows.map((r) => of(r, arm)));
   return rate(1) - rate(0);
 };
-const pOf = (r: Ratio) => (r.p ? `, p slower ${r.p.slower.toFixed(3)}, p faster ${r.p.faster.toFixed(3)}` : "");
-const x2 = (r: Ratio) => `×${r.est.toFixed(3)} (lo95 ${r.lo95.toFixed(3)}, hi90 ${r.hi90.toFixed(3)}${pOf(r)})`;
-/** One latency stat: the median with its 90% upper bound, a tail ("p90", "p95") with its 95% one, the bound each keeps on. */
-const stat = (m: string, k: string, r: Ratio) =>
-  k === "p50" ? `${m} ${x2(r)}` : `${m} ${k} ×${r.est.toFixed(3)} (lo95 ${r.lo95.toFixed(3)}, hi95 ${(r.hi95 ?? r.hi90).toFixed(3)}${pOf(r)})`;
+const pOf = (r: Ratio) => (r.p ? ` (p slower ${r.p.slower.toFixed(3)}, p faster ${r.p.faster.toFixed(3)})` : "");
+/** One latency stat: "ttfd ×0.912 (p slower …)", a tail "ttfd p90 ×0.85 (…)". */
+const stat = (m: string, k: string, r: Ratio) => `${m}${k === "p50" ? "" : ` ${k}`} ×${r.est.toFixed(3)}${pOf(r)}`;
 
-/** The fidelity floor a craft or latency keep must clear: `floor`, or tighter when visible work fell (N6) or in quality debt. */
-function qualityFloor(rows: Row[], debt: boolean, floor: number): { ok: boolean; why: string } {
+/** The fidelity floor a craft or latency keep must clear: `floor`, or tighter when visible work fell (N6). */
+function qualityFloor(rows: Row[], floor: number): { ok: boolean; why: string } {
   const z = zOf(rows);
-  if (debt) return { ok: z >= LOOP.qualDebtFloorZ, why: `quality debt: fidelity Z ${z.toFixed(2)} < ${LOOP.qualDebtFloorZ}` };
   const f = ratio(rows, (r, a) => r.work[a]) < LOOP.workMin ? Math.max(floor, LOOP.workFloorZ) : floor;
   return { ok: z >= f, why: `fidelity Z ${z.toFixed(2)} < ${f}` };
 }
 
-/** The latency veto (§1.4 item 2): a deciding latency, at the median or a tail ("ttfd p90"), surely slower at all (the owner: never slower). */
-export function latencyVeto(ratios: Record<string, Ratio | undefined>): string[] {
-  return Object.entries(ratios).flatMap(([m, r]) => (r && surelySlower(r) ? [`latency veto: ${m} ${x2(r)}`] : []));
+/**
+ * The latency veto (§1.4 item 2): B surely slower on any deciding latency, at the median or a tail (the owner: never
+ * slower), as one family-wise swap test over all of them (latency.ts shiftTest, p < LOOP.latVeto.p). Its reason, or none.
+ */
+export function latencyVeto(rows: Row[]): string | undefined {
+  const t = shiftTest(rows);
+  if (!t || t.slower >= LOOP.latVeto.p) return undefined;
+  const [m, k = "p50"] = t.worst.split(" ");
+  const r = latencyStats(rows, m as Gated)[k];
+  return `latency veto: surely slower (p ${t.slower.toFixed(3)} over every deciding stat), most on ${r ? stat(m, k, r) : t.worst}`;
 }
-/** The swap test says B is slower (LOOP.latVeto.p); a ratio recorded before it has only its bootstrap bound. */
-const surelySlower = (r: Ratio) => (r.p ? r.p.slower < LOOP.latVeto.p : r.lo95 > 1);
 
 /**
  * The goal-latency rule (§1.3) at each look, on the median send and the slow ones (LOOP.latTails): a keep when any of
@@ -113,7 +113,7 @@ const surelySlower = (r: Ratio) => (r.p ? r.p.slower < LOOP.latVeto.p : r.lo95 >
  * slower is no keep); an early stop only when every one of the card's metric's says so. Quality must hold for a keep,
  * and a futile quality ends it.
  */
-function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) => { ok: boolean; why: string; futile?: boolean }, exhausted: boolean, family = 1) {
+function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) => { ok: boolean; why: string; futile?: boolean }, exhausted: boolean, family = 1): Core {
   const looks: Look[] = [];
   let why = "";
   for (let i = 0; i < LOOP.looks.length; i++) {
@@ -123,7 +123,7 @@ function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) =
     const stats = Object.entries(latencyStats(at, m));
     const q = holds(at, i);
     looks.push({ n, decisive: at.filter((x) => x.s).length, z: zOf(at) });
-    if (q.futile) return { looks, keep: false, n, why: q.why };
+    if (q.futile) return { looks, keep: false, n, why: q.why, floor: true };
     if (!stats.length) continue;
     const last = i === LOOP.looks.length - 1;
     const said = stats.map(([k, r]) => stat(m, k, r)).join("; ");
@@ -132,15 +132,16 @@ function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) =
     const holds3 = (k: string) => n * (1 - Number(k.slice(1)) / 100) >= LOOP.latTailMinSends - 1e-9;
     // Surely faster on the swap test (LOOP-V2.md A3): the median against A, a tail against LOOP.latTailKeepHi95·A.
     const faster = stats.find(([k, r]) => (k === "p50" ? r.p!.faster < LOOP.latKeepP / family : holds3(k) && r.p!.faster < LOOP.latTailKeepP / family && r.est <= LOOP.latTailKeepEst));
-    const slower = latencyVeto(gatedStats(at));
-    if (i > 0 && faster && !slower.length) {
+    const slower = faster ? latencyVeto(at) : undefined;
+    if (i > 0 && faster && !slower) {
       if (q.ok) return { looks, keep: true, n, why: stat(m, ...faster) };
       why = q.why;
     }
-    if ((i === 2 && stats.every(([, r]) => r.est >= LOOP.latRevert48)) || last) return { looks, keep: false, n, why: why || slower.join("; ") || `${said} at look ${n}` };
+    if ((i === 2 && stats.every(([, r]) => r.est >= LOOP.latRevert48)) || last) return { looks, keep: false, n, why: why || slower || `${said} at look ${n}`, floor: !!why };
   }
-  return { looks, keep: false, n: LOOP.looks.at(-1)!, why };
+  return { looks, keep: false, n: LOOP.looks.at(-1)!, why, floor: !!why };
 }
+type Core = { looks: Look[]; keep?: boolean; n?: number; next?: number; why?: string; floor?: boolean };
 
 /**
  * The trust check (§1.4 item 9): a run that fails it decides nothing. The flip rate counts only
@@ -161,7 +162,7 @@ function untrusted(all: Row[], live: Row[], i: DecideInput): string[] {
 }
 
 /** keep | revert | void | owner, or "more" with the look that needs more cases. */
-export function decide(input: DecideInput, card: HypothesisCard, state: LoopState): Decision {
+export function decide(input: DecideInput, card: HypothesisCard): Decision {
   const all = [...input.tuning, ...(input.heldout ?? []), ...(input.continuation ?? [])];
   const live = input.tuning.filter((r) => !r.void);
   const cls = input.tuning[0]?.class ?? card.classGuess;
@@ -171,8 +172,9 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
   const metric: Gated = card.metric === "render" ? "render" : "ttfd";
   const reasons: string[] = [];
   const vetoes: string[] = [];
+  const codes: Code[] = [];
 
-  let core: { looks: Look[]; keep?: boolean; n?: number; next?: number; why?: string };
+  let core: Core;
   if (goal === "latency") {
     // Fidelity held tight early, looser with more cases, and a clear loss ends it: a floor that any later look could pass kept
     // a ×0.85 card losing fidelity at a .40 share 35% of the time after G3 (now 22%; a neutral one 79% → 70%, simulated).
@@ -180,15 +182,15 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
       if (cls === "S") return { ok: true, why: "" };
       const z = zOf(rows);
       if (i > 0 && z <= LOOP.latFutilityZ) return { ok: false, futile: true, why: `fidelity Z ${z.toFixed(2)} ≤ ${LOOP.latFutilityZ}: the speed costs fidelity` };
-      return qualityFloor(rows, state.qualityDebt, LOOP.latFloorZ[i]);
+      return qualityFloor(rows, LOOP.latFloorZ[i]);
     };
     core = latencyRule(live, metric, holds, exhausted, familyOf(card));
   } else {
     core = ruleF(live, (r) => ((goal === "craft" ? r.sCraft : r.s) ?? 0), exhausted, sweepShift(familyOf(card)));
     // A craft keep must not cost fidelity (N3), held tighter at look 32 or before.
     if (core.keep && goal === "craft") {
-      const q = qualityFloor(live.slice(0, core.n), false, core.n! <= LOOP.looks[1] ? LOOP.workFloorZ : LOOP.qualityFloorZ);
-      if (!q.ok) core = { ...core, keep: false, why: q.why };
+      const q = qualityFloor(live.slice(0, core.n), core.n! <= LOOP.looks[1] ? LOOP.workFloorZ : LOOP.qualityFloorZ);
+      if (!q.ok) core = { ...core, keep: false, why: q.why, floor: true };
     }
   }
   const at = live.slice(0, core.n ?? live.length);
@@ -206,7 +208,7 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
     failedPicRise: rateRise(sent, (r, a) => r.pics[a][1], (r, a) => r.pics[a][0] + r.pics[a][1]),
     usdRatio: ratio(sent, (r, a) => r.usd[a]),
   };
-  const out = (verdict: Decision["verdict"], extra: Partial<Decision> = {}): Decision => ({ verdict, reasons, goal, class: cls, looks: core.looks, vetoes, configId, ...seen, ...extra });
+  const out = (verdict: Decision["verdict"], extra: Partial<Decision> = {}): Decision => ({ verdict, reasons, goal, class: cls, looks: core.looks, vetoes, codes, configId, ...seen, ...extra });
 
   const trust = untrusted(all, [...live, ...(input.heldout ?? []), ...(input.continuation ?? [])].filter((r) => !r.void), input);
   if (trust.length) return (reasons.push(...trust), out("void"));
@@ -215,6 +217,7 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
   if (core.keep === undefined && core.next) return out("more", { next: core.next });
   if (!core.keep) {
     reasons.push(core.why || (core.n ? `Rule F at look ${core.n}` : `out of cases at ${live.length}`));
+    if (core.floor) codes.push("floor");
     return out("revert");
   }
   reasons.push(core.why || `Rule F keep at look ${core.n}`);
@@ -222,50 +225,36 @@ export function decide(input: DecideInput, card: HypothesisCard, state: LoopStat
   // Vetoes on G2's own rows first: a revert here saves G3 and G4.
   const revert: string[] = [];
   const owner: string[] = [];
-  // Pooled (LOOP.latVetoPooled), a quality keep's latency veto waits for G3 and reads G2's and G3's cases together.
-  if (goal !== "latency" && !LOOP.latVetoPooled) revert.push(...latencyVeto(gatedStats(at)));
-  if (state.latencyDebt)
-    for (const m of GATED) {
-      const r = pairedRatio(at, m);
-      if (r && r.est > 1) revert.push(`latency debt: this keep's ${m} is ×${r.est.toFixed(3)}, above 1.00`);
-    }
-  if (seen.emptyRise > LOOP.emptyRiseMax) revert.push(`empty sends up ${(100 * seen.emptyRise).toFixed(1)} points`);
-  if (seen.failedPicRise > LOOP.failedPicRiseMax) revert.push(`failed pictures up ${(100 * seen.failedPicRise).toFixed(1)} points`);
+  const veto = (code: Code, text: string) => (revert.push(text), codes.includes(code) || codes.push(code));
+  if (seen.emptyRise > LOOP.emptyRiseMax) veto("empty", `empty sends up ${(100 * seen.emptyRise).toFixed(1)} points`);
+  if (seen.failedPicRise > LOOP.failedPicRiseMax) veto("pictures", `failed pictures up ${(100 * seen.failedPicRise).toFixed(1)} points`);
   const deferred = at.filter((r) => r.deferred?.[1] && !r.deferred[0]).length;
-  if (deferred) revert.push(`render() leaves its work for after it returns (${deferred} cases), so its render time isn't measured`);
+  if (deferred) veto("deferred", `render() leaves its work for after it returns (${deferred} cases), so its render time isn't measured`);
   // Not measured whole: no render at all, or B's own board not fully compared (a new op's apply, a new shape kind's paint).
   const unmeasured = sent.filter((r) => (r.render && (r.render[0] === null || r.render[1] === null)) || (r.renderSame && r.renderSame[1] !== "all")).length;
   if (sent.length && unmeasured / sent.length > LOOP.renderUnmeasuredMax) owner.push(`render not measured whole on ${unmeasured} of ${sent.length} cases (a new op's apply or a new shape kind's paint untimed), so the render veto can't speak for this keep`);
-  if (card.overuseDetector) {
-    const t = card.targets;
-    const off = at.filter((r) => !(t?.asks?.includes(r.ask) || (r.beat && t?.beats?.includes(r.beat))));
-    if (off.length) {
-      const [a, b] = ([0, 1] as const).map((k) => off.filter((r) => r.overuse[k]).length / off.length);
-      // The cap holds a card that takes the rate over it. A champion already over it would hold every card for what the
-      // champion does itself (camera-move fires on its own camera follows), so there only a rise over A counts.
-      if (b > a + LOOP.overuse.overA || (a <= LOOP.overuse.max && b > LOOP.overuse.max)) owner.push(`over-use: ${card.overuseDetector} fired on ${(100 * b).toFixed(0)}% of B's non-target cases (A ${(100 * a).toFixed(0)}%)`);
-    }
-  }
   const pending: Decision["pending"] = [];
   if (!revert.length && !owner.length) {
     // G3 confirms every keep, whatever its class (LOOP-V2.md D2): the affected H-gate cases, which no card is ever
-    // tuned on, veto on fidelity or on either deciding latency, and with LOOP.heldoutConfirmMin of them they must also
-    // lean the card's way (a neutral card passes a veto alone 84% of the time). Rule F's first look is the screen before it.
+    // tuned on, veto on fidelity, and with LOOP.heldoutConfirmMin of them they must also lean the card's way (a neutral
+    // card passes a veto alone 84% of the time). Rule F's first look is the screen before it. The latency veto waits for
+    // G3 and reads G2's and G3's cases together: one test on more cases, where one on each threw away good changes twice.
     if (!input.heldout) pending.push("heldout");
     if (cls === "D" && !input.continuation) pending.push("continuation");
     const held = input.heldout?.filter((r) => r.affected && !r.void);
-    if (held?.length && zOf(held) < LOOP.heldoutVetoZ) revert.push(`held-out: fidelity Z ${zOf(held).toFixed(2)} < ${LOOP.heldoutVetoZ}`);
-    if (held && LOOP.latVetoPooled) revert.push(...latencyVeto(gatedStats([...at, ...held])).map((v) => `held-out and G2: ${v}`));
-    else if (held?.length) revert.push(...latencyVeto(gatedStats(held)).map((v) => `held-out: ${v}`));
+    if (held?.length && zOf(held) < LOOP.heldoutVetoZ) veto("heldout", `held-out: fidelity Z ${zOf(held).toFixed(2)} < ${LOOP.heldoutVetoZ}`);
+    const slow = held ? latencyVeto([...at, ...held]) : undefined;
+    if (slow) veto("latency", held!.length ? `${slow} (G2 and held-out)` : slow);
     if (held && held.length >= LOOP.heldoutConfirmMin && !revert.length) {
       if (goal === "latency") {
         const r = pairedRatio(held, metric);
-        if (r && r.est >= 1) revert.push(`held-out: ${metric} ×${r.est.toFixed(3)} isn't faster`);
-      } else if (zOf(held, goal === "craft") <= 0) revert.push(`held-out: ${goal} Z ${zOf(held, goal === "craft").toFixed(2)} doesn't lean the card's way`);
+        if (r && r.est >= 1) veto("direction", `held-out: ${metric} ×${r.est.toFixed(3)} isn't faster`);
+      } else if (zOf(held, goal === "craft") <= 0) veto("direction", `held-out: ${goal} Z ${zOf(held, goal === "craft").toFixed(2)} doesn't lean the card's way`);
     }
     const cont = input.continuation?.filter((r) => !r.void);
-    if (cont?.length && zOf(cont) <= LOOP.cont.vetoZ) revert.push(`continuation: fidelity Z ${zOf(cont).toFixed(2)} ≤ ${LOOP.cont.vetoZ}`);
+    if (cont?.length && zOf(cont) <= LOOP.cont.vetoZ) veto("continuation", `continuation: fidelity Z ${zOf(cont).toFixed(2)} ≤ ${LOOP.cont.vetoZ}`);
   }
+  if (owner.length) codes.push("owner");
   vetoes.push(...revert, ...owner);
   if (revert.length) return out("revert");
   if (owner.length) return out("owner");

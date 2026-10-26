@@ -185,11 +185,11 @@ export type CaseVerdict = { s: -1 | 0 | 1; sCraft?: -1 | 0 | 1; first: Judged; s
 
 /**
  * One run's judging. Fidelity on every case; craft on every case for craft-goal cards and checkpoints
- * ("all"), else on a seeded LOOP.craftShare ("sampled"), or never (calibration probes). The flip counts
+ * ("all"), else never: a craft verdict on a fidelity card's cases decided nothing. The flip counts
  * are measured on the audit sample only (the low-confidence one is biased) and rebuilt from the run's
  * done cases, so a resumed run carries on where it stopped.
  */
-export function judging(run: string, o: { seed: string | number; craft: "all" | "sampled" | "none" }) {
+export function judging(run: string, o: { seed: string | number; craft: "all" | "none" }) {
   const v = variants();
   const st = { audited: 0, flipped: 0, both: false };
   const cases = runFile(run, "cases");
@@ -224,8 +224,7 @@ export function judging(run: string, o: { seed: string | number; craft: "all" | 
   /** Judges one case (its packet written first) and stores judge/fidelity-1.json [fidelity-2.json] [craft.json]. */
   async function judgeCase(caseId: string, positions: Positions): Promise<CaseVerdict> {
     const p = writePacket(run, caseId, positions, await expectationFor(caseId, run));
-    const wantCraft = o.craft === "all" || (o.craft === "sampled" && draw(o.seed, "craft", caseId) < LOOP.craftShare);
-    const [{ first, second }, craft] = await Promise.all([fidelity(p, caseId), wantCraft ? craftCall(run, p, v.craft) : undefined]);
+    const [{ first, second }, craft] = await Promise.all([fidelity(p, caseId), o.craft === "all" ? craftCall(run, p, v.craft) : undefined]);
     if (craft) put(join(caseDir(run, caseId), "judge", "craft.json"), craft);
     return { s: score(combined(first, second)), ...(craft ? { sCraft: score(pick(craft)) } : {}), first, second, craft };
   }

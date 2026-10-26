@@ -258,7 +258,6 @@ for (const c of seeds) if ("draw.noThink" in DEFAULTS || c.id === "seed-4") chec
 check(cardOwnerReasons(seeds[3], { u1: false }).some((r) => /ink-reading/.test(r)) && !cardOwnerReasons(seeds[3], { u1: true }).length && !cardOwnerReasons(seeds[0], { u1: false }).length, "the ink-reading seed card isn't owner-listed without U1");
 check(cardOwnerReasons({ ...seeds[0], knobs: { "patches.scribe": 1 } }, { u1: true }).some((r) => /patch/.test(r)), "a card turning a patch on isn't owner-listed");
 // The owner's v2 rules (LOOP-V2.md A3, C3): cost never sends a card to the owner; picture.model is measured, other models aren't.
-check(!cardOwnerReasons({ ...seeds[0], raisesCost: true }, { u1: true }).length, "a cost-raising card is still owner-listed");
 check(!cardOwnerReasons({ ...seeds[0], knobs: { "picture.model": 0 } }, { u1: true }).length && cardOwnerReasons({ ...seeds[0], knobs: { "draw.model": 2 } }, { u1: true }).some((r) => /model switch/.test(r)), "picture.model isn't measured, or another model switch isn't owner-listed");
 // Every knob that picks a model or who resolves is a model switch; render.pictureBox is the owner's (LOOP-V2.md B2).
 for (const k of ["router.fastModel", "router.fullModel", "resolve.engine", "resolve.jevModel", "draw.thinkJevModel"])
@@ -287,7 +286,7 @@ check(!modelShifts(replayed).length && !modelShifts(shared).length, `a replayed 
 
 // ---- The search (LOOP-V2.md D1, D3, D4): sweep and combo cards, knob literals, pruning, near wins.
 const search = await import("../loop/search.ts");
-const kc = (o) => ({ id: "s", component: "draw", change: "c", goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "p", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "r", files: [], ...o });
+const kc = (o) => ({ id: "s", component: "draw", change: "c", goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: [], ...o });
 const faults = (o) => readCards(JSON.stringify([kc(o)])).dropped.join();
 check(!faults({ kind: "sweep", sweep: { knob: "picture.fill", values: [0.8, 1] } }) && /sweep without/.test(faults({ kind: "sweep" })) && /at most 4/.test(faults({ kind: "sweep", sweep: { knob: "picture.fill", values: [0.5, 0.6, 0.7, 0.8, 1] } })), "sweep cards aren't read as well-formed, or their faults aren't caught");
 check(!faults({ kind: "combo", combines: ["e1-h1", "e2-h3"] }) && /two tried ids/.test(faults({ kind: "combo", combines: ["e1-h1"] })) && /at most 3/.test(faults({ kind: "combo", combines: ["a", "b", "c", "d"] })), "combo cards aren't read as well-formed, or their faults aren't caught");
@@ -306,18 +305,22 @@ const row = (id, verdict, looks, o = {}) => ({ id, verdict, class: "Q", reasons:
 const aLost = sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "revert" } : c));
 check(search.sweepSkip(sw.cards, b, []) === undefined, "a sweep value is skipped before anything was decided");
 check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1)]) ?? ""), "a value beyond a clear first-look loss on its side isn't pruned");
-check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "void", 1), row("e5-h2ar", "revert", 3, { reasons: ["latency veto: ttfd ×1.1"] })]) ?? ""), "a vetoed value, decided on its void rerun, doesn't prune the values beyond it");
+// Why a decision went its way is read off its codes; a row written before them, off its reasons' words.
+check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { codes: ["latency"], reasons: ["latency veto: surely slower (p 0.010 over every deciding stat), most on ttfd ×1.10"] })]) ?? "")
+  && /pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { reasons: ["latency veto: ttfd ×1.1"] })]) ?? ""), "a vetoed value, with codes or before them, doesn't prune the values beyond it");
+check(search.sweepSkip(aLost, b, [row("e5-h2a", "void", 1)]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { codes: [], reasons: ["latency veto: ttfd ×1.1"] })]) === undefined,
+  "a void, or a row whose codes say no veto whatever its words, prunes the values beyond it");
 check(search.sweepSkip(aLost, c2, [row("e5-h2a", "revert", 1)]) === undefined, "a value on the other side of a loss is pruned");
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3)]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1, { class: "N" })]) === undefined, "a late loss or a no-effect value prunes the values beyond it");
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1, { looks: [{ n: 16, decisive: 10, z: -0.3 }] })]) === undefined, "a first-look revert that isn't a clear loss (Z -0.3) prunes the values beyond it");
 // A latency value prunes only on a veto: its first-look revert is often noise, and its fidelity Z says nothing of speed.
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 1, { goal: "latency", looks: [{ n: 16, decisive: 10, z: -1.5 }] })]) === undefined, "a latency value's first-look revert (noise 44% of the time) pruned the values beyond it");
 check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 2, { goal: "latency", reasons: ["latency veto: ttfd ×1.09"] })]) ?? ""), "a latency value's veto doesn't prune the values beyond it");
-check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["Rule F keep at look 48", "held-out: ttfd ×1.004 isn't faster"] })]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["quality debt: fidelity Z -0.10 < 0"] })]) === undefined, "G3's direction rule or a debt floor on a latency value pruned the values beyond it");
+check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["Rule F keep at look 48", "held-out: ttfd ×1.004 isn't faster"] })]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", codes: ["floor"], reasons: ["fidelity Z -0.80 < -0.5"] })]) === undefined, "G3's direction rule or a fidelity floor on a latency value pruned the values beyond it");
 check(/the sweep kept e5-h2a/.test(search.sweepSkip(sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "keep" } : c)), c2, []) ?? ""), "a keep doesn't end its sweep");
 const dec = (id, o) => ({ id, kind: "card", verdict: "revert", class: "Q", goal: "fidelity", reasons: ["Rule F at look 48"], counts: { wins: 20, losses: 15, ties: 13, exactTies: 0 }, looks: [{ n: 16 }, { n: 32 }, { n: 48 }], latency: { ttfc: { est: 1 }, ttd: { est: 1 }, ttfd: { est: 0.97 } }, card: { kind: "knob", component: "draw", change: id }, ...o });
 const near = search.nearWins([dec("w1"), dec("w2", { counts: { wins: 10, losses: 15, ties: 5 } }), dec("w3", { reasons: ["latency veto: ttfd ×1.1"] }), dec("w4", { class: "N" }), dec("w5", { goal: "latency", card: { kind: "code", component: "picture", change: "w5", metric: "ttfd" } }), dec("w6", { verdict: "keep" }),
-  dec("w7", { reasons: ["Rule F keep at look 48", "latency debt: this keep's ttfd is ×1.010, above 1.00"] }), dec("w8", { reasons: ["Rule F keep at look 32", "empty sends up 4.0 points"] }), dec("w9", { goal: "latency", reasons: ["fidelity Z -0.80 < -0.5"], card: { kind: "knob", component: "draw", change: "w9", metric: "ttfd" } })]);
+  dec("w7", { codes: ["heldout"], reasons: ["Rule F keep at look 48", "held-out: fidelity Z 0.00 doesn't lean"] }), dec("w8", { reasons: ["Rule F keep at look 32", "empty sends up 4.0 points"] }), dec("w9", { goal: "latency", reasons: ["fidelity Z -0.80 < -0.5"], card: { kind: "knob", component: "draw", change: "w9", metric: "ttfd" } })]);
 check(near.length === 2 && /^w5 /.test(near[0]) && /^w1 .*20-15-13 at look 48, first drawing ×0\.97/.test(near[1]), `near wins aren't the reverted cards that leaned the right way, newest first: ${near.join(" | ")}`);
 const nd = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, tried: ["e1-h2 draw prose opener | draw | 3f2a | revert"], nearWins: near });
 check(nd.includes("# 4. Near wins") && nd.indexOf("# 4. Near wins") < (nd.indexOf("# 7. Tried") >>> 0), "the analyst's digest lacks the near wins section, ahead of the tried index");
@@ -353,7 +356,7 @@ const mockOf = (api) => ({ baseUrl: api.url, deadProxyPort: PORTS.closed });
 const script = (name, turns) => (put(join(home, "scripts", name), turns), join(home, "scripts", name));
 const tool = (name, input, i) => ({ content: [{ type: "text", text: `step ${i}` }, { type: "tool_use", id: `toolu_${name}_${i}`, name, input }] });
 const globs = Array.from({ length: 12 }, (_, i) => tool("Glob", { pattern: "*.md", path: tree }, i));
-const card = (id, kind, o = {}) => ({ id, component: "draw", kind, change: "c", ...(kind === "knob" ? { knobs: { "draw.mapWords": 30 } } : {}), goal: "fidelity", classGuess: "Q", dialogue: false, predicts: "p", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "r", files: ["src/core/draw.ts"], ...o });
+const card = (id, kind, o = {}) => ({ id, component: "draw", kind, change: "c", ...(kind === "knob" ? { knobs: { "draw.mapWords": 30 } } : {}), goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: ["src/core/draw.ts"], ...o });
 const cards = [card("h1", "code"), card("h2", "knob"), card("h3", "bogus"), card("h4", "code"), card("h5", "knob"), card("h6", "code"), card("h7", "code"), card("h8", "sweep", { sweep: { knob: "draw.mapWords", values: [20, 40] } })];
 const sessions = [];
 const run = async (api, o) => {

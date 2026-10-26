@@ -86,7 +86,6 @@ const ids = (prefix, n, want) => {
   return out;
 };
 const isAudit = (seed, id) => J.draw(seed, "audit", id) < LOOP.auditShare;
-const isCraft = (seed, id) => J.draw(seed, "craft", id) < LOOP.craftShare;
 
 // ===== Pure parts (0 calls)
 
@@ -102,8 +101,7 @@ const other = J.positionsFor(many, "seed-b");
 check(many.some((id) => other.get(id).left !== pos.get(id).left) && J.positionsFor(many, "seed-a").get("p7").left === pos.get("p7").left, "positions aren't seeded");
 const draws = Array.from({ length: 4000 }, (_, i) => `d${i}`);
 const auditShare = draws.filter((id) => isAudit("s", id)).length / draws.length;
-const craftShare = draws.filter((id) => isCraft("s", id)).length / draws.length;
-check(Math.abs(auditShare - 0.2) < 0.03 && Math.abs(craftShare - 0.25) < 0.03, `seeded audit ${auditShare} (want 0.2), craft ${craftShare} (want 0.25)`);
+check(Math.abs(auditShare - 0.2) < 0.03, `seeded audit ${auditShare} (want 0.2)`);
 
 // ---- The flip fallback: > 30% after 16 audited, never before.
 check(!J.bothOrders(15, 15) && J.bothOrders(16, 5) && !J.bothOrders(16, 4) && !J.bothOrders(20, 6) && J.bothOrders(20, 7), "the flip-rate fallback isn't > 30% after 16 audited cases");
@@ -171,10 +169,10 @@ check(N.canaryAlarm(16, 20) && !N.canaryAlarm(17, 20) && N.canaryAlarm(3, 4) && 
 
 // ===== Through the fake API, part 1: replies in a planned order, cases judged one at a time.
 const R1 = "r1-ab", S1 = "seed-1", R2 = "r2-craft", S2 = "seed-2", BANK = "bank-run";
-const plain = (seed) => (id) => !isAudit(seed, id) && !isCraft(seed, id);
+const plain = (seed) => (id) => !isAudit(seed, id);
 const [n1, n2, n3, n6, b1] = ids("n", 5, plain(S1));
-const [n4] = ids("q", 1, (id) => isAudit(S1, id) && !isCraft(S1, id));
-const audits = ids("a", 15, (id) => isAudit(S1, id) && !isCraft(S1, id));
+const [n4] = ids("q", 1, (id) => isAudit(S1, id));
+const audits = ids("a", 15, (id) => isAudit(S1, id));
 const [n5] = ids("k", 1, (id) => !isAudit(S2, id));
 const r1Cases = [n1, n2, n3, n4, n6, ...audits, b1];
 const r1Pos = J.positionsFor(r1Cases, S1);
@@ -220,7 +218,7 @@ check(up1() === 1, "a current expectation was asked again");
 check(J.lastServed() === SERVED, `the served model id wasn't read from the call: ${J.lastServed()}`);
 
 // ---- Order handling on one run.
-const j1 = J.judging(R1, { seed: S1, craft: "sampled" });
+const j1 = J.judging(R1, { seed: S1, craft: "none" });
 const verdicts = {};
 for (const id of [n1, n2, n3, n4, n6]) verdicts[id] = await j1.judgeCase(id, r1Pos.get(id));
 const has2 = (id) => existsSync(judgeFile(R1, id, "fidelity-2.json"));
@@ -282,7 +280,7 @@ const vb = await j1.judgeCase(b1, r1Pos.get(b1));
 check(up2() === 32 && has2(b1) && vb.s === 0, `in both orders a confident, unaudited verdict didn't get a second order (${up2() - 30} calls)`);
 // A resumed run rebuilds its counts from its done cases (0 calls).
 for (const id of r1Cases) rec.put(join(rec.caseDir(R1, id), "done"), "x\n");
-const again = J.judging(R1, { seed: S1, craft: "sampled" });
+const again = J.judging(R1, { seed: S1, craft: "none" });
 check(again.both() && JSON.stringify(again.flips()) === JSON.stringify({ audited: 16, flipped: 15 }) && up2() === 32, `a resumed run's flips: ${JSON.stringify(again.flips())}, both ${again.both()}`);
 
 // ---- Craft when a screen left the change: the two framed shots in the packet's order, not one arm's new page against the other's old one.

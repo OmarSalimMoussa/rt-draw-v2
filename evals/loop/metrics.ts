@@ -11,8 +11,10 @@ import { paths } from "./paths.ts";
 import { appendLine, caseDir, runFile } from "./record.ts";
 import type { Arm, ArmResult, ArmTiming, CallLog, Engine, EngineRun, Judged, Row, Same, SceneJSON } from "./types.ts";
 
-/** Roles that aren't the product's (§7.3): their calls never count toward an arm's cost. */
-const EVAL_ROLES = new Set(["driver", "judge", "craft", "expectation", "miss", "failure", "probe"]);
+/** The eval roles of meter lines from before the gateway marked each line's page: every other role was the product's. */
+const OLD_EVAL_ROLES = new Set(["driver", "judge", "craft", "expectation", "miss", "failure", "probe", "analyst", "canary", "real-triage", "real-gold"]);
+/** A product call (an arm page's), not the harness's own roles (§7.3): only these count toward an arm's cost. */
+export const isProduct = (c: Pick<CallLog, "page" | "role">) => c.page ?? !OLD_EVAL_ROLES.has(c.role);
 /** The resolver and drawing calls, whose thinking splits the latency verdicts (latency-4). */
 const THINKS = /^(draw|resolve)/;
 
@@ -74,10 +76,10 @@ export function armMetrics(runId: string, caseId: string, arm: Arm, before: Scen
   const diff = sceneDiff(before, json<SceneJSON>(join(dir, "after.scene.json")));
   const changed = new Set(diff.changed);
   const stray = new Set([...diff.pictured, ...(result.pics?.failed ?? [])].filter((id) => !changed.has(id)));
-  const product = result.calls.filter((c) => !EVAL_ROLES.has(c.role));
+  const product = result.calls.filter(isProduct);
   // A follower got the leader's reply for free; both arms are charged the call, so sharing never reads as a saving.
   // A replayed call is charged what it cost when recorded, so the arm the bank holds isn't free.
-  const mine = calls.filter((c) => c.case === caseId && !EVAL_ROLES.has(c.role));
+  const mine = calls.filter((c) => c.case === caseId && isProduct(c));
   const usd = mine
     .filter((c) => c.arm === arm)
     .reduce((a, c) => a + (c.mode === "replay" ? recordedUsd(c) : c.shared === "follower" && !c.listUsd ? (mine.find((l) => l.reqHash === c.reqHash && l.shared === "leader")?.listUsd ?? 0) : c.listUsd), 0);

@@ -37,7 +37,7 @@ import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, t
 import { readReply } from "./cache.ts";
 import { type StoredCheckpoint, checkpoint, checkpointTrees, freeze } from "./checkpoint.ts";
 import { type Page, capture } from "./chrome.ts";
-import { ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
+import { CapReached, ask, endCase, gatewayStatus, spawnGateway } from "./client.ts";
 import { DRIVE_VIEW, LOOP, NOTIFY, WEEK_CHECK, configId } from "./config.ts";
 import { type ScanResult, compareCase, sameOnTheClock, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom, driveSession, loadPage } from "./drive.ts";
@@ -50,17 +50,18 @@ import { type MeterCall, readMeter, rollup } from "./meter.ts";
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { ready } from "./ready.ts";
+import { ARM_PORT } from "./servers.ts";
 import { appendLine, caseDir, put, putImage, runFile, voidCase } from "./record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "./probe.ts";
 import { remetric } from "./remetric.ts";
 import { applyKnobs, applyTried, cardStates, nearWins, sweepSkip } from "./search.ts";
-import { CASE_USD, type CardState, type Decided, type Facts, type Notice, type State, lock, newState, notices, overrun, readState, rules, saveState, stampNow } from "./state.ts";
+import { type CardState, type Decided, type Facts, type Notice, RULES, type State, lock, newState, notices, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { stubPictures } from "./stubs.ts";
 import { type SlotN, type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, DecisionRow, EpochRow, Fork, HypothesisCard, Judged, Ratio, Row, SceneJSON, SendOutcome } from "./types.ts";
-import { type Decision, type LoopState, decide } from "./verdict.ts";
+import { type Decision, decide } from "./verdict.ts";
 import * as real from "../real/real.ts";
 import { realShadow } from "../real/shadow.ts";
 
@@ -73,7 +74,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render | --card <decision id>] [--owner-ok] --cap n
-  loop [--epochs n] [--seed-cards f] [--quality-only] [--night-windows x] [--resume]
+  loop [--epochs n] [--seed-cards f] [--quality-only] [--resume]
        [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
   week --cap n            (reads again the weekly use of each token parked on an old reading, one one-word call each)
@@ -96,7 +97,7 @@ const SPOKEN = ([["make", 0, 180], ["the", 200, 300], ["nav", 320, 520], ["pink"
 // ---- Flags, logs, git
 
 type Opts = { cmd: string; pos: string[]; f: Record<string, string | true>; cap?: number; tokens?: string; devToken?: true | string; mockApi?: string; port: number };
-let o: Opts = { cmd: "", pos: [], f: {}, port: 5300 };
+let o: Opts = { cmd: "", pos: [], f: {}, port: ARM_PORT };
 const str = (k: string) => (typeof o.f[k] === "string" ? (o.f[k] as string) : undefined);
 const num = (k: string) => (str(k) === undefined ? undefined : Number(str(k)));
 function parse(argv: string[]): Opts {
@@ -109,7 +110,7 @@ function parse(argv: string[]): Opts {
   }
   const cap = typeof f.cap === "string" ? Number(f.cap) : undefined;
   if (f.cap !== undefined && !(Number.isInteger(cap) && cap! >= 0)) throw new Error(`--cap takes a whole number of calls`);
-  return { cmd: pos[0] ?? "", pos, f, cap, tokens: typeof f.tokens === "string" ? f.tokens : undefined, devToken: f["dev-token"], mockApi: typeof f["mock-api"] === "string" ? f["mock-api"] : undefined, port: Number(f.port ?? 5300) };
+  return { cmd: pos[0] ?? "", pos, f, cap, tokens: typeof f.tokens === "string" ? f.tokens : undefined, devToken: f["dev-token"], mockApi: typeof f["mock-api"] === "string" ? f["mock-api"] : undefined, port: Number(f.port ?? ARM_PORT) };
 }
 function needCap(what = o.cmd) {
   if (o.cap === undefined) throw new Error(`${what} makes real model calls: it needs --cap n (the gateway refuses call n+1)`);
@@ -501,7 +502,7 @@ async function smoke() {
     });
   });
   const live = smokeCalls(run);
-  line(live.some((l) => l.fiveHour !== undefined && l.fiveHour !== null) || "note", `U1: ${live.filter((l) => l.fiveHour != null).length} of ${live.length} calls carried five-hour utilization (none: the meter uses the W estimate)`);
+  line(live.some((l) => l.fiveHour !== undefined && l.fiveHour !== null), `U1: ${live.filter((l) => l.fiveHour != null).length} of ${live.length} calls carried five-hour utilization (the budget's pause reads only that)`);
   line(live.every((l) => l.cacheWrite1h === 0), `cacheWrite1h 0 on all ${live.length} calls`);
   line(live.every((l) => !!l.servedModel), `served models: ${[...new Set(live.map((l) => l.servedModel))].join(", ")}`);
   // No email in any request: R3 shows the transport adds none on the fake API, but Claude Code puts the account's email
@@ -701,7 +702,8 @@ async function realCmd() {
 async function runCheckpoint(gw: string, epoch: number, owner?: { commits: number; baseSha: string; candSha: string }, champ = championArm()): Promise<StoredCheckpoint> {
   const ck = await withRig(gw, checkpointTrees(champ), (rig) => checkpoint({ rig, epoch, champion: champ, owner }));
   writeMissDigest(champ.sha, { run: ck.run, champion: "B" });
-  say(`${ck.id}: champion share ${ck.share.all?.share.toFixed(2)} [${ck.share.all?.lo90.toFixed(2)}, ${ck.share.all?.hi90.toFixed(2)}] against ${ck.anchor}, Q ${ck.Q.value.toFixed(2)}, TTFC ×${ck.latency.ratioTtfc.est.toFixed(2)}, trust ${ck.trust}${ck.aa ? `; A/A ${ck.aa.pass ? "passes" : "FAILS"}: ${Object.entries(ck.aa.tests).map(([k, t]) => `${k} ${t.est.toFixed(2)} ±${t.halfWidth.toFixed(2)}`).join(", ")}` : ""}`);
+  const x = (r?: Ratio) => (r ? `×${r.est.toFixed(2)}` : "-");
+  say(`${ck.id}: champion share ${ck.share.all?.share.toFixed(2)} [${ck.share.all?.lo90.toFixed(2)}, ${ck.share.all?.hi90.toFixed(2)}] against ${ck.anchor}, first drawing ${x(ck.latency.ratioTtfd)}, render ${x(ck.latency.ratioRender)}, trust ${ck.trust}${ck.latency.slower ? `; SURELY SLOWER than A0: ${ck.latency.slower}` : ""}${ck.aa ? `; A/A ${ck.aa.pass ? "passes" : "FAILS"}: ${Object.entries(ck.aa.tests).map(([k, t]) => `${k} ${t.est.toFixed(2)} ±${t.halfWidth.toFixed(2)}`).join(", ")}` : ""}`);
   return ck;
 }
 async function checkpointCmd() {
@@ -908,15 +910,8 @@ const hasU1 = () => benchCases().some((c) => c.bench === "U1");
 /** Machine suspends the heartbeat saw (V10): a decision in flight through one is void. */
 const suspends: number[] = [];
 
-/** The last checkpoint's debts, for the vetoes (§1.4 items 3, 4). */
-function loopState(): LoopState {
-  const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
-  return { latencyDebt: !!last?.debts.latency.debt, qualityDebt: !!last?.debts.quality.debt };
-}
 /** Request hashes this run already paid for: a resumed run gets them from the cache (§6.5's resume cache). */
 const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError && !c.dropped).map((c) => c.reqHash);
-/** A decision's live $ so far, the candidate arm's product calls left out: what the candidate itself costs is the cost veto's (usdRatio), never a harness overrun. */
-const spent = (prefix: string) => readMeter(paths().calls).reduce((a, l) => a + ("agent" in l ? 0 : l.run.startsWith(prefix) && l.mode === "live" && l.shared !== "follower" && l.arm !== "B" ? l.listUsd : 0), 0);
 
 /** Rows for the fork cases drive.ts wrote to a run (G4 continuations, top-ups): judged at once (the gateway caps eval roles), kept in rows.jsonl. */
 async function forkedRows(run: string, ids: string[], judge: Judge, o: { seed: string; cls: Row["class"]; cluster: (id: string) => string }): Promise<Row[]> {
@@ -992,9 +987,9 @@ async function lessons(gw: string, run: string, rows: Row[]) {
 }
 
 /** One card through G0 → G1 → G2 (→ G3, G4) → vetoes; a keep fast-forwards loop/champion. Recorded either way. */
-async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Promise<Decided> {
+async function decideCard(gw: string, st: State, c: CardState): Promise<Decided> {
   const p = paths();
-  const id = `${c.id}${attempt}`;
+  const id = c.id;
   const run = (stage: string) => `${st.stamp}-${id}-${stage}`;
   const base = championSha();
   const cand = c.cand!;
@@ -1019,21 +1014,21 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     saveState(st);
     return d;
   };
-  const gate = (verdict: "revert" | "owner", reasons: string[], o: { owner?: string[]; cls?: Decision["class"] } = {}): Decided => {
-    const d: Decision = { verdict, reasons, goal: c.card.goal, class: o.cls ?? c.card.classGuess, looks: [], vetoes: [], configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {}, tails: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
+  const gate = (verdict: "revert" | "owner", reasons: string[], o: { owner?: string[]; cls?: Decision["class"]; codes?: Decision["codes"] } = {}): Decided => {
+    const codes = o.codes ?? (verdict === "owner" ? ["owner"] : []);
+    const d: Decision = { verdict, reasons, goal: c.card.goal, class: o.cls ?? c.card.classGuess, looks: [], vetoes: [], codes, configId, counts: { wins: 0, losses: 0, ties: 0, n: 0, look: 0 }, latency: { byThinking: {}, tails: {} }, work: 1, emptyRise: 0, failedPicRise: 0, usdRatio: 1 };
     put(runFile(run("g0"), "verdict.json"), d);
     record(d, run("g0"), undefined, o.owner ?? (verdict === "owner" ? reasons : []));
     return settle({ id, verdict, component: c.card.component, at: new Date().toISOString() });
   };
-  // More than 2× its class's $ per measured case (the candidate's calls aside), or past 30 min of measuring at 8 slots: harness suspect (§6.7).
-  const overBy = (cls: Decision["class"], measured: number, slots: number) => {
-    // Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
-    const usd = spent(`${st.stamp}-${id}-`), minutes = (Date.now() - t0 - (budgetPausedMs() - paused0)) / 60_000;
-    return overrun(cls, usd, measured, minutes, slots) ? `overran: $${usd.toFixed(2)} (the candidate's calls aside) for ${measured} measured cases in ${minutes.toFixed(0)} min (class ${cls}: $${CASE_USD[cls]} a case)` : undefined;
+  // Past 30 min of measuring at 8 slots: harness suspect (§6.7). Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
+  const overBy = (slots: number) => {
+    const minutes = (Date.now() - t0 - (budgetPausedMs() - paused0)) / 60_000;
+    return overrun(minutes, slots) ? `overran: ${minutes.toFixed(0)} min of measuring (${RULES.decisionMaxMin} at 8 slots)` : undefined;
   };
 
   // G0, free: the diff's gates, then (code cards) the typecheck and the scene round trip in the candidate's tree.
-  if (cand === base) return gate("revert", ["no change was made"]);
+  if (cand === base) return gate("revert", ["no change was made"], { codes: ["no-change"] });
   const knob = c.card.kind === "knob";
   let tree: string | undefined;
   try {
@@ -1056,7 +1051,7 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
   // A knob card is one tree with two tunings (§7.2).
   const champ: ArmSpec = { sha: base, tree: treeOf(base) };
   const arms: Arms = { A: champ, B: knob ? { sha: cand, tree: champ.tree, tuning: c.card.knobs } : { sha: cand, tree: tree! } };
-  const decided = await withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
+  return withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
     // G1: the diffscan at 0 calls (a finished scan is read back on resume).
     const scanRun = run("scan");
     const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: banked(["tuning", "fresh", "heldout-gate"]) }));
@@ -1080,30 +1075,30 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
       at = sc.class === "N" ? scanRun : sc.timed!.run;
       const sets = new Map(sc.cases.map((x) => [x.case, x.set]));
       const rows = readRows(at).filter((r) => sets.get(r.case) !== "heldout-gate").map((r) => ({ ...r, class: sc.class, affected: sc.class === "S" }));
-      result = { rows, decision: decide({ tuning: rows, exhausted: true }, c.card, loopState()), invariants: [] };
+      result = { rows, decision: decide({ tuning: rows, exhausted: true }, c.card), invariants: [] };
       // G3 for a schedule change (LOOP-V2.md D2): the H-gate cases replayed too, at 0 calls, and they can only veto.
       if (result.decision!.pending?.includes("heldout")) {
         const gate = sc.cases.filter((x) => x.set === "heldout-gate").map((x) => x.case).slice(0, LOOP.heldoutMax);
         const h = await runAB(rig, { run: `${at}-heldout`, kind: "scan", mode: "replay", arms, share: true, seed: `${at} heldout`, cases: gate, cls: "S", classify: () => ({ affected: true, class: "S" }) });
         const heldout = h.rows.map((r) => ({ ...r, class: sc.class, affected: true }));
-        result = { rows, heldout, decision: decide({ tuning: rows, heldout, exhausted: true }, c.card, loopState()), invariants: h.invariants };
+        result = { rows, heldout, decision: decide({ tuning: rows, heldout, exhausted: true }, c.card), invariants: h.invariants };
         // A schedule change draws the same on the held-out cases too, or it isn't one (diffscan.ts sameOnTheClock).
         if (result.decision!.verdict === "keep" && !sameOnTheClock(`${at}-heldout`, h.rows))
-          result.decision = { ...result.decision!, verdict: "revert", vetoes: [...result.decision!.vetoes, "held-out: a schedule change drew differently on the recorded clock: only the judged path keeps that"] };
+          result.decision = { ...result.decision!, verdict: "revert", vetoes: [...result.decision!.vetoes, "held-out: a schedule change drew differently on the recorded clock: only the judged path keeps that"], codes: [...result.decision!.codes, "schedule"] };
       }
       put(runFile(at, "verdict.json"), result.decision!);
     } else {
       // G2 (+ G3, G4): only the affected cases, live (R: on the banked replies), identical calls shared and cached.
       at = run("ab");
-      const judge = fakes.judge?.(at, c.card) ?? judging(at, { seed: at, craft: c.card.goal === "craft" ? "all" : "sampled" });
+      const judge = fakes.judge?.(at, c.card) ?? judging(at, { seed: at, craft: c.card.goal === "craft" ? "all" : "none" });
       result = await runAB(rig, {
         // R runs on the banked replies at 0 calls, on their recorded clock: instant replies would hide a change that
         // makes the first drawing wait (the owner's latency).
         run: at, kind: "ab", arms, mode: sc.class === "R" ? "scan" : "live", ...(sc.class === "R" ? { timed: true } : {}), share: true, cached: [...sc.cached, ...paid(at)], seed: at, card: c.card, judge, cases: tuning,
         cls: sc.class,
       }, {
-        card: c.card, state: loopState(), heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined,
-        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, toppedUp: tops ? await toppedUp(at, tuning, judge, sc.class) : undefined, overrun: (n) => overBy(sc.class, n, rig.slots),
+        card: c.card, heldout: sc.affected["heldout-gate"], continueFrom: sc.class === "D" ? continuation(rig, arms, at) : undefined,
+        topUp: tops ? topUps(rig, arms, at, judge, sc.class) : undefined, toppedUp: tops ? await toppedUp(at, tuning, judge, sc.class) : undefined, overrun: () => overBy(rig.slots),
       });
       affected.topUp = result.topUps ?? 0;
     }
@@ -1112,13 +1107,8 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
     // A timing trip voided its case only (ab.ts' Invariant): the harness is suspect when the arms got different things.
     const v9 = result.invariants.some((x) => x.why.startsWith("V9") && !x.timing);
     if (suspends.some((t) => t >= t0) && d.verdict !== "void") d = { ...d, verdict: "void", reasons: [...d.reasons, "V10: the machine was suspended during the decision"] };
-    // A void is rerun once (new runs, after this rig closes), then goes to the owner list (§1.4 item 9). Not an overrun:
-    // rerunning it would pay G2 again on the harness it suspects, and hide it from the night's overrun count.
-    if (d.verdict === "void" && !attempt && !v9 && !result.overrun) {
-      record(d, at, result);
-      st.recent.push({ id, verdict: "void", component: c.card.component, at: new Date().toISOString(), ...(c.sweep ? { sweep: c.sweep.of } : {}) });
-      return "rerun" as const;
-    }
+    // A void goes to the owner list, never rerun (§1.4 item 9): in history every rerun of a void voided again, the same
+    // harness asymmetry each time. The owner re-decides it with rte decide --card once the cause is fixed.
     if (d.verdict === "void") owner.push(`void: ${d.reasons.join("; ")}`);
     if (d.ownerList) owner.push(`too rare to measure: ${result.rows.filter((r) => !r.void).length} affected cases`);
     if (d.verdict === "owner") owner.push(...d.vetoes);
@@ -1136,13 +1126,10 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
         ...(models.includes("picture.model") && !variants().illustrationsCalibrated ? ["a picture model switch before the judge is calibrated on illustrations"] : []),
         ...(models.some((m) => m !== "picture.model") || shifts.length ? [`model switch: needs calibration evidence${shifts.length ? ` (${shifts.join("; ")})` : ""}`] : []),
       ])];
-      if (hold.length) (d = { ...d, verdict: "owner", vetoes: [...d.vetoes, ...hold] }), owner.push(...hold);
+      if (hold.length) (d = { ...d, verdict: "owner", vetoes: [...d.vetoes, ...hold], codes: [...d.codes, "owner"] }), owner.push(...hold);
     }
-    // The whole path's measuring against its class budget per case (§6.7): void, harness suspect.
-    const measured = [...result.rows, ...(result.heldout ?? []), ...(result.continuation ?? [])].filter((r) => !r.void).length + (result.topUps ?? 0);
-    // A no-effect card (class N) ends at the scan and its timed replay, both a fixed size: its $0 a case budget is for
-    // the decision past them, so the timed replay's live calls (a champion whose prompts the bank doesn't hold) don't overrun it.
-    const over = result.overrun ?? (d.verdict === "void" || d.class === "N" ? undefined : overBy(d.class, measured, rig.slots));
+    // The whole path's measuring against the time bound (§6.7): void, harness suspect.
+    const over = result.overrun ?? (d.verdict === "void" ? undefined : overBy(rig.slots));
     if (over && !result.overrun) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
     // Testers' real sends beside a keep (LOOP-V2.md A5): reported, never deciding, so a failure here never loses the keep.
     // After the budget check and under a run name outside the decision's ($ and minutes are R1's own, not the class's).
@@ -1153,11 +1140,10 @@ async function decideCard(gw: string, st: State, c: CardState, attempt = ""): Pr
       if (shadow) (d = { ...d, real: shadow }), say(`${id}: ${realLine(shadow)}`);
     }
     record(d, at, { ...result, decision: d }, owner);
-    const done = settle({ id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), overrun: !!over, v9 });
+    const done = settle({ id, verdict: d.verdict, component: c.card.component, at: new Date().toISOString(), v9 });
     await lessons(gw, at, result.rows);
     return done;
   });
-  return decided === "rerun" ? decideCard(gw, st, c, "r") : decided;
 }
 
 // ---- Building cards: knob cards by script, code cards by engineers
@@ -1224,7 +1210,6 @@ async function rebased(gw: string, st: State, c: CardState): Promise<boolean> {
 const nextEpoch = () => Math.max(0, ...historyRows("epochs.jsonl").map((e) => e.epoch)) + 1;
 let readyAtStart = false;
 let diskAtStart: { at: number; gb: number } | undefined;
-let nightWindows: number = LOOP.nightWindows;
 /** $ a meter line spent: an agent session's cost, an upstream call's list $ (a follower and a replay pay nothing). */
 const paidUsd = (l: ReturnType<typeof readMeter>[number]) => ("agent" in l ? l.totalCostUsd : l.mode === "live" && l.shared !== "follower" ? l.listUsd : 0);
 
@@ -1269,7 +1254,7 @@ class MeterTail {
 }
 
 /** This leg of the loop (since it last started or resumed): its notices (config.ts' NOTIFY), the meter since it began. */
-let leg = { start: Date.now(), every: { ...NOTIFY } as Record<keyof typeof NOTIFY, number>, sent: new Set<string>(), spent: new MeterTail("", 0), night: new MeterTail("", 0) };
+let leg = { start: Date.now(), every: { ...NOTIFY } as Record<keyof typeof NOTIFY, number>, sent: new Set<string>(), spent: new MeterTail("", 0) };
 const stopFile = () => join(paths().home, "stop.request");
 /** A long step (a decision, a checkpoint) still gets its notices: the clock and the meter are looked at this often. */
 const NOTICE_MS = 60_000;
@@ -1277,21 +1262,19 @@ let noticeChain: Promise<void> = Promise.resolve();
 /** Sends the notices due (and `extra`): the log and notices.jsonl, each once per leg. Never stops anything. */
 const notify = (gw: string, st: State, extra?: Omit<Notice, "key">) => (noticeChain = noticeChain.then(() => notifyNow(gw, st, extra)).catch((err) => say(`notice: skipped (${msg(err)})`)));
 async function notifyNow(gw: string, st: State, extra?: Omit<Notice, "key">) {
-  const spent = leg.spent.read(), night = leg.night.read();
-  const s = (await gatewayStatus(gw)) as { slots: SlotStatus[] };
-  const W = s.slots.reduce((a, x) => a + x.windowUsd, 0) / Math.max(1, s.slots.length);
+  const spent = leg.spent.read();
   const decided = st.recent.filter((d) => Date.parse(d.at) >= leg.start);
   const cks = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).filter((c) => Date.parse(c.at) >= leg.start);
-  const due = notices({ now: Date.now(), leg: { start: leg.start, usd: spent.usd, decisions: decided.length, checkpoints: cks.map((c) => c.id) }, every: leg.every, nightUsd: night.usd, nightCapUsd: nightWindows * W }, leg.sent);
+  const due = notices({ now: Date.now(), leg: { start: leg.start, usd: spent.usd, decisions: decided.length, checkpoints: cks.map((c) => c.id) }, every: leg.every }, leg.sent);
   if (extra) due.push({ key: `${extra.kind}:${Date.now()}`, ...extra });
   if (!due.length) return;
   const rows = new Map(historyRows("decisions.jsonl").map((d) => [d.id, d]));
   const minutes = (Date.now() - leg.start) / 60_000;
   const byRole = Object.entries(spent.byRole).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([role, usd]) => `${role} $${usd.toFixed(2)}`);
   const summary = {
-    epoch: st.epoch, champion: championSha(), minutes: Math.round(minutes), calls: spent.calls, listUsd: spent.usd, byRole, nightUsd: night.usd, nightCapUsd: nightWindows * W,
+    epoch: st.epoch, champion: championSha(), minutes: Math.round(minutes), calls: spent.calls, listUsd: spent.usd, byRole,
     decided: decided.map((d) => ({ id: d.id, verdict: d.verdict, change: rows.get(d.id)?.card?.change ?? d.component, why: rows.get(d.id)?.reasons.slice(0, 2) })),
-    checkpoints: cks.map((c) => ({ id: c.id, trust: c.trust, share: c.share.all?.share })),
+    checkpoints: cks.map((c) => ({ id: c.id, trust: c.trust, share: c.share.all?.share, ...(c.latency.slower ? { slower: c.latency.slower } : {}) })),
     stop: "rte stop-after (before the next step: nothing lost; loop --resume goes on)",
   };
   for (const n of due) {
@@ -1300,22 +1283,18 @@ async function notifyNow(gw: string, st: State, extra?: Omit<Notice, "key">) {
     say(`loop: NOTICE (${n.kind}): ${n.why}; this leg ${summary.minutes} min, ${summary.calls} calls, $${spent.usd.toFixed(2)} list${byRole.length ? ` (${byRole.slice(0, 3).join(", ")})` : ""}, ${decided.length} decisions${n.kind === "stopped" ? "" : `; to stop: ${summary.stop}`}`);
   }
 }
-type SlotStatus = { slot: SlotN; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; resetsAt?: number; status?: string; usdThisWindow: number; windowUsd: number; usd7d: number; why?: string };
+type SlotStatus = { slot: SlotN; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; resetsAt?: number; status?: string; usdThisWindow: number; usd7d: number; why?: string };
 
-async function facts(gw: string, st: State, error?: string): Promise<Facts> {
+async function facts(gw: string, st: State, err?: unknown): Promise<Facts> {
   const s = (await gatewayStatus(gw)) as { pace: Facts["pace"]; slots: SlotStatus[]; cap?: number; capReached: boolean };
-  // A night is 24 h: the night cap's pause ends with it, and the count starts again.
-  if (Date.now() - Date.parse(st.nightStart) >= DAY) (st.nightStart = new Date().toISOString()), saveState(st);
-  const W = s.slots.reduce((a, x) => a + x.windowUsd, 0) / s.slots.length;
-  const nightStart = Date.parse(st.nightStart);
   const lines = readMeter(paths().calls);
-  const nightUsd = lines.reduce((a, l) => a + (Date.parse(l.at) < nightStart ? 0 : paidUsd(l)), 0);
   const fs = statfsSync(paths().home);
   const gb = (fs.bavail * fs.bsize) / 1e9;
   diskAtStart ??= { at: Date.now(), gb };
   const perDay = ((diskAtStart.gb - gb) / (Date.now() - diskAtStart.at)) * DAY;
   return {
-    now: Date.now(), pace: s.pace, nightUsd, nightCapUsd: nightWindows * W, nightStart, recent: st.recent, ownerStepAt: Date.parse(st.lastOwnerStep ?? "1970-01-01"), checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome, error: error ?? (s.capReached ? `call cap ${s.cap} reached` : undefined),
+    now: Date.now(), pace: s.pace, recent: st.recent, ownerStepAt: Date.parse(st.lastOwnerStep ?? "1970-01-01"), checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome,
+    error: err === undefined ? undefined : msg(err), capped: err instanceof CapReached || s.capReached,
     blocked: st.blocked, emptyEpochs: st.emptyEpochs ?? 0, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
     daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
   };
@@ -1339,8 +1318,8 @@ async function recheckWeeks(gw: string) {
   }
 }
 
-/** §6.7 before new work: true when a rule stops the loop (it says why); pauses wait here. */
-async function halt(gw: string, st: State, error?: string): Promise<boolean> {
+/** §6.7 before new work: true when a rule stops the loop (it says why); pauses wait here. `err`: what the step threw. */
+async function halt(gw: string, st: State, err?: unknown): Promise<boolean> {
   await notify(gw, st);
   // The owner asked for a stop (rte stop-after): here, between steps, nothing is lost.
   if (existsSync(stopFile())) {
@@ -1351,7 +1330,7 @@ async function halt(gw: string, st: State, error?: string): Promise<boolean> {
   }
   for (;;) {
     await recheckWeeks(gw);
-    const acts = rules(await facts(gw, st, error));
+    const acts = rules(await facts(gw, st, err));
     const noted = acts.filter((a) => a.do === "owner" || a.do === "stop" || a.do === "skip");
     for (const a of noted) ownerItem(a.why);
     for (const a of acts) if (a.do === "skip" && !st.paused.includes(a.component!)) st.paused.push(a.component!);
@@ -1388,7 +1367,7 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
   ];
   const digest = analystDigest({
     championSha: sha, checkpoint: ck, runs: st.lastRuns, wont, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
-    ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(), nearWins: nearWins(historyRows("decisions.jsonl") as DecisionRow[]), debt: debtLines(),
+    ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(), nearWins: nearWins(historyRows("decisions.jsonl") as DecisionRow[]),
   });
   const analysis = await engine().analyst(digest, run);
   const criticRun = `${st.stamp}-e${st.epoch}-critic`;
@@ -1399,28 +1378,9 @@ async function propose(gw: string, st: State): Promise<HypothesisCard[]> {
   return r.cards.slice(0, LOOP.search.cards);
 }
 
-/**
- * In latency debt (confirmed by a same-run check, checkpoint.ts): how much slower than at L, and the keeps since L with
- * their own latency, so the analyst can repay it: a faster change, or a card that reverts a keep that cost time
- * (LOOP-V2.md D2). Every keep in debt must be faster anyway (verdict.ts).
- */
-function debtLines(): string[] {
-  const cks = historyRows("checkpoints.jsonl") as StoredCheckpoint[], last = cks.at(-1);
-  if (!last?.debts.latency.debt) return [];
-  const L = cks.find((c) => c.id === last.debts.latency.L);
-  const vs = last.latency.vsLatencyCheckpoint;
-  const x = (r?: Ratio) => (r ? `×${r.est.toFixed(3)}` : "-");
-  const keeps = (historyRows("decisions.jsonl") as DecisionRow[]).filter((d) => d.kind === "card" && d.verdict === "keep" && d.epoch >= (L?.epoch ?? 0));
-  return [
-    `The champion is surely slower than at ${last.debts.latency.L} (first drawing ${x(vs.ttfd)}, render ${x(vs.render)}; checked in ${last.debtCheck?.run ?? "the chain"}). Only a faster change is kept until it clears.`,
-    `Keeps since then (a code card reverting one, git revert of its commit, is a latency card like any other):`,
-    ...keeps.map((d) => `- ${d.id} ${d.candSha.slice(0, 12)} (${d.card?.component}) ${d.card?.change}: first drawing ${x(d.latency.ttfd)}, render ${x(d.latency.render)}`),
-  ];
-}
-
 async function loopCheckpoint(gw: string, st: State): Promise<string> {
   const ck = await runCheckpoint(gw, st.epoch);
-  Object.assign(st, { keepsSinceCheckpoint: 0, epochsSinceCheckpoint: 0, paused: [] });
+  Object.assign(st, { keepsSinceCheckpoint: 0, paused: [] });
   saveState(st);
   return ck.id;
 }
@@ -1496,7 +1456,7 @@ async function epoch(gw: string, st: State): Promise<boolean> {
       } catch (err) {
         // A cap, a blocked request or a broken step: the rules say whether the loop goes on.
         say(`${c.id}: failed: ${msg(err)}`);
-        if ((stopped = await halt(gw, st, msg(err)))) continue;
+        if ((stopped = await halt(gw, st, err))) continue;
         throw err;
       }
     }
@@ -1504,16 +1464,12 @@ async function epoch(gw: string, st: State): Promise<boolean> {
     if (!stopped && st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps && !(stopped = await halt(gw, st))) ck = await loopCheckpoint(gw, st);
   }
   await Promise.allSettled(built);
-  // In latency debt every keep that isn't faster reverts, so keeps (and the checkpoints they bring) may not come: after
-  // LOOP.debtCheckpointEpochs epochs with none, a checkpoint runs anyway, and a false alarm can clear.
-  st.epochsSinceCheckpoint = ck ? 0 : (st.epochsSinceCheckpoint ?? 0) + 1;
-  if (!stopped && !ck && loopState().latencyDebt && st.keepsSinceCheckpoint === 0 && st.epochsSinceCheckpoint >= LOOP.debtCheckpointEpochs && !(stopped = await halt(gw, st))) ck = await loopCheckpoint(gw, st);
   if (stopped) return false;
   // An epoch that decided nothing (no well-formed card, or every one dropped) pays the analyst and critic again for the
   // same digest: §6.7's rules stop the loop after RULES.emptyEpochs of them in a row.
   st.emptyEpochs = st.cards.some((c) => c.status === "done" && c.verdict !== "deferred") ? 0 : (st.emptyEpochs ?? 0) + 1;
   const rec = await epochRecord(gw, st, started, ck);
-  say(`epoch ${st.epoch}: ${rec.decisions.length} decisions, ${rec.cost.calls} calls, $${rec.cost.listUsd.toFixed(2)} (${(100 * rec.cost.windowShare).toFixed(1)}% of a window), ${rec.minutes.total.toFixed(0)} min`);
+  say(`epoch ${st.epoch}: ${rec.decisions.length} decisions, ${rec.cost.calls} calls, $${rec.cost.listUsd.toFixed(2)}, ${rec.minutes.total.toFixed(0)} min`);
   Object.assign(st, { epoch: st.epoch + 1, stamp: stampNow(), cards: [], lastRuns: st.cards.flatMap((c) => (c.run ? [c.run] : [])) });
   saveState(st);
   return true;
@@ -1526,7 +1482,6 @@ async function epochRecord(gw: string, st: State, started: number, ck?: string):
   const zero = { calls: 0, usd: 0, agentUsd: 0, in: 0, cacheRead: 0, write5m: 0, write1h: 0, out: 0, thinking: 0 };
   const all = rollup(lines, () => "all").all ?? zero;
   const slots = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots;
-  const W = slots.reduce((a, s) => a + s.windowUsd, 0) / slots.length;
   const agentMin = lines.reduce((a, l) => a + ("agent" in l ? (l as AgentLog).minutes : 0), 0);
   const measure = st.cards.reduce((a, c) => a + (c.run ? (maybe<{ meter: { minutes: number } }>(runFile(c.run, "run.json"))?.meter.minutes ?? 0) : 0), 0);
   const total = (Date.now() - started) / 60_000;
@@ -1535,7 +1490,7 @@ async function epochRecord(gw: string, st: State, started: number, ck?: string):
     epoch: st.epoch, at, era: (historyRows("checkpoints.jsonl").at(-1)?.era ?? 1), machine: arch() === "arm64" ? "pgx" : "laptop", championSha: championSha(), configId,
     decisions: st.cards.filter((c) => c.status === "done").map((c) => c.id), ...(ck ? { checkpoint: ck } : {}),
     cost: {
-      listUsd: all.usd, windowShare: all.usd / W, calls: all.calls, agentUsd: all.agentUsd,
+      listUsd: all.usd, calls: all.calls, agentUsd: all.agentUsd,
       byRole: Object.fromEntries(Object.entries(rollup(lines, (l) => l.role)).map(([k, r]) => [k, { calls: r.calls, usd: r.usd }])),
       tokens: { in: all.in, cacheRead: all.cacheRead, write5m: all.write5m, write1h: all.write1h, out: all.out, thinking: all.thinking },
     },
@@ -1578,22 +1533,21 @@ async function loop() {
     const st = readState() ?? newState(nextEpoch());
     if (!resume) {
       const epochs = num("epochs");
-      Object.assign(st, { until: epochs === undefined ? undefined : st.epoch + epochs - 1, nightStart: new Date().toISOString() });
+      st.until = epochs === undefined ? undefined : st.epoch + epochs - 1;
       if (typeof o.f["seed-cards"] === "string") {
         const seen = new Set([...historyRows("decisions.jsonl").map((d) => d.card?.id), ...st.queue.map((c) => c.id), ...st.cards.map((c) => c.card.id)]);
         st.queue.push(...(JSON.parse(readFileSync(o.f["seed-cards"], "utf8")) as HypothesisCard[]).filter((c) => !seen.has(c.id)));
       }
-    } else if (Date.now() - Date.parse(st.nightStart) >= DAY) st.nightStart = new Date().toISOString();
+    }
     saveState(st);
-    nightWindows = num("night-windows") ?? LOOP.nightWindows;
     const every = Object.fromEntries(Object.entries(NOTIFY).map(([k, v]) => [k, num(`notify-${k}`) ?? v])) as typeof leg.every;
     for (const [k, v] of Object.entries(every)) if (!(Number.isFinite(v) && v >= 0)) throw new Error(`--notify-${k} takes a number ≥ 0 (0 is off)`);
     const start = Date.now();
-    leg = { start, every, sent: new Set(), spent: new MeterTail(paths().calls, start), night: new MeterTail(paths().calls, Date.parse(st.nightStart)) };
+    leg = { start, every, sent: new Set(), spent: new MeterTail(paths().calls, start) };
     // A stop asked for while no loop ran is stale: this start is the owner's newer word.
     if (existsSync(stopFile())) rmSync(stopFile()), say("loop: an old stop-after request was dropped (this start is newer)");
     readyAtStart = readyOk();
-    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, night cap ${nightWindows} windows, notices every ${["decisions", "minutes", "usd"].map((k) => `${k} ${leg.every[k as keyof typeof NOTIFY] || "off"}`).join(", ")}, checkpoint ${leg.every.checkpoint ? "on" : "off"}`);
+    say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}, notices every ${["decisions", "minutes", "usd"].map((k) => `${k} ${leg.every[k as keyof typeof NOTIFY] || "off"}`).join(", ")}, checkpoint ${leg.every.checkpoint ? "on" : "off"}`);
     await withGateway(async (gw) => {
       const ticker = setInterval(() => void notify(gw, st), NOTICE_MS);
       try {
@@ -1621,7 +1575,7 @@ async function loop() {
 /** budget.jsonl: each slot's spend and the server's limits, now. */
 function logBudget(slots: SlotStatus[], epoch: number, at: string) {
   for (const s of slots)
-    historyAdd("budget.jsonl", { at, epoch, slot: s.slot, usdThisWindow: s.usdThisWindow, fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, windowUsd: s.windowUsd, status: s.why ?? s.status ?? "ok", resetsAt: s.resetsAt, usd7d: s.usd7d });
+    historyAdd("budget.jsonl", { at, epoch, slot: s.slot, usdThisWindow: s.usdThisWindow, fiveHour: s.fiveHour, sevenDay: s.sevenDay, sevenDayAt: s.sevenDayAt, status: s.why ?? s.status ?? "ok", resetsAt: s.resetsAt, usd7d: s.usd7d });
 }
 
 /** WEEK_CHECK by hand, the loop stopped: reads each parked token's week again (one one-word call each) and logs every slot. */
@@ -1668,7 +1622,7 @@ async function decideCmd() {
   const from = str("card");
   const prior = from ? (historyRows("decisions.jsonl") as DecisionRow[]).filter((d) => d.id === from && d.card).pop()?.card : undefined;
   if (from && !prior) throw new Error(`decide --card: no card decision ${from} in decisions.jsonl`);
-  const card: HypothesisCard = prior ? { ...prior, ...(o.f["owner-ok"] ? { ownerOk: true } : {}) } : { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: goal as HypothesisCard["goal"], ...(goal === "latency" ? { metric: metric as "ttfd" | "render" } : {}), ...(o.f["owner-ok"] ? { ownerOk: true } : {}), classGuess: "Q", dialogue: false, predicts: "", isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] };
+  const card: HypothesisCard = prior ? { ...prior, ...(o.f["owner-ok"] ? { ownerOk: true } : {}) } : { id: branch, component: "owner", kind: "code", change: `rte decide ${branch}`, goal: goal as HypothesisCard["goal"], ...(goal === "latency" ? { metric: metric as "ttfd" | "render" } : {}), ...(o.f["owner-ok"] ? { ownerOk: true } : {}), classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "", files: [] };
   const c: CardState = { id: `d-${branch.replace(/[^\w-]+/g, "-")}`, card, branch, status: "built", cand: git(paths().repo, "rev-parse", branch) };
   const d = await withGateway(async (gw) => ((await rebased(gw, st, c)) ? decideCard(gw, st, c) : undefined));
   return d?.verdict === "keep" ? 0 : 1;

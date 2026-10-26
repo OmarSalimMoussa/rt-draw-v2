@@ -21,21 +21,16 @@ export const LOOP = {
   // The latencies that decide (the owner, 2026-10-24, LOOP-V2.md): time to first drawing, and render: the engine's time
   // from an op landing to it on screen on the send's board (one op's apply plus the paint of the frame that brings the
   // board's last change, measured idle after the send: bridge/main.ts engine()). Never slower on either, at the median or
-  // a tail: the veto has no allowance; surely slower is the session-swap test's p < latVeto.p (stats.ts swapTest, exact
-  // at any number of sessions). A render under renderFloorMs reads as renderFloorMs in both arms, so sub-millisecond
-  // jitter is no ratio. TTFC, TTD and $ are reported. At 48 cases in ~10 sessions (t13's simulation) the veto reverts
-  // 10.7% of changes that cost no latency, 29% of +5% slowdowns and 61% of +10% ones; the latency debt (latDebtLo90 1.0,
-  // confirmed in one same-run check) catches what single decisions miss.
+  // a tail: the veto has no allowance. Surely slower is one session-swap test over every deciding stat at once (stats.ts
+  // slowerP: the largest standardized slowdown among TTFD and render at p50, p90 and p95), p < latVeto.p family-wise,
+  // on G2's and G3's cases together. A render under renderFloorMs reads as renderFloorMs in both arms, so
+  // sub-millisecond jitter is no ratio. TTFC, TTD and $ are reported.
   latGated: ["ttfd", "render"], renderFloorMs: 1,
   // vetoes and trust (§1.4)
-  // Latency debt starts on two checkpoints in a row surely slower; in debt with no keep for debtCheckpointEpochs epochs, a
-  // checkpoint runs anyway, so a false alarm can clear.
-  latVeto: { p: 0.05 }, latDebtLo90: 1.0, debtCheckpointEpochs: 2, qualDebtHi90: 0.5, qualDebtFloorZ: 0,
+  latVeto: { p: 0.05 },
   // G3 confirms in direction (held-out fidelity or craft Z above 0, a latency card's metric faster) once it has
   // heldoutConfirmMin affected cases; with fewer it can only veto.
   heldoutVetoZ: -1.0, heldoutMax: 32, heldoutConfirmMin: 8,
-  // The latency veto on G2's cases and again on G3's (false), or once on both together at G3 (true): the owner's call.
-  latVetoPooled: false,
   // The search (LOOP-V2.md D1, D3, D4): the analyst's hypotheses an epoch, the critic's cards (a sweep is one card of up
   // to sweepMax values, a combo one card of up to comboMax tried patches), and the near wins the digest lists.
   // A sweep's k values share one card's error (D3): each keeps past keepZ raised by z(1 − sweepAlpha/k) − z(1 − sweepAlpha),
@@ -45,29 +40,30 @@ export const LOOP = {
   // kind), the render veto can't speak for it: the owner's.
   workMin: 0.85, emptyRiseMax: 0.02, failedPicRiseMax: 0.02, renderUnmeasuredMax: 0.25,
   voidMax: 0.10, flipAlarm: 0.30, dispatchBand: [0.4, 0.6], coldAsymMax: 0.10,
-  cont: { cases: 20, sends: 2, vetoZ: -1.0 }, overuse: { max: 0.25, overA: 0.10 },
+  cont: { cases: 20, sends: 2, vetoZ: -1.0 },
   // classes (§1.2); nTimingBand is also R8's shared timed-replay A/A band
-  nTimingBand: 0.03, nTimedCases: 48, sConfirmCases: 24,
+  nTimingBand: 0.03, nTimedCases: 48,
   // unshared A/A (checkpoint 0, §7.6): each of 4 intervals (TTFD, render, dispatch order, share) is mean ± t(G−1)·CR1 SE
   aa: { ci: 0.99, latNull: 1.0, shareNull: 0.5 },
   // judges (§4)
-  judgePx: 640, judgeQuality: 0.8, auditShare: 0.2, lowConfidence: 1, flipFallbackAfter: 16, craftShare: 0.25,
+  judgePx: 640, judgeQuality: 0.8, auditShare: 0.2, lowConfidence: 1, flipFallbackAfter: 16,
   calib: { clear: 60, pass: 47, minClear: 40, selfGap: 0.10, preferMoreMax: 0.10, repeats: 8, contrast: 24,
-           craftPairs: 30, craftPass: 22, promptVariants: 2 },
+           craftPairs: 30, craftPass: 22 },
   canary: { packets: 20, alarmAtMost: 16 },
-  // checkpoints (§5.2)
-  checkpointEveryKeeps: 2, anchorMove: { share: 0.70, lo90: 0.60 }, overfitGap: 0.15, bootstrap: 2000,
+  // checkpoints (§5.2): the champion against A0, which never moves. bootstrap: the share band's draws of whole sessions,
+  // and the swap test's random patterns past 11 sessions.
+  checkpointEveryKeeps: 2, overfitGap: 0.15, bootstrap: 2000,
   // bank (§2.1); B1 = all 32 H-chart cases + 32 tuning cases
   bank: { tuning: 160, heldoutGate: 32, heldoutChart: 32, tuningSends: 5, heldoutSends: 4, refreshEveryKeeps: 5,
-          refreshCases: 40, missCheck: true },
+          refreshCases: 40 },
   bench: { heldout: 32, tuning: 32 },
   // owner steps (§8.6)
   sync: { minHours: 24, sceneFailMax: 0.10 },
   // budget (§6.7). The token is shared with testers on prod (the owner, 2026-10-24): new work pauses at fiveHourPauseAt of
-  // the five-hour window and stops at weekSevenDayMax of the week, both the server's reading of the whole account. rotateAt
-  // is the CLI's own warning, which calibrates a window's $ size.
-  rotateAt: 0.90, fiveHourPauseAt: 0.60, windowUsdStart: 170, nightWindows: 1.2, firstNightWindows: 0.5,
-  weekSevenDayMax: 0.50, weekWindowsPerToken: 3, decisionOverrun: 2.0, epochMaxMin: 60,
+  // the five-hour window and stops at weekSevenDayMax of the week, both the server's reading of the whole account (every
+  // call on a slot brings one). A decision past state.ts' RULES.decisionMaxMin of measuring is void (overrun); --cap
+  // bounds every step's calls.
+  fiveHourPauseAt: 0.60, weekSevenDayMax: 0.50,
   // machine (§7); the per-machine dispatch limit is the ladder's p99 at the knee (machine.json), capped here
   loadMax: 0.6, psiMax: 0.10, sendTimeoutMs: 120_000, quiesceMs: 500, suspendGapMs: 10_000,
   dispatchOffsetCapMs: 25, eventLoopP99MaxMs: 20, heapGrowMaxMb: 20, diskOwnerGb: 20, diskPauseGb: 10,
@@ -119,7 +115,7 @@ export function sha256(text: string): string {
  * The owner's notices, while the harness is young. The loop never stops for these: it tells the owner (the log and
  * $RT_EVAL_HOME/notices.jsonl, which a watcher relays) as each comes near (`soon` of the way) and when it's reached:
  * every `decisions` decisions, `minutes` minutes and `usd` list $ of a leg (the loop since it last started or resumed),
- * after each checkpoint, and before the night cap, which does stop it. The owner stops it between steps with
+ * and after each checkpoint. The owner stops it between steps with
  * `rte stop-after` (nothing lost; `loop --resume` goes on). `--notify-<name> n` sets one for a leg, 0 turns it off.
  * Not in configId: they decide when the owner hears, not what is measured.
  */

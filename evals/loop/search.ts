@@ -6,13 +6,24 @@ import { dirname, join } from "node:path";
 import { PROMPT_KNOB } from "../../src/core/prompts.ts";
 import { LOOP } from "./config.ts";
 import type { CardState } from "./state.ts";
-import type { DecisionRow, HypothesisCard } from "./types.ts";
+import type { Code, DecisionRow, HypothesisCard } from "./types.ts";
 
 const git = (dir: string, ...a: string[]) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-/** A decision row's reason that is a veto (verdict.ts): the change did harm somewhere, whatever its score. */
-const VETOED = /veto|held-out|debt|empty sends|failed pictures|over-use/;
-/** A latency value's clear loss: a veto on speed, empty sends or failed pictures (not G3's direction rule, nor a debt floor). */
-const LAT_VETOED = /latency veto|empty sends|failed pictures/;
+/** Vetoes (verdict.ts): the change did harm somewhere, whatever its score. */
+const VETO: Code[] = ["latency", "empty", "pictures", "deferred", "heldout", "direction", "continuation", "schedule"];
+/** A latency value's clear loss: a veto on speed, empty sends or failed pictures (not G3's direction rule). */
+const LAT_VETO: Code[] = ["latency", "empty", "pictures"];
+/** A decision's codes: its own, or for a row written before them (2026-10-26), read off its reasons' words as the loop then read them. */
+function codesOf(d: DecisionRow): Code[] {
+  if (d.codes) return d.codes;
+  const said = (re: RegExp) => d.reasons.some((r) => re.test(r));
+  return [
+    ...(said(/latency veto/) ? (["latency"] as const) : []), ...(said(/empty sends/) ? (["empty"] as const) : []),
+    ...(said(/failed pictures/) ? (["pictures"] as const) : []), ...(said(/held-out/) ? (["heldout"] as const) : []),
+    ...(said(/no change/) ? (["no-change"] as const) : []), ...(said(/fidelity Z|costs fidelity/) ? (["floor"] as const) : []),
+  ];
+}
+const has = (d: DecisionRow, codes: Code[]) => codesOf(d).some((c) => codes.includes(c));
 
 /** A knob's default as tuning.ts writes it: its text, value and range, and the text that sets it to v. Undefined when it has no literal default. */
 export function knobLiteral(src: string, key: string): { text: string; value: number; min: number; max: number; set: (v: number) => string } | undefined {
@@ -95,10 +106,9 @@ export function cardStates(epoch: number, cards: HypothesisCard[], tuning: strin
 /**
  * Why a sweep's value isn't run: another value already kept, or one nearer the champion's on its side lost clearly (a
  * veto, or a quality card's fidelity Z at or under LOOP.search.pruneZ at the first look: Rule F's own first-look revert,
- * at -0.2, takes a neutral value 40% of the time). A latency value prunes only on a veto (LAT_VETOED): its first-look
+ * at -0.2, takes a neutral value 40% of the time). A latency value prunes only on a veto (LAT_VETO): its first-look
  * revert (every ratio over 1.0 at 16 cases) takes a value with no effect 44% of the time and one 5% faster 23%, and G3's
- * direction rule or a debt floor isn't a clear loss either. A void rerun's
- * decision is `<id>r`.
+ * direction rule isn't a clear loss either.
  */
 export function sweepSkip(cards: CardState[], c: CardState, decisions: DecisionRow[]): string | undefined {
   if (!c.sweep) return undefined;
@@ -106,8 +116,8 @@ export function sweepSkip(cards: CardState[], c: CardState, decisions: DecisionR
   const kept = sibs.find((x) => x.verdict === "keep");
   if (kept) return `the sweep kept ${kept.id}`;
   const lost = sibs.find((x) => {
-    const d = decisions.findLast((r) => r.id === x.id || r.id === `${x.id}r`);
-    const clear = !!d && d.verdict === "revert" && d.class !== "N" && (d.goal === "latency" ? d.reasons.some((r) => LAT_VETOED.test(r)) : d.reasons.some((r) => VETOED.test(r)) || (d.looks.length === 1 && d.looks[0].z <= LOOP.search.pruneZ));
+    const d = decisions.findLast((r) => r.id === x.id);
+    const clear = !!d && d.verdict === "revert" && d.class !== "N" && (d.goal === "latency" ? has(d, LAT_VETO) : has(d, VETO) || (d.looks.length === 1 && d.looks[0].z <= LOOP.search.pruneZ));
     return x.sweep!.side === c.sweep!.side && x.sweep!.distance < c.sweep!.distance && clear;
   });
   return lost ? `pruned: ${lost.id}, nearer the champion's value on this side, lost clearly` : undefined;
@@ -120,7 +130,7 @@ export function sweepSkip(cards: CardState[], c: CardState, decisions: DecisionR
 export function nearWins(decisions: DecisionRow[]): string[] {
   return decisions
     // Not one a veto, a fidelity floor or "no change" reverted: those leaned the wrong way, or nowhere.
-    .filter((d) => d.kind === "card" && d.verdict === "revert" && d.class !== "N" && !d.reasons.some((r) => VETOED.test(r) || /no change|fidelity Z|costs fidelity/.test(r)))
+    .filter((d) => d.kind === "card" && d.verdict === "revert" && d.class !== "N" && !has(d, [...VETO, "floor", "no-change"]))
     .filter((d) => (d.goal === "latency" ? (d.latency[d.card?.metric === "render" ? "render" : "ttfd"]?.est ?? 1) < 1 : d.counts.wins > d.counts.losses))
     .slice(-LOOP.search.nearWins)
     .reverse()

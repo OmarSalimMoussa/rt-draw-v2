@@ -1,50 +1,51 @@
-// The eval's progress page (§5.4, frozen measuring side): quality against the
-// current anchor, the chained index Q, latency, cost and speed against v1, the
+// The eval's progress page (§5.4, frozen measuring side): quality against A0
+// (checkpoint 0's champion, which never moves), each era of the yardstick charted
+// apart, latency against A0 in the same run, cost and speed against v1, the
 // decisions with every case and call behind them, health, and the loop's status.
 // Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the
 // eval/history branch); the page holds no state and polls every 60 s while the
 // loop's heartbeat is fresh. ?sample=1 draws the fake history in ./sample/.
+// Rows written before 2026-10-26 may carry Q, anchor moves, chained ratios and
+// debts: the page ignores them, and skips their "anchor" markers.
 import { openModal } from "../../src/modal.ts";
 import { $, shell } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, Era, HealthRow, Lat, Marker, SmokeRow } from "../loop/types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, SmokeRow } from "../loop/types.ts";
 import { type Dot, type Frame, INK, type XY, frame, legend } from "./charts.ts";
 
-shell("", "Eval progress: what the loop kept and reverted, quality against a frozen anchor on cases no decision sees, latency, and what it cost against v1. Read from the eval/history branch; no model call.");
+shell("", "Eval progress: what the loop kept and reverted, quality against A0 (a frozen first champion) on cases no decision sees, latency, and what it cost against v1. Read from the eval/history branch; no model call.");
 
-type Anchor = { id: string; sha: string; Q: number; latency?: Lat };
 type Disk = { freeGb: number; weekGrowthGb: number; daysLeft: number | null; ownerGb: number; pauseGb: number };
 type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; now: number; error?: string };
 type History = { source: string; files: Record<string, string | null>; status: Status };
 type Data = ReturnType<typeof parse>;
 
-/** v1 per decision (§0): ~2 h and 25–33% of a five-hour window; the eval doc as written: 75 min and 13.7%. */
-const V1 = { minutes: [100, 140], window: [0.25, 0.33] };
-const DOC = { minutes: 75, window: 0.137 };
+/** v1 per decision (§0): ~2 h; the eval doc as written: 75 min. */
+const V1 = { minutes: [100, 140] };
+const DOC = { minutes: 75 };
 const GOAL_TTFC_MS = 1000;
 const POLL_MS = 60_000;
 /** The loop writes its heartbeat every 10 s; older than this, it isn't running. */
 const STALE_MS = 60_000;
 const GROUPS: [string, string, RegExp][] = [["product", "#1971c2", /^(draw|resolve|picture|camera|describe|product)/], ["judges", "#5f3dc4", /^(fidelity|craft|expectation|miss|canary|judge)/], ["agents", "#2b8a3e", /^(analyst|critic|engineer|agent)/], ["drivers", "#e8590c", /^(driver|probe)/]];
-const TICK_GLYPH: Record<string, string> = { harness: "H", "served-model": "M", "owner-step": "O", anchor: "A", aa: "=", canary: "C", calib: "L", ready: "R" };
+const TICK_GLYPH: Record<string, string> = { harness: "H", "served-model": "M", "owner-step": "O", era: "E", aa: "=", canary: "C", calib: "L", ready: "R" };
+/** The markers drawn as plain ticks; eras get their own (eraStarts), an old row's "anchor" none. */
+const PLAIN_MARKERS = ["harness", "served-model", "owner-step"];
+const SLOW = "#c92a2a";
 
 const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const rowsOf = <T>(text?: string | null): T[] => (text ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const pct = (v: number, d = 0) => `${(v * 100).toFixed(d)}%`;
-const logit = (p: number) => Math.log(Math.min(0.95, Math.max(0.05, p)) / (1 - Math.min(0.95, Math.max(0.05, p))));
-const sigmoid = (v: number) => 1 / (1 + Math.exp(-v));
 const timeOf = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) : NaN);
 const ago = (ms: number) => (ms < 90_000 ? `${Math.round(ms / 1000)} s ago` : ms < 5_400_000 ? `${Math.round(ms / 60_000)} min ago` : `${(ms / 3_600_000).toFixed(1)} h ago`);
 
 function parse(h: History) {
   const f = h.files;
-  const json = <T>(name: string): T[] => (f[name] ? JSON.parse(f[name]!) : []);
   return {
     source: h.source, status: h.status,
     epochs: rowsOf<EpochRow>(f["epochs.jsonl"]), decisions: rowsOf<DecisionRow>(f["decisions.jsonl"]), checkpoints: rowsOf<CheckpointRow>(f["checkpoints.jsonl"]),
     budget: rowsOf<BudgetRow>(f["budget.jsonl"]), health: rowsOf<HealthRow>(f["health.jsonl"]), markers: rowsOf<Marker>(f["markers.jsonl"]),
     smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]),
-    anchors: json<Anchor>("anchors.json"), eras: json<Era>("eras.json"),
     /** Open owner-list items: unchecked markdown tasks. */
     ownerOpen: (f["owner-list.md"]?.match(/^\s*- \[ \]/gm) ?? []).length,
   };
@@ -76,58 +77,55 @@ function xAxis(d: Data) {
   return { at, range, ticks };
 }
 
-/** A step event on a line: an era's bridge, an anchor move after its checkpoint, an owner step into his checkpoint. */
-type Ev = { x: number; kind: "era" | "anchor" | "owner"; label: string; after: boolean; era?: Era };
+/** An owner step: a step on a line into his checkpoint. */
+type Ev = { x: number; label: string };
 
-function events(d: Data, x: ReturnType<typeof xAxis>): Ev[] {
+function ownerSteps(d: Data, x: ReturnType<typeof xAxis>): Ev[] {
   const ck = (id?: string) => d.checkpoints.find((c) => c.id === id);
-  const evs: Ev[] = [];
-  for (const e of d.eras.filter((e) => e.era > 1)) evs.push({ x: x.at(e.from), kind: "era", label: `era ${e.era}: ${e.why} changed${e.bridge ? ", bridged" : ""}`, after: false, era: e });
-  for (const c of d.checkpoints.filter((c) => c.anchorMoved)) evs.push({ x: x.at(c.at), kind: "anchor", label: `anchor ${d.anchors[d.anchors.findIndex((a) => a.sha === c.champion)]?.id ?? "moved"}`, after: true });
-  for (const o of d.decisions.filter((o) => o.kind === "owner-step" && ck(o.checkpoint)))
-    evs.push({ x: x.at(ck(o.checkpoint)!.at), kind: "owner", label: d.markers.find((m) => m.kind === "owner-step" && m.ref === o.checkpoint)?.label ?? o.reasons[0] ?? "owner step", after: false });
-  return evs.sort((a, b) => a.x - b.x);
+  return d.decisions.filter((o) => o.kind === "owner-step" && ck(o.checkpoint))
+    .map((o) => ({ x: x.at(ck(o.checkpoint)!.at), label: d.markers.find((m) => m.kind === "owner-step" && m.ref === o.checkpoint)?.label ?? o.reasons[0] ?? "owner step" }))
+    .sort((a, b) => a.x - b.x);
 }
 
 /**
- * A continuous trend line through the trusted points with each step drawn in: at an
- * era change the last value moves to its bridged value, at an anchor move a share
- * starts again at 0.5, an owner step is a step into his checkpoint. Only the main
- * series labels the steps.
+ * Where each era starts: its "era" marker, else the first checkpoint whose era differs
+ * from the one before (a history without era markers). A new judge or bench starts one.
  */
-function stepped(f: Frame, pts: Dot[], evs: Ev[], map: (e: Ev, y: number) => number | undefined, style: { color: string; width?: number; dash?: boolean; faint?: boolean; right?: boolean; data?: Record<string, string> }, annotate: boolean) {
+function eraStarts(d: Data, x: ReturnType<typeof xAxis>) {
+  const at = new Map<number, { x: number; label: string }>();
+  d.checkpoints.forEach((c, i) => i && c.era !== d.checkpoints[i - 1].era && at.set(c.era, { x: x.at(c.at), label: `era ${c.era} from ${c.id}` }));
+  for (const m of d.markers.filter((m) => m.kind === "era")) at.set(m.era, { x: x.at(m.at), label: m.label });
+  return [...at.values()];
+}
+
+/** Consecutive checkpoints of one era: eras aren't comparable, so no line or band joins two. */
+const byEra = (cks: CheckpointRow[]) => cks.reduce<CheckpointRow[][]>((runs, c) => (runs.at(-1)?.[0].era === c.era ? runs.at(-1)!.push(c) : runs.push([c]), runs), []);
+
+/**
+ * A trend line through one era's trusted points, an owner step drawn in as a step
+ * into his checkpoint. Only the main series labels the steps.
+ */
+function stepped(f: Frame, pts: Dot[], evs: Ev[], style: { color: string; width?: number; dash?: boolean; faint?: boolean; right?: boolean; data?: Record<string, string> }, annotate: boolean) {
   const path: XY[] = [];
-  const stepAt = (e: Ev, y: number, to: number) => {
-    path.push([e.x, y], [e.x, to]);
-    if (annotate) f.step(e.x, y, to, e.label, e.kind, style.right);
-    return to;
-  };
   pts.forEach((p, i) => {
     const prev = pts[i - 1];
-    if (prev) {
-      let y = prev.y;
-      for (const e of evs.filter((e) => (e.after ? prev.x <= e.x && e.x < p.x : prev.x < e.x && e.x <= p.x))) {
-        const to = e.kind === "owner" ? p.y : map(e, y);
-        if (to !== undefined) y = stepAt(e, y, to);
-      }
+    if (prev) for (const e of evs.filter((e) => prev.x < e.x && e.x <= p.x)) {
+      path.push([e.x, prev.y], [e.x, p.y]);
+      if (annotate) f.step(e.x, prev.y, p.y, e.label, "owner", style.right);
     }
     path.push([p.x, p.y]);
   });
-  // A step after the last point (an anchor move at the latest checkpoint).
-  const last = pts.at(-1);
-  if (last) for (const e of evs.filter((e) => e.after && e.x >= last.x)) map(e, last.y) !== undefined && stepAt(e, last.y, map(e, last.y)!);
   f.line(path, { ...style, ids: pts.map((p) => p.id) });
 }
+/** One series over the trusted checkpoints, a line per era; a checkpoint where `get` has no value is left out. */
+function series(f: Frame, cks: CheckpointRow[], x: ReturnType<typeof xAxis>, get: (c: CheckpointRow) => number | undefined, evs: Ev[], style: Parameters<typeof stepped>[3], annotate: boolean) {
+  for (const run of byEra(cks)) stepped(f, run.flatMap((c) => { const y = get(c); return y === undefined ? [] : [{ x: x.at(c.at), y, id: c.id }]; }), evs, style, annotate);
+}
 
-/** Marker ticks (harness tags, served models, owner steps, anchor moves) along the x axis. */
-const ticks = (f: Frame, d: Data, x: ReturnType<typeof xAxis>) => d.markers.forEach((m) => f.tick(x.at(m.at), m.label, m.kind, TICK_GLYPH[m.kind]));
-/** Shades every stretch from a checkpoint in debt to the next checkpoint. */
-function debt(f: Frame, cks: CheckpointRow[], x: ReturnType<typeof xAxis>, on: (c: CheckpointRow) => boolean, label: string, kind: string) {
-  cks.forEach((c, i) => {
-    if (!on(c) || (i && on(cks[i - 1]))) return; // one band per stretch in debt
-    const end = cks.findIndex((n, j) => j > i && !on(n));
-    f.xband(x.at(c.at), end > 0 ? x.at(cks[end].at) : x.range[1], label, "#c92a2a", { debt: kind });
-  });
+/** Marker ticks along the x axis: harness tags, served models, owner steps, and each era's start. */
+function ticks(f: Frame, d: Data, x: ReturnType<typeof xAxis>) {
+  for (const m of d.markers.filter((m) => PLAIN_MARKERS.includes(m.kind))) f.tick(x.at(m.at), m.label, m.kind, TICK_GLYPH[m.kind]);
+  for (const e of eraStarts(d, x)) f.tick(e.x, `${e.label} (charted apart from the era before)`, "era", TICK_GLYPH.era);
 }
 const voids = (host: HTMLElement, cks: CheckpointRow[]) => {
   const v = cks.filter((c) => c.trust === "void");
@@ -151,93 +149,78 @@ function quality(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
   const all = cks.map((c) => c.share.all!).filter(Boolean);
   const smokes = d.smokes.filter((s) => s.share !== undefined);
-  const f = frame(host, { title: "Quality: the champion's share against the current anchor (90% band)", height: 280, x: x.range, y: [Math.max(0, Math.min(0.4, ...all.map((s) => s.lo90), ...smokes.map((s) => s.share!)) - 0.04), Math.min(1, Math.max(0.6, ...all.map((s) => s.hi90), ...smokes.map((s) => s.share!)) + 0.06)], xTicks: x.ticks, yFormat: (v) => v.toFixed(2) });
+  const f = frame(host, { title: "Quality: the champion's share against A0 (90% band), each era apart", height: 280, x: x.range, y: [Math.max(0, Math.min(0.4, ...all.map((s) => s.lo90), ...smokes.map((s) => s.share!)) - 0.04), Math.min(1, Math.max(0.6, ...all.map((s) => s.hi90), ...smokes.map((s) => s.share!)) + 0.06)], xTicks: x.ticks, yFormat: (v) => v.toFixed(2) });
   // The smoke is the champion against itself on 2 cases: a first point, never a trend.
   for (const s of smokes) f.point(x.at(s.at), s.share!, `smoke: B's share ${s.share!.toFixed(2)} on ${s.cases} cases`, { point: "smoke" });
-  f.hline(0.5, "0.5: as good as the anchor");
-  debt(f, cks, x, (c) => c.quality.debt, "quality debt", "quality");
-  const toAnchor = (e: Ev, y: number) => (e.kind === "anchor" ? 0.5 : e.era?.bridge ? sigmoid(logit(y) + e.era.bridge.step.Q) : y);
+  f.hline(0.5, "0.5: as good as A0");
   const trusted = cks.filter((c) => c.trust === "green");
-  // The band in runs between anchor moves, where shares are against the same anchor.
-  let run: CheckpointRow[] = [];
-  const flush = () => (f.area(run.map((c) => [x.at(c.at), c.share.all!.hi90]), run.map((c) => [x.at(c.at), c.share.all!.lo90]), INK, { band: "share90" }), (run = []));
-  for (const c of trusted) {
-    if (c.share.all) run.push(c);
-    if (c.anchorMoved) flush();
-  }
-  flush();
-  const series: [string, "all" | "heldout" | "tuning" | "human", string, number][] = [["all", "all", INK, 2.5], ["held-out (H-chart)", "heldout", "#1971c2", 1.5], ["tuning", "tuning", "#2b8a3e", 1.5], ["human (U1)", "human", "#e8590c", 1.5]];
-  for (const [, key, color, width] of series) {
-    const pts = trusted.filter((c) => c.share[key]).map((c) => ({ x: x.at(c.at), y: c.share[key]!.share, id: c.id }));
-    stepped(f, pts, evs, toAnchor, { color, width, data: { series: key } }, key === "all");
-  }
+  // The band per era: a new judge or bench measures differently, so nothing joins two eras.
+  for (const run of byEra(trusted.filter((c) => c.share.all)))
+    f.area(run.map((c) => [x.at(c.at), c.share.all!.hi90]), run.map((c) => [x.at(c.at), c.share.all!.lo90]), INK, { band: "share90", era: String(run[0].era) });
+  const lines: [string, "all" | "heldout" | "tuning" | "human", string, number][] = [["all", "all", INK, 2.5], ["held-out (H-chart)", "heldout", "#1971c2", 1.5], ["tuning", "tuning", "#2b8a3e", 1.5], ["human (U1)", "human", "#e8590c", 1.5]];
+  for (const [, key, color, width] of lines) series(f, trusted, x, (c) => c.share[key]?.share, evs, { color, width, data: { series: key } }, key === "all");
   f.dots(cks.filter((c) => c.share.all).map((c) => ({ x: x.at(c.at), y: c.share.all!.share, id: c.id, hollow: c.trust === "amber" })), INK);
   ticks(f, d, x);
-  legend(host, [...series.map(([l, , c]) => [l, c] as [string, string]), ["steps: era bridges, anchor moves, owner steps", "#5f3dc4", true]]);
+  legend(host, [...lines.map(([l, , c]) => [l, c] as [string, string]), ["steps: owner steps", "#5f3dc4", true]]);
+  host.insertAdjacentHTML("beforeend", `<div class="stat muted">Ticks: E a new era (a new judge or bench), charted apart from the one before; H harness, M served model, O owner step.</div>`);
   voids(host, d.checkpoints);
-}
-
-function chainedQ(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
-  const host = card("q");
-  const cks = d.checkpoints.filter((c) => c.trust !== "void");
-  const qs = cks.flatMap((c) => [c.Q.lo90, c.Q.hi90]);
-  const f = frame(host, { title: "Chained quality index Q (chained, not additive)", height: 240, x: x.range, y: [Math.min(0, ...qs) - 0.2, Math.max(1, ...qs) + 0.2], xTicks: x.ticks, yFormat: (v) => v.toFixed(1) });
-  const trusted = cks.filter((c) => c.trust === "green");
-  f.area(trusted.map((c) => [x.at(c.at), c.Q.hi90]), trusted.map((c) => [x.at(c.at), c.Q.lo90]), "#5f3dc4", { band: "q90" });
-  // Q chains through anchor moves, so only eras and owner steps step it.
-  stepped(f, trusted.map((c) => ({ x: x.at(c.at), y: c.Q.value, id: c.id })), evs, (e, y) => (e.kind === "anchor" ? undefined : e.era?.bridge ? y + e.era.bridge.step.Q : y), { color: "#5f3dc4", data: { series: "Q" } }, true);
-  f.dots(cks.map((c) => ({ x: x.at(c.at), y: c.Q.value, id: c.id, hollow: c.trust === "amber" })), "#5f3dc4");
-  ticks(f, d, x);
-  host.insertAdjacentHTML("beforeend", `<div class="stat muted">Q = Q(anchor) + logit(share), log-odds against A0. Anchors: ${d.anchors.map((a) => `${esc(a.id)} Q ${a.Q.toFixed(2)}`).join(" · ") || "-"}</div>`);
 }
 
 function latency(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   const host = card("latency", true);
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
-  type K = "ttfc" | "ttd" | "ttfd" | "render";
-  type Line = [string, (c: CheckpointRow) => number | undefined, string, K, { dash?: boolean; faint?: boolean; right?: boolean }];
-  // Time to first drawing and render decide (LOOP-V2.md); TTFC and TTD stay, faint, for the points before them.
-  const lines: Line[] = [
-    ["first drawing p50", (c) => c.latency.champion.ttfdP50, INK, "ttfd", {}],
-    ["first drawing p75", (c) => c.latency.champion.ttfdP75, INK, "ttfd", { dash: true }],
-    ["anchor first drawing p50, same run", (c) => c.latency.anchor.ttfdP50, "#868e96", "ttfd", { faint: true }],
-    ["TTFC p50 (before first drawing)", (c) => c.latency.champion.ttfcP50, "#adb5bd", "ttfc", { faint: true }],
-    ["TTD p50 (reported)", (c) => c.latency.champion.ttdP50, "#74c0fc", "ttd", { faint: true }],
-    ["chained first-drawing ratio", (c) => c.latency.chainedTtfd, "#5f3dc4", "ttfd", { dash: true, right: true }],
-  ];
+  type Line = [string, (c: CheckpointRow) => number | undefined, string, { dash?: boolean; faint?: boolean; right?: boolean }];
   const known = (v: number | undefined): v is number => v !== undefined && v > 0;
-  const ms = [...cks.flatMap((c) => lines.filter((l) => !l[4].right).map(([, get]) => get(c))), ...d.smokes.flatMap((s) => [s.ttfdP50, s.ttfcP50])].filter(known);
-  const ratios = cks.map((c) => c.latency.chainedTtfd).filter(known);
-  const f = frame(host, { title: "Latency: time to first drawing in ms (log), chained against the first checkpoint that measured it on the right", height: 280, x: x.range, y: [Math.min(GOAL_TTFC_MS, ...ms) * 0.8, Math.max(...ms, 2000) * 1.25], log: true, y2: [0, Math.max(1.2, ...ratios)], xTicks: x.ticks, yFormat: (v) => (v >= 1000 ? `${v / 1000}s` : `${v}`), y2Format: (v) => `×${v.toFixed(1)}` });
+  const ok = (get: Line[1]) => (c: CheckpointRow) => (known(get(c)) ? get(c) : undefined);
+  // Time to first drawing and render decide (LOOP-V2.md); TTFC and TTD stay, faint, for the points before them. The
+  // right axis is the champion over A0 in the same run.
+  const lines: Line[] = [
+    ["first drawing p50", (c) => c.latency.champion.ttfdP50, INK, {}],
+    ["first drawing p75", (c) => c.latency.champion.ttfdP75, INK, { dash: true }],
+    ["A0 first drawing p50, same run", (c) => c.latency.anchor.ttfdP50, "#868e96", { faint: true }],
+    ["TTFC p50 (before first drawing)", (c) => c.latency.champion.ttfcP50, "#adb5bd", { faint: true }],
+    ["TTD p50 (reported)", (c) => c.latency.champion.ttdP50, "#74c0fc", { faint: true }],
+    ["first drawing over A0, same run", (c) => c.latency.ratioTtfd?.est, "#5f3dc4", { dash: true, right: true }],
+  ];
+  const ms = [...cks.flatMap((c) => lines.filter((l) => !l[3].right).map(([, get]) => get(c))), ...d.smokes.flatMap((s) => [s.ttfdP50, s.ttfcP50])].filter(known);
+  const ratios = cks.map((c) => c.latency.ratioTtfd?.est).filter(known);
+  const f = frame(host, { title: "Latency: time to first drawing in ms (log), the champion over A0 in the same run on the right", height: 280, x: x.range, y: [Math.min(GOAL_TTFC_MS, ...ms) * 0.8, Math.max(...ms, 2000) * 1.25], log: true, y2: [0, Math.max(1.2, ...ratios.map((v) => v * 1.1))], xTicks: x.ticks, yFormat: (v) => (v >= 1000 ? `${v / 1000}s` : `${v}`), y2Format: (v) => `×${v.toFixed(1)}` });
   f.hline(GOAL_TTFC_MS, "goal: first drawing 1.0 s (display only)", { goal: "ttfc" });
-  debt(f, cks, x, (c) => c.latency.debt, "latency debt", "latency");
   // Laptop points are hollow too: only the PGX's latency is trusted.
   const trusted = cks.filter((c) => c.trust === "green" && c.machine !== "laptop");
-  const step = (k: K) => (e: Ev, y: number) => (e.kind === "anchor" ? undefined : e.era?.bridge ? y * (e.era.bridge.step[k] ?? 1) : y);
-  // Steps are labelled once, on first drawing's main line; the render chart steps the same way, unlabelled.
-  const draw = (f: Frame, ls: Line[], label: boolean) =>
-    ls.forEach(([name, get, color, k, st], i) => stepped(f, trusted.flatMap((c) => (known(get(c)) ? [{ x: x.at(c.at), y: get(c)!, id: c.id }] : [])), evs, step(k), { color, width: i ? 1.5 : 2.5, ...st, data: { series: name } }, label && i === 0));
+  // Owner steps are labelled once, on first drawing's main line; the render chart steps the same way, unlabelled.
+  const draw = (f: Frame, ls: Line[], label: boolean) => ls.forEach(([name, get, color, st], i) => series(f, trusted, x, ok(get), evs, { color, width: i ? 1.5 : 2.5, ...st, data: { series: name } }, label && i === 0));
   draw(f, lines, true);
   f.dots(cks.flatMap((c) => (known(c.latency.champion.ttfdP50) ? [{ x: x.at(c.at), y: c.latency.champion.ttfdP50, id: c.id, hollow: c.trust === "amber" || c.machine === "laptop" }] : [])), INK);
   for (const s of d.smokes) for (const [k, v] of [["first drawing", s.ttfdP50], ["TTFC", s.ttfcP50]] as const) if (v !== undefined) f.point(x.at(s.at), v, `smoke ${k} p50 ${(v / 1000).toFixed(1)} s`, { point: "smoke" });
   ticks(f, d, x);
-  legend(host, lines.map(([n, , c, , st]) => [n, c, st.dash]));
+  legend(host, lines.map(([n, , c, st]) => [n, c, st.dash]));
 
   // Render: the engine's time from an op landing to it on screen (one op's apply plus one frame), per send, measured idle
   // on both arms' boards; its median over the checkpoint's sends.
   const paint: Line[] = [
-    ["render p50", (c) => c.latency.champion.renderP50, INK, "render", {}],
-    ["render p75", (c) => c.latency.champion.renderP75, INK, "render", { dash: true }],
-    ["anchor render p50, same run", (c) => c.latency.anchor.renderP50, "#868e96", "render", { faint: true }],
-    ["chained render ratio", (c) => c.latency.chainedRender, "#5f3dc4", "render", { dash: true, right: true }],
+    ["render p50", (c) => c.latency.champion.renderP50, INK, {}],
+    ["render p75", (c) => c.latency.champion.renderP75, INK, { dash: true }],
+    ["A0 render p50, same run", (c) => c.latency.anchor.renderP50, "#868e96", { faint: true }],
+    ["render over A0, same run", (c) => c.latency.ratioRender?.est, "#5f3dc4", { dash: true, right: true }],
   ];
-  const rms = cks.flatMap((c) => paint.filter((l) => !l[4].right).map(([, get]) => get(c))).filter(known);
-  const rr = cks.map((c) => c.latency.chainedRender).filter(known);
-  const g = frame(host, { title: "Render: an op's apply plus one frame, in ms, chained ratio on the right", height: 180, x: x.range, y: [0, Math.max(16, ...rms) * 1.2], y2: [0, Math.max(1.2, ...rr)], xTicks: x.ticks, yFormat: (v) => `${v}`, y2Format: (v) => `×${v.toFixed(1)}` });
+  const rms = cks.flatMap((c) => paint.filter((l) => !l[3].right).map(([, get]) => get(c))).filter(known);
+  const rr = cks.map((c) => c.latency.ratioRender?.est).filter(known);
+  const g = frame(host, { title: "Render: an op's apply plus one frame, in ms, the champion over A0 on the right", height: 180, x: x.range, y: [0, Math.max(16, ...rms) * 1.2], y2: [0, Math.max(1.2, ...rr.map((v) => v * 1.1))], xTicks: x.ticks, yFormat: (v) => `${v}`, y2Format: (v) => `×${v.toFixed(1)}` });
   g.hline(16.7, "one frame at 60 Hz", { goal: "render" });
   if (rms.length) draw(g, paint, false);
   else host.insertAdjacentHTML("beforeend", `<div class="stat muted">No checkpoint has measured render yet.</div>`);
-  legend(host, paint.map(([n, , c, , st]) => [n, c, st.dash]));
+  legend(host, paint.map(([n, , c, st]) => [n, c, st.dash]));
+
+  // The latency veto's test on each checkpoint's run: surely slower than A0 is a red ring on the metric it names (render
+  // on the render chart, else first drawing), and a line under the charts.
+  const slow = cks.filter((c) => c.latency.slower);
+  for (const c of slow) {
+    const onRender = /render/i.test(c.latency.slower!) && known(c.latency.champion.renderP50);
+    const [chart, y] = onRender ? [g, c.latency.champion.renderP50!] : [f, c.latency.champion.ttfdP50];
+    if (known(y)) chart.ring(x.at(c.at), y, "slower than A0", `${c.id}: surely slower than A0 on ${c.latency.slower}`, SLOW, { slower: c.id });
+  }
+  if (slow.length) host.insertAdjacentHTML("beforeend", `<div class="stat bad">Surely slower than A0: ${slow.map((c) => `${esc(c.id)} (e${c.epoch}) ${esc(c.latency.slower)}`).join("; ")}</div>`);
 }
 
 function cost(d: Data, x: ReturnType<typeof xAxis>) {
@@ -262,35 +245,30 @@ function cost(d: Data, x: ReturnType<typeof xAxis>) {
   fa.line(d.epochs.map((e) => [e.epoch, e.minutes.total]), { color: INK, width: 1.5, dash: true, right: true, data: { series: "minutes" } });
   for (const s of d.smokes) fa.point(x.at(s.at), s.listUsd, `smoke $${s.listUsd.toFixed(2)}, ${s.calls} calls, ${s.minutes.toFixed(1)} min`, { point: "smoke" });
   legend(a, [...GROUPS.map(([g, c]) => [g, c] as [string, string]), ["minutes", INK, true]]);
+  // Per decision: list $ (no v1 figure to set it against), and minutes against v1's ~2 h and the doc as written.
   const perDecision = (e: EpochRow) => Math.max(1, e.decisions.length);
-  const perDecisionCharts = [
-    ["% of a five-hour window per decision", (e: EpochRow) => e.cost.windowShare / perDecision(e), V1.window, DOC.window, (v: number) => pct(v), 0.4],
-    ["Minutes per decision", (e: EpochRow) => e.minutes.total / perDecision(e), V1.minutes, DOC.minutes, (v: number) => `${v}`, 150],
-  ] as const;
-  for (const [i, [title, get, band, doc, fmt, max]] of perDecisionCharts.entries()) {
-    const c = cells[i];
-    const f = frame(c, { title, height: 230, x: x.range, y: [0, Math.max(max, ...d.epochs.map(get)) * 1.05], xTicks: x.ticks, yFormat: fmt });
-    f.yband(band[0], band[1], "v1: ~120 min and 25–33% of a window per decision", "#c92a2a", { band: "v1" });
-    f.point(x.range[0] + 0.3, doc, `doc as written: 75 min, 13.7%`, { point: "doc" });
-    f.line(d.epochs.map((e) => [e.epoch, get(e)]), { color: INK, data: { series: title } });
-    f.dots(d.epochs.map((e) => ({ x: e.epoch, y: get(e), id: `e${e.epoch}`, hollow: e.machine === "laptop" })), INK);
-  }
+  const usdPer = (e: EpochRow) => e.cost.listUsd / perDecision(e);
+  const fu = frame(cells[0], { title: "List $ per decision", height: 230, x: x.range, y: [0, Math.max(2, ...d.epochs.map(usdPer)) * 1.1], xTicks: x.ticks, yFormat: (v) => `$${v}` });
+  fu.line(d.epochs.map((e) => [e.epoch, usdPer(e)]), { color: INK, data: { series: "usd per decision" } });
+  fu.dots(d.epochs.map((e) => ({ x: e.epoch, y: usdPer(e), id: `e${e.epoch}`, hollow: e.machine === "laptop" })), INK);
+  const minPer = (e: EpochRow) => e.minutes.total / perDecision(e);
+  const fm = frame(cells[1], { title: "Minutes per decision", height: 230, x: x.range, y: [0, Math.max(150, ...d.epochs.map(minPer)) * 1.05], xTicks: x.ticks, yFormat: (v) => `${v}` });
+  fm.yband(V1.minutes[0], V1.minutes[1], "v1: ~120 min per decision", "#c92a2a", { band: "v1" });
+  fm.point(x.range[0] + 0.3, DOC.minutes, `doc as written: ${DOC.minutes} min`, { point: "doc" });
+  fm.line(d.epochs.map((e) => [e.epoch, minPer(e)]), { color: INK, data: { series: "minutes per decision" } });
+  fm.dots(d.epochs.map((e) => ({ x: e.epoch, y: minPer(e), id: `e${e.epoch}`, hollow: e.machine === "laptop" })), INK);
   // Each token's weekly use as the server last read it (the whole account's, the owner's own use too), with the
-  // loop's stop (LOOP.weekSevenDayMax) marked; a token the server never read shows the list-$ estimate. Decisions this week.
+  // loop's stop (LOOP.weekSevenDayMax) marked; a token the server never read says so. Decisions this week.
   const lastEpoch = d.epochs.at(-1);
   const stop = LOOP.weekSevenDayMax;
   const slots = [1, 2, 3].flatMap((s) => {
     const b = d.budget.filter((r) => r.slot === s).at(-1);
     const e = lastEpoch?.slots.find((x) => x.slot === s);
     if (!b && !e) return [];
-    const seven = b?.sevenDay ?? e?.sevenDay;
+    const used = b?.sevenDay ?? e?.sevenDay;
     const readAt = b?.sevenDay !== undefined ? b.sevenDayAt : e?.sevenDayAt;
-    const est = seven === undefined && b ? (b.usd7d / (LOOP.weekWindowsPerToken * b.windowUsd)) * stop : undefined;
-    const used = seven ?? est;
     const status = b?.status ?? e?.status ?? "ok";
-    const what = used === undefined ? "no reading yet"
-      : seven !== undefined ? `${pct(seven)} of its weekly limit used, read ${readAt ? ago(d.status.now - readAt) : "at an unknown time"}`
-      : `~${pct(used)} of its weekly limit used (estimated from list $: the server sent no reading)`;
+    const what = used === undefined ? "no reading yet" : `${pct(used)} of its weekly limit used, read ${readAt ? ago(d.status.now - readAt) : "at an unknown time"}`;
     const state = status === "weekly allowance" ? `parked, past the loop's ${pct(stop)}` : /^(ok|allowed)$/.test(status) ? `the loop stops at ${pct(stop)}` : status;
     const title = "The server's 7-day use counts the whole account, not only the loop's calls. The line marks where the loop stops.";
     return [`<span title="${esc(title)}">token ${s}: <span class="meter${(used ?? 0) > stop ? " over" : ""}"><span style="width:${Math.min(100, (used ?? 0) * 100)}%"></span><i style="left:${stop * 100}%"></i></span> ${esc(what)}; ${esc(state)}</span>`];
@@ -316,7 +294,7 @@ function decisions(d: Data) {
 }
 
 function health(d: Data, x: ReturnType<typeof xAxis>) {
-  const host = card("health");
+  const host = card("health", true);
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
   const f = frame(host, { title: "Health per checkpoint", height: 240, x: x.range, y: [0, 1], xTicks: x.ticks, yFormat: (v) => pct(v) });
   const mean = (r: Record<string, number>) => Object.values(r).reduce((a, v) => a + v, 0) / Math.max(1, Object.values(r).length);
@@ -405,12 +383,10 @@ function draw() {
   if (!data) return;
   $("#panels").replaceChildren();
   const x = xAxis(data);
-  const evs = events(data, x);
+  const evs = ownerSteps(data, x);
   const running = status(data);
-  // Q and health are the half-width pair, side by side on a wide screen.
   quality(data, x, evs);
   latency(data, x, evs);
-  chainedQ(data, x, evs);
   health(data, x);
   cost(data, x);
   decisions(data);

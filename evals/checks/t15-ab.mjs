@@ -186,9 +186,8 @@ if (import.meta.main) {
   const { chromeCount } = await import("./cdp.mjs");
   const calls = async () => (await gatewayStatus(gw.url)).calls;
   const fork = (run, id) => json(join(caseDir(run, id), "fork.json"));
-  const card = (o = {}) => ({ id: "t15", component: "draw", kind: "knob", change: "t15", knobs: o.knobs ?? {}, goal: "fidelity", classGuess: o.classGuess ?? "Q", dialogue: !!o.dialogue, predicts: "",
-    ...(o.overuse ? { overuseDetector: o.overuse } : {}), isPatch: false, raisesCost: false, touchesFrozen: false, risk: "", files: [] });
-  const STATE = { latencyDebt: false, qualityDebt: false };
+  const card = (o = {}) => ({ id: "t15", component: "draw", kind: "knob", change: "t15", knobs: o.knobs ?? {}, goal: "fidelity", classGuess: o.classGuess ?? "Q", dialogue: !!o.dialogue,
+    ...(o.overuse ? { overuseDetector: o.overuse } : {}), isPatch: false, touchesFrozen: false, risk: "", files: [] });
   const arm = (tuning) => ({ ...champ, tuning });
   const base = { arms: { A: champ, B: champ }, seed: "t15", loadWaitMs: 0 };
   /** A judge that always prefers `arm`, written the way judge.ts writes a verdict. */
@@ -280,7 +279,7 @@ if (import.meta.main) {
     return row;
   });
   const dSpec = { ...base, run: "d-card", kind: "ab", mode: "scan", share: true, cases: L.tuning, cls: "D", judge: canned("d-card", "B") };
-  const dDecide = { card: card({ dialogue: true, classGuess: "D" }), state: STATE, heldout: [...L.gate, ...L.chart, L.tuning[0]], topUp, continueFrom };
+  const dDecide = { card: card({ dialogue: true, classGuess: "D" }), heldout: [...L.gate, ...L.chart, L.tuning[0]], topUp, continueFrom };
   const d1 = await runAB(rig, dSpec, dDecide);
   check(d1.decision?.verdict === "revert" && d1.decision.vetoes.some((v) => /continuation/.test(v)), `losing continuation forks didn't veto the D card's keep (${d1.decision?.verdict}: ${d1.decision?.vetoes.join("; ")})`);
   check(asked.length === 20 && asked.every((a) => a.sends === 2 && a.b.after?.shapes && a.b.camera && a.b.run === "d-card"), `continueFrom was asked ${asked.length} times (want 20, 2 sends each, on B's after-scene and camera)`);
@@ -295,7 +294,7 @@ if (import.meta.main) {
 
   // ---- 6. A canned losing judge stops at look 16 (live on the fake API; identical calls from the bank).
   const before = await calls();
-  const lost = await runAB(rig, { ...base, arms: { A: champ, B: arm({ "draw.sendMarks": 0 }) }, run: "g2-lose", kind: "ab", mode: "live", share: true, cached: q.cached, cases: q.affected.tuning, judge: canned("g2-lose", "A"), cls: "Q" }, { card: card(), state: STATE });
+  const lost = await runAB(rig, { ...base, arms: { A: champ, B: arm({ "draw.sendMarks": 0 }) }, run: "g2-lose", kind: "ab", mode: "live", share: true, cached: q.cached, cases: q.affected.tuning, judge: canned("g2-lose", "A"), cls: "Q" }, { card: card() });
   const live = (await calls()) - before;
   check(lost.decision?.verdict === "revert" && lost.decision.counts.look === 16 && lost.rows.length === 16 && lost.decision.looks.length === 1, `a losing judge didn't stop at look 16 (${lost.decision?.verdict} at ${lost.decision?.counts.look}, ${lost.rows.length} rows: ${lost.decision?.reasons.join("; ")})`);
   check(live > 0 && live <= 32, `the live G2 run made ${live} calls (want its differing draw calls only, ≤ 32)`);
@@ -309,10 +308,12 @@ if (import.meta.main) {
   const ckLines = readFileSync(p.calls, "utf8").split("\n").filter((l) => l.includes('"run":"ck-0"')).map((l) => JSON.parse(l)).filter((l) => /^(draw|picture|resolve|describe|camera)/.test(l.role));
   check(JSON.stringify(ck.rows.map((x) => x.case).sort()) === JSON.stringify([...b1].sort()), `the checkpoint ran ${ck.rows.map((x) => x.case).join(",")} (want B1's ${b1.join(",")})`);
   check(ckLines.length > 0 && ckLines.every((l) => l.shared === "-" && l.mode === "live"), `the checkpoint shared or cached a product call (${[...new Set(ckLines.map((l) => `${l.mode}/${l.shared}`))].join(", ")})`);
-  // Each slot's first case went out first as a warm-up scan: every timed call took a process that had finished starting.
+  // Every case went out first as a warm-up scan: every timed call took a process that had finished starting.
   const cold = ckLines.filter((l) => l.readyAtTake !== true && !/^jev-/.test(l.model)); // a Jev call takes no process
   check(!cold.length, `${cold.length} of the checkpoint's ${ckLines.length} product calls waited on a starting process (${cold.map((l) => `${l.arm} ${l.role} ${l.case}`).slice(0, 4).join(", ")})`);
-  check(readFileSync(p.calls, "utf8").split("\n").some((l) => l.includes('"run":"ck-0~warm"') && JSON.parse(l).mode === "scan"), "the checkpoint's warm-up sends weren't scans under ck-0~warm");
+  const warm = readFileSync(p.calls, "utf8").split("\n").filter((l) => l.includes('"run":"ck-0~warm"')).map((l) => JSON.parse(l));
+  const unwarmed = ck.rows.filter((x) => !x.void && !warm.some((l) => l.case === x.case));
+  check(warm.length && warm.every((l) => l.mode === "scan") && !unwarmed.length, `the checkpoint's warm-up sends weren't scans under ck-0~warm, one per case (unwarmed: ${unwarmed.map((x) => x.case).join(", ")})`);
   check(ck.rows.every((x) => x.void || (existsSync(join(caseDir("ck-0", x.case), "judge", "fidelity-1.json")) && existsSync(join(caseDir("ck-0", x.case), "judge", "craft.json")))), "a checkpoint case wasn't judged by fidelity and craft");
   check(ck.rows.filter((x) => !x.void).length >= 6, `the checkpoint voided ${ck.rows.filter((x) => x.void).map((x) => x.void).join("; ")}`);
   const a = aaPass(ck.rows);

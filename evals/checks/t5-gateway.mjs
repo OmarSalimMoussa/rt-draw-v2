@@ -249,25 +249,22 @@ await product({ run: "rot", case: "rot3", arm: "A", slot: 0 }, { model: "haiku",
 const st1 = await gatewayStatus();
 const meterLines = () => readFileSync(p.calls, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const tokenOfCase = (c) => meterLines().find((l) => l.case === c)?.token;
+// Each line says whose call it was: an arm page's (the product's) or an eval role's.
+check(meterLines().filter((l) => l.case === "rot1").every((l) => l.page === true) && meterLines().some((l) => l.role === "judge" && l.page === false), "meter lines don't mark a page's calls apart from eval roles'");
 check(limited.done?.error && tokenOfCase("rot1") === 1 && tokenOfCase("rot2") === 2 && tokenOfCase("rot3") === 3, `rotation: tokens per case ${["rot1", "rot2", "rot3"].map(tokenOfCase)} (want 1, 2, 3; the 429 ${limited.done?.error ? "failed" : "didn't fail"})`);
 check(/five-hour/.test(st1.slots[0].why) && /rate limited/.test(st1.slots[1].why) && !st1.slots[2].why && st1.slots[2].current, `slot status: ${JSON.stringify(st1.slots.map((s) => [s.slot, s.why, s.current]))}`);
 
-// ---- Slots in-process: the estimate, the weekly allowance, W_k on allowed_warning, one account, pacing.
+// ---- Slots in-process: the server's readings alone, the weekly allowance, allowed_warning, one account, pacing.
 let now = Date.UTC(2026, 9, 16, 3);
 const s = new Slots([1, 2], undefined, () => now);
 s.record(1, { usd: 10, rateLimit: { status: "allowed" } });
 s.record(1, { usd: 8, rateLimit: { status: "allowed_warning" } });
-check(s.status()[0].windowUsd === 20 && s.status()[0].calibrated, `W_k after an allowed_warning at $18: ${s.status()[0].windowUsd} (want 20)`);
 check(s.boundary() === 2, "allowed_warning didn't move work to slot 2");
-const sw = new Slots([1], undefined, () => now);
-sw.record(1, { usd: 0.0001, rateLimit: { status: "allowed_warning", fiveHour: 0.09, sevenDay: 0.94 } });
-check(sw.status()[0].windowUsd === 170 && !sw.status()[0].calibrated, `the week's warning set the five-hour window to $${sw.status()[0].windowUsd}`);
+// $ alone never pauses: only the server's reading does (every call on a slot brings one).
 const s2 = new Slots([1, 2], undefined, () => now);
+s2.record(1, { usd: 500 });
+check(!s2.why(1) && s2.status()[0].usdThisWindow === 500, `$500 with no reading paused slot 1: ${s2.why(1)}`);
 // The token is shared with testers on prod: new work stops at 0.60 of the five-hour window (LOOP.fiveHourPauseAt).
-s2.record(1, { usd: 100 });
-check(!s2.why(1), "slot 1 is off at $100 of $170");
-s2.record(1, { usd: 2.01 });
-check(/five-hour/.test(s2.why(1) ?? "") && s2.boundary() === 2, `the list-$ estimate at 0.60 doesn't pause: ${s2.why(1)}`);
 const s2r = new Slots([1, 2], undefined, () => now);
 s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.59 } });
 const under = s2r.why(1);
@@ -280,26 +277,20 @@ s3w.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenD
 check(!s3w.why(1), `a week at 0.49 is parked: ${s3w.why(1)}`);
 s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.51 } });
 for (let h = 0; h < 6; h++) {
-  now += 3600_000 * 5.5; // across windows: only the week adds up
-  s3.record(2, { usd: 100 });
+  now += 3600_000 * 5.5; // across windows: a week's reading stays until the next
+  s3.record(2, { usd: 100, ...(h ? {} : { rateLimit: { status: "allowed", sevenDay: 0.6 } }) });
 }
 check(s3.why(1) === "weekly allowance" && s3.why(2) === "weekly allowance" && s3.boundary() === 3, `the weekly allowance: ${s3.why(1)} / ${s3.why(2)}`);
 const reset = Math.floor(now / 1000) + 1800;
 s3.record(3, { usd: 0, rateLimit: { status: "allowed", resetsAt: reset } });
 s3.record(2, { usd: 0, rateLimit: { status: "allowed", resetsAt: reset } });
 check(JSON.stringify(s3.sameAccount()) === "[2,3]", `equal resetsAt isn't one account: ${JSON.stringify(s3.sameAccount())}`);
-check(JSON.stringify(s3.stale()) === "[1,2]", `slots parked on a 33-hour-old reading (1) and on no reading (2) aren't due a re-read: ${JSON.stringify(s3.stale())}`);
+check(JSON.stringify(s3.stale()) === "[1,2]", `slots parked on a 33-hour-old reading (1) and a 27-hour-old one (2) aren't due a re-read: ${JSON.stringify(s3.stale())}`);
 s3.record(1, { usd: 0, rateLimit: { status: "allowed", sevenDay: 0.2 } });
 check(JSON.stringify(s3.stale()) === "[2]" && !s3.why(1) && s3.status()[0].sevenDayAt === now, `a fresh reading under the stop didn't bring slot 1 back: ${JSON.stringify(s3.stale())}, ${s3.why(1)}`);
-let clock4 = now;
-const s4 = new Slots([1], undefined, () => clock4);
-// The night cap is the loop's rule between steps (state.ts, t21), never the gateway's: half a window in each of three
-// five-hour windows (1.5 windows in a night, past the default 1.2) doesn't pause it.
-for (let k = 0; k < 3; k++, clock4 += 6 * 3600_000) s4.record(1, { usd: 0.5 * 170 });
-check(s4.pace().ok === true, `the gateway paused on a night's spend: ${JSON.stringify(s4.pace())}`);
 const home4 = mkdtempSync(join(tmpdir(), "rt-t5-same-"));
 mkdirSync(join(home4, "meter"));
-writeFileSync(join(home4, "meter", "slots.json"), JSON.stringify([1, 2].map((slot) => ({ slot, resetsAt: Math.floor(Date.now() / 1000) + 3000, usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {} }))));
+writeFileSync(join(home4, "meter", "slots.json"), JSON.stringify([1, 2].map((slot) => ({ slot, resetsAt: Math.floor(Date.now() / 1000) + 3000, usdWindow: 0, limited: false, hours: {} }))));
 const refusedSame = await spawnGateway({ home: home4, tokens: tokensFile, mockApi: api.url }).then((g) => (g.close(), "started"), (e) => e.message);
 check(/same resetsAt/.test(refusedSame), `a gateway whose slots 1 and 2 share a resetsAt: ${refusedSame}`);
 
@@ -307,9 +298,9 @@ check(/same resetsAt/.test(refusedSame), `a gateway whose slots 1 and 2 share a 
 const home2 = mkdtempSync(join(tmpdir(), "rt-t5-cap-"));
 const capped = await spawnGateway({ home: home2, port: 5212, cap: 3, tokens: tokensFile, mockApi: api.url });
 const capCalls = [];
-for (let i = 0; i < 4; i++) capCalls.push(await ask({ role: "judge", model: "haiku", system: "cap", turns: tag(`cap-${i}`), run: "cap" }, capped.url).then((r) => r.text, (e) => `ERR ${e.message}`));
+for (let i = 0; i < 4; i++) capCalls.push(await ask({ role: "judge", model: "haiku", system: "cap", turns: tag(`cap-${i}`), run: "cap" }, capped.url).then((r) => r.text, (e) => `ERR ${e.constructor.name} ${e.message}`));
 const capStatus = await gatewayStatus(capped.url);
-check(capCalls.slice(0, 3).every((t) => t === "ok") && /call cap 3 reached/.test(capCalls[3]) && capStatus.calls === 3 && capStatus.capReached, `--cap 3 with RT_EVAL_CALL_CAP=1 in the env: ${capCalls}`);
+check(capCalls.slice(0, 3).every((t) => t === "ok") && /CapReached call cap 3 reached/.test(capCalls[3]) && capStatus.calls === 3 && capStatus.capReached, `--cap 3 with RT_EVAL_CALL_CAP=1 in the env: ${capCalls}`);
 
 // ---- The dev token (O3): only under a cap ≤ 60, read from the checkout's .env files into memory.
 const checkout = mkdtempSync(join(tmpdir(), "rt-t5-checkout-"));
