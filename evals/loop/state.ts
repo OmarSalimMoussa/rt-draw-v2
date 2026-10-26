@@ -33,8 +33,10 @@ export type State = {
   until?: number;
   keepsSinceCheckpoint: number; keepsSinceRefresh: number; refreshes: number;
   recent: Decided[];
-  /** Components the dry-well rule paused, until the next checkpoint. */
+  /** Components the dry-well rule paused, until the next checkpoint or RULES.pauseEpochs epochs on. */
   paused: string[];
+  /** The epoch each paused component paused in; when a pause ran out (the component's reverts count again from there). */
+  pausedAt?: Record<string, number>; wellFrom?: Record<string, string>;
   /** Why the loop won't run (a sync conflict, a broken bridge contract): cleared by a successful sync. */
   blocked?: string;
   refreshQueued?: string; lastRefresh?: string; lastOwnerStep?: string;
@@ -93,7 +95,7 @@ export function lock(): { stale: boolean; release(): void } {
 // ---- §6.7's stop and pause rules
 
 // The dry well scales with the search (LOOP-V2.md D1): two epochs' cards in a row reverted, or one epoch's on a component.
-export const RULES = { decisionMaxMin: 30, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 2 * LOOP.search.cards, componentRevertsInRow: LOOP.search.cards, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
+export const RULES = { decisionMaxMin: 30, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 2 * LOOP.search.cards, componentRevertsInRow: LOOP.search.cards, pauseEpochs: 3, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
 /** The ladder's slots §6's 30 minutes assume (the PGX's). */
 const SLOTS_30MIN = 8;
 /**
@@ -109,6 +111,8 @@ export type Facts = {
   recent: Decided[];
   /** When the last checkpoint ran: a dry well counts only the decisions since (the checkpoint unpauses). */
   checkpointAt?: number;
+  /** When a component's pause ran out: its dry well counts only the decisions since. */
+  wellFrom?: Record<string, number>;
   /** When the owner last stepped in (a sync): voids before it were the owner's to fix, so they no longer count. */
   ownerStepAt?: number;
   /** The last readiness passed (at the harness's tag, within a day); calibration's outcome ("dry" on the fake API, whose judge is canned). */
@@ -150,8 +154,8 @@ export function rules(f: Facts): Action[] {
   }, []);
   if (last(RULES.revertsInRow, since)?.every((d) => d.verdict === "revert")) out.push({ do: "owner", why: `dry well: ${RULES.revertsInRow} reverts in a row` });
   for (const c of new Set(since.map((d) => d.component)))
-    if (last(RULES.componentRevertsInRow, since.filter((d) => d.component === c))?.every((d) => d.verdict === "revert"))
-      out.push({ do: "skip", component: c, why: `dry well: ${RULES.componentRevertsInRow} reverts in a row on ${c}; paused until the next checkpoint` });
+    if (last(RULES.componentRevertsInRow, since.filter((d) => d.component === c && Date.parse(d.at) >= (f.wellFrom?.[c] ?? 0)))?.every((d) => d.verdict === "revert"))
+      out.push({ do: "skip", component: c, why: `dry well: ${RULES.componentRevertsInRow} reverts in a row on ${c}; paused for ${RULES.pauseEpochs} epochs or until the next checkpoint` });
   // The machine.
   if (f.overloads.filter((t) => t > f.now - RULES.overloadWindowMs).length >= RULES.overloads) out.push({ do: "pause", why: `${RULES.overloads} overloaded calls within 10 min`, until: f.now + RULES.overloadWindowMs });
   if (f.diskGb < LOOP.diskPauseGb) out.push({ do: "pause", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskPauseGb}`, until: f.now + RULES.recheckMs });

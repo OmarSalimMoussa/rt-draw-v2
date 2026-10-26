@@ -20,7 +20,7 @@ import { readMeter, rollup } from "./meter.ts";
 import { paths } from "./paths.ts";
 import { appendLine, put, runFile } from "./record.ts";
 import { cardStates, nearWins, sweepSkip } from "./search.ts";
-import { type Facts, type Notice, type State, lock, newState, notices, readState, rules, saveState, stampNow } from "./state.ts";
+import { type Facts, type Notice, RULES, type State, lock, newState, notices, readState, rules, saveState, stampNow } from "./state.ts";
 import type { SlotN } from "./tokens.ts";
 import { treeOf } from "./trees.ts";
 import type { AgentLog, Arm, DecisionRow, EpochRow, HypothesisCard } from "./types.ts";
@@ -114,7 +114,8 @@ async function facts(rte: Rte, gw: string, st: State, err?: unknown): Promise<Fa
   diskAtStart ??= { at: Date.now(), gb };
   const perDay = ((diskAtStart.gb - gb) / (Date.now() - diskAtStart.at)) * DAY;
   return {
-    now: Date.now(), pace: s.pace, recent: st.recent, ownerStepAt: Date.parse(st.lastOwnerStep ?? "1970-01-01"), checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"), ready: readyAtStart, calib: rte.o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome,
+    now: Date.now(), pace: s.pace, recent: st.recent, ownerStepAt: Date.parse(st.lastOwnerStep ?? "1970-01-01"), checkpointAt: Date.parse(historyRows("checkpoints.jsonl").at(-1)?.at ?? "1970-01-01"),
+    wellFrom: Object.fromEntries(Object.entries(st.wellFrom ?? {}).map(([c, at]) => [c, Date.parse(at)])), ready: readyAtStart, calib: rte.o.mockApi ? "dry" : maybe<{ outcome: string }>(calibrationFile())?.outcome,
     error: err === undefined ? undefined : msg(err), capped: err instanceof CapReached || s.capReached,
     blocked: st.blocked, emptyEpochs: st.emptyEpochs ?? 0, overloads: lines.flatMap((l) => ("agent" in l || !l.apiError || !/overload|529/i.test(l.apiError) ? [] : [Date.parse(l.at)])), diskGb: gb,
     daysLeft: perDay > 0 ? Math.max(0, (gb - LOOP.diskPauseGb) / perDay) : undefined, onAC: onAC(),
@@ -151,10 +152,18 @@ async function halt(rte: Rte, gw: string, st: State, err?: unknown): Promise<boo
   }
   for (;;) {
     await recheckWeeks(rte, gw);
+    // A dry well's pause runs out after RULES.pauseEpochs epochs: with no keep there is no checkpoint, and every component
+    // would stay paused until the epochs came up empty. Its reverts count again from here.
+    for (const c of st.paused.filter((x) => st.epoch - (st.pausedAt?.[x] ?? st.epoch) >= RULES.pauseEpochs)) {
+      st.paused = st.paused.filter((x) => x !== c);
+      delete st.pausedAt?.[c];
+      (st.wellFrom ??= {})[c] = new Date().toISOString();
+      rte.say(`loop: ${c} unpaused: its dry well's ${RULES.pauseEpochs} epochs are up`);
+    }
     const acts = rules(await facts(rte, gw, st, err));
     const noted = acts.filter((a) => a.do === "owner" || a.do === "stop" || a.do === "skip");
     for (const a of noted) ownerItem(a.why);
-    for (const a of acts) if (a.do === "skip" && !st.paused.includes(a.component!)) st.paused.push(a.component!);
+    for (const a of acts) if (a.do === "skip" && !st.paused.includes(a.component!)) st.paused.push(a.component!), ((st.pausedAt ??= {})[a.component!] = st.epoch);
     if (noted.length) commitHistory(`owner list: ${noted.map((a) => a.why).join("; ").slice(0, 100)}`);
     const stop = acts.find((a) => a.do === "stop");
     if (stop) {
@@ -180,7 +189,7 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
   const notes = [...(await agents.championFailures(sha, run, ck)), ...st.lastRuns.flatMap((r) => maybe<agents.FailureNote[]>(runFile(r, "failures.json")) ?? [])];
   // What the coordinator would drop unrun: told up front, so an epoch isn't spent on cards that can't be measured.
   const wont = [
-    ...(st.paused.length ? [`paused until the next checkpoint (dry well): cards on ${st.paused.join(", ")}`] : []),
+    ...(st.paused.length ? [`paused for a few epochs (dry well): cards on ${st.paused.join(", ")}`] : []),
     ...(rte.o.f["quality-only"] ? ["latency-goal cards: this run is --quality-only (they wait for the PGX)"] : []),
     ...(!hasU1() ? ["cards on the ink readers (marks, arrow, hit, link): no U1 set to check them on, they go to the owner"] : []),
     "patch knobs and frozen areas: they go to the owner unmeasured",
@@ -203,7 +212,7 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
 
 async function loopCheckpoint(rte: Rte, gw: string, st: State): Promise<string> {
   const ck = await runCheckpoint(rte, gw, st.epoch);
-  Object.assign(st, { keepsSinceCheckpoint: 0, paused: [] });
+  Object.assign(st, { keepsSinceCheckpoint: 0, paused: [], pausedAt: {}, wellFrom: {} });
   saveState(st);
   return ck.id;
 }
