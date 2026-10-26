@@ -100,8 +100,10 @@ cd ~/rt-eval/repo && rte export omar-salim-moussa@thinkstationpgx-0eea
 cd ~/rt-eval/repo && rte init --refresh && rte ready --stub --mock-api
 ```
 
-New code on master reaches the PGX by `git push` on the laptop, then `git -C ~/projects/rt-draw-v2 pull` and
-`cd ~/rt-eval/repo && rte init --refresh` there (a harness change re-pins; the champion takes master through `rte sync`).
+New code reaches the PGX in one step from the laptop: `bash evals/ops/deploy.sh` pushes the branch to the PGX's bare
+repo (remote `pgx`), fast-forwards the PGX's checkout, re-pins the loop clone's harness on it (`rte init --refresh`) and
+checks readiness at 0 calls. It refuses while the loop holds its lock (`rte stop-after` first). The champion takes the
+owner's commits through `rte sync`, never through a deploy.
 
 ## 3. Watching
 
@@ -123,10 +125,10 @@ bash evals/loop/launch.sh stop          # laptop: stops the unit (Chrome, Vite a
 bash evals/loop/launch.sh loop --resume # continues at the next undone case; finished calls are re-served, not re-paid
 ```
 
-A crash or a reboot leaves a stale lock: the next `loop` resumes by itself. A laptop suspend voids the cases in flight
-and replays them. The loop stops by itself on the night cap, the weekly allowance, two voids in a row, a failed
-readiness or calibration, a sync conflict or a blocked request, and pauses (until the earliest reset) when every token
-is past 90% of its window; each one lands in the owner list.
+A crash or a reboot leaves a stale lock: the next `loop` resumes by itself. A laptop suspend voids the decision in
+flight. The loop stops by itself on the weekly allowance (50% of each token's week), two voids in a row, a failed
+readiness or calibration, a sync conflict, the call cap or a blocked request, and pauses (until the earliest reset) when
+every token is past 60% of its five-hour window (testers share the token); each one lands in the owner list.
 
 ## 5. The morning check
 
@@ -154,22 +156,30 @@ git -C ~/projects/rt-draw-v2 fetch ~/rt-eval/repo loop/champion && git -C ~/proj
 From the loop's clone (`~/rt-eval/repo`) or the owner's checkout:
 
 ```bash
-rte() { node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@"; }   # direct runs
-bash evals/loop/launch.sh <command> [flags]   # supervised: a systemd unit holding the sleep inhibitor (laptop), tmux window `loop` (PGX)
+bin/rte <command> [flags]       # direct runs (bin/rte is `node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts`)
+bin/rte job <command> [flags]   # supervised: a systemd unit holding the sleep inhibitor (laptop), tmux window `loop` (PGX)
+bin/rte wait                    # PGX: until the supervised step ends, then its log's last lines
 bash evals/loop/launch.sh stop
+npm run checks [-- --slow]      # the harness checks, 0 calls (fast ~3 min; --slow adds the real checkpoints and the dry loop)
 ```
 
 Tokens: `~/.config/rt-eval/tokens.env` (chmod 600, outside every repo) with `RT_EVAL_TOKEN_1..3=…`, three loop
 accounts. `run.ts` reads it itself and never prints a token; one or two tokens work (a warning; the smoke skips U2).
 `--dev-token` uses the dev plugin's own token from `~/projects/rt-draw-v2/.env`, only with `--cap 60` or less, and never for `loop` (its critic and engineers run outside the cap).
 
-Also: `rte status` (slots, cap, cwd, node, launched, inhibitor), `rte decide <branch> --cap n` (one branch through the
-funnel; `--card <decision id>` decides a loop card's candidate again with that card, its over-use detector included), `rte checkpoint --cap n`, `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`,
-`rte gc --trees`, `rte loop --resume` (a stale lock resumes by itself).
+Also: `rte status` (slots, cap, cwd, node, the lock, and each token's five-hour and weekly use as the server last said
+it), `rte cost <run>…` (calls and list $ by role, a run's sub-runs included), `rte decide <branch> --cap n` (one branch
+through the funnel; `--card <decision id>` decides a loop card's candidate again with that card), `rte checkpoint --cap n`,
+`rte aa --live --cap n` (checkpoint 0's unshared A/A again on today's champion, nothing written to history), `rte real
+update` (testers' sends from the last pull through to R1, every step but the owner's review, each paying step capped at
+1.5× its calls), `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`, `rte gc --trees`, `rte loop
+--resume` (a stale lock resumes by itself). `python3 -I evals/tools/verify_decision.py ~/rt-eval/runs <run>…` recomputes a
+decision's numbers from its rows without the harness's code, numbers only.
 
-A loop stops on §6.7's rules (night cap, weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not
-passed, a sync conflict, a blocked request), pauses on others (all slots past 0.90 until the earliest reset, overloads, disk,
-battery) and writes each to the owner list. Mornings: `/evals/progress/`, `owner-list.md`, `budget.jsonl`.
+A loop stops on §6.7's rules (weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not passed, a
+sync conflict, the call cap, a blocked request), pauses on others (all slots past 0.60 of their five-hour window until the
+earliest reset, overloads, disk, battery) and writes each to the owner list. Mornings: `/evals/progress/`,
+`owner-list.md`, `budget.jsonl`.
 
 ## 8. Rehearsing at 0 calls
 

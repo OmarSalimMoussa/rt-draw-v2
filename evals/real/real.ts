@@ -179,7 +179,7 @@ const jsonIn = (text: string) => {
 const keysOf = (s: Session) => sha(js(s.sends.map((x) => [x.key, x.label, x.before, x.after])));
 export const triageOf = (dir: string) => maybe<Triage>(join(dir, "triage.json"));
 /** Whether a session's triage is current: same prompt, same sends. */
-const triaged = (dir: string, s: Session) => {
+export const triaged = (dir: string, s: Session) => {
   const t = triageOf(dir);
   return !!t && t.prompt === sha(TRIAGE_SYSTEM) && t.keys === keysOf(s);
 };

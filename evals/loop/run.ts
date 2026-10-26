@@ -31,7 +31,7 @@ import type { Label, PairRef } from "../pages/plugin.ts";
 import * as agents from "../optimizer/agents.ts";
 import { analystDigest, failureDigest, writeLossDigest, writeMissDigest } from "../optimizer/digest.ts";
 import { OWNER_KNOBS, bankedScenes, cardOwnerReasons, diffOf, g0, modelShifts, sceneRoundTrip, typecheck } from "../optimizer/gates.ts";
-import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, budgetGate, budgetPausedMs, harnessTag, judgedOnce, openRig, product, runAB } from "./ab.ts";
+import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, benchCases, budgetGate, budgetPausedMs, checkpointRun, harnessTag, judgedOnce, openRig, product, runAB } from "./ab.ts";
 import { bake } from "./bake.ts";
 import { type BankSet, acceptBank, bankRefuses, buildBank, nextTopUp, refresh, topUp } from "./bank.ts";
 import { readReply } from "./cache.ts";
@@ -58,10 +58,10 @@ import { applyKnobs, applyTried, cardStates, nearWins, sweepSkip } from "./searc
 import { type CardState, type Decided, type Facts, type Notice, RULES, type State, lock, newState, notices, overrun, readState, rules, saveState, stampNow } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { stubPictures } from "./stubs.ts";
-import { type SlotN, type Token, loadDevToken, loadTokens } from "./tokens.ts";
+import { type SlotN, Slots, type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { LockfileDiffers, contentHash, treeOf, worktreeOf } from "./trees.ts";
 import type { AgentLog, Arm, CaseInfo, DecisionRow, EpochRow, Fork, HypothesisCard, Judged, Ratio, Row, SceneJSON, SendOutcome } from "./types.ts";
-import { type Decision, decide } from "./verdict.ts";
+import { type Decision, aaPass, decide } from "./verdict.ts";
 import * as real from "../real/real.ts";
 import { realShadow } from "../real/shadow.ts";
 
@@ -69,8 +69,9 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   init --from <repo> [--refresh]       ready [--stub] [--mock-api]         ladder --max n
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway) | bank rerecord --cap n (replies on today's champion)
-  aa --shared --cases n                bench freeze                         human freeze
+  aa --shared --cases n | --live --cap n   bench freeze                     human freeze
   real ingest [--raw stamp] | render | triage --cap n | gold --cap n [--run real-gold-…] [--regold] | review [--host ip] [--review-port n] | freeze
+       | update (all but review, each paying step capped at 1.5× its calls)
        [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render | --card <decision id>] [--owner-ok] --cap n
@@ -78,7 +79,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
        [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
   week --cap n            (reads again the weekly use of each token parked on an old reading, one one-word call each)
-  status                               remetric <run>                       gc --trees
+  status (each token's use too)        cost <run>… (calls and list $, sub-runs included)   remetric <run>   gc --trees
   packets <run>… (frames the changes a run's after captures missed, 0 calls)`;
 const CO_AUTHOR = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";
 /** R8 and `aa`'s default: 16 cases, the champion against itself in timed replay. */
@@ -297,6 +298,24 @@ async function status() {
     `home: ${p.home}; champion ${tryGit(p.repo, "rev-parse", "--short", "loop/champion") ?? "none (init first)"}`,
     `loop: ${st ? `epoch ${st.epoch}, ${st.cards.filter((c) => c.status === "done").length} of ${st.cards.length} cards decided${st.blocked ? `; blocked: ${st.blocked}` : ""}` : "not started"}; lock ${existsSync(p.lock) ? readFileSync(p.lock, "utf8") : "free"}`,
   ]) say(l);
+  // Each token's use as the server last said it (meter/slots.json): the loop pauses at LOOP.fiveHourPauseAt and stops at LOOP.weekSevenDayMax.
+  const pct = (x?: number) => (x === undefined ? "no reading" : `${Math.round(x * 100)}%`);
+  const ago = (ms: number) => `${((Date.now() - ms) / HOUR).toFixed(1)} h ago`;
+  for (const s of new Slots(tokens().map((t) => t.slot), join(p.home, "meter", "slots.json")).status())
+    say(`token ${s.slot}: five-hour ${pct(s.fiveHour)}${s.resetsAt ? ` (window ${s.resetsAt * 1000 < Date.now() ? "reset since" : `resets ${new Date(s.resetsAt * 1000).toISOString().slice(11, 16)} UTC`})` : ""}, week ${pct(s.sevenDay)}${s.sevenDayAt ? ` (read ${ago(s.sevenDayAt)})` : ""}; the loop pauses at ${pct(LOOP.fiveHourPauseAt)} and stops at ${pct(LOOP.weekSevenDayMax)}${s.why ? `; parked: ${s.why}` : ""}`);
+}
+
+/** What runs cost (rte cost <run>…): upstream calls and list $ by role, each run with its sub-runs (<run>-g2, <run>~warm, …). */
+async function costCmd() {
+  const runs = o.pos.slice(1);
+  if (!runs.length) throw new Error("cost <run>…");
+  const lines = readMeter(paths().calls);
+  for (const run of runs) {
+    const mine = lines.filter((l) => l.run === run || l.run.startsWith(`${run}-`) || l.run.startsWith(`${run}~`));
+    const by = rollup(mine, (l) => l.role);
+    const all = rollup(mine, () => "all").all;
+    say(`cost ${run}: ${all?.calls ?? 0} calls, $${(all?.usd ?? 0).toFixed(2)} list${all?.agentUsd ? ` + $${all.agentUsd.toFixed(2)} agents` : ""} (${Object.entries(by).sort((a, b) => b[1].usd - a[1].usd).map(([k, r]) => `${k} ${r.calls} $${r.usd.toFixed(2)}`).join(", ") || "nothing metered"})`);
+  }
 }
 
 async function readyCmd() {
@@ -412,8 +431,25 @@ async function aa(n: number): Promise<{ ok: boolean; detail: string }> {
     return { ok, detail: `${same} of ${n} cases identical, paired TTFD ${x(ttfd)}, render ${x(render)} (TTFC ${x(ttfc)}), ${calls} calls (${run})` };
   }), true);
 }
+/**
+ * Checkpoint 0's unshared A/A again (the re-validation's): today's champion against itself on B1, live, each arm its own
+ * Vite, judged for fidelity and craft on every case, scored by aaPass. Writes nothing to history.
+ */
+async function aaLive() {
+  needCap("aa --live");
+  needBank();
+  openHistory();
+  const champ = championArm();
+  const run = `aa-live-${stampNow()}`;
+  const rows = await withGateway((gw) => withRig(gw, [champ.tree, champ.tree], async (rig) => (await checkpointRun(rig, { run, anchor: champ, champion: champ, seed: run, judge: judging(run, { seed: run, craft: "all" }) })).rows));
+  const a = aaPass(rows);
+  const x = (m: "ttfd" | "render") => `×${pairedRatio(rows, m)?.est.toFixed(3) ?? "?"}`;
+  say(`aa --live: ${a.pass ? "ok" : `FAIL on ${a.failed.join(", ")}`} (99% CR1: ${Object.entries(a.tests).map(([k, t]) => `${k} ${t.est.toFixed(3)} [${t.lo.toFixed(3)}, ${t.hi.toFixed(3)}]`).join("; ")}); first drawing ${x("ttfd")}, render ${x("render")}; ${rows.length} cases, ${rows.filter((r) => r.void).length} void (${run})`);
+  return a.pass ? 0 : 1;
+}
 async function aaCmd() {
-  if (!o.f.shared) throw new Error("only aa --shared is built here: the unshared A/A is checkpoint 0 (checkpoint --zero)");
+  if (o.f.live) return aaLive();
+  if (!o.f.shared) throw new Error("aa --shared --cases n (timed replay, 0 calls) | aa --live --cap n (checkpoint 0's unshared A/A again)");
   const r = await aa(num("cases") ?? AA_CASES);
   say(`aa: ${r.ok ? "ok" : "FAIL"} ${r.detail}`);
   return r.ok ? 0 : 1;
@@ -638,6 +674,27 @@ async function realCmd() {
     const champ = championArm();
     return withGateway((gw) => withRig(gw, [champ.tree], async (rig) => f(real.realShot((await rig.tab(0, "A", champ.tree)).page)), 1), true);
   };
+  if (step === "update") {
+    // Every step but the owner's review, in order; triage and gold capped at 1.5× their calls (a call per session to
+    // triage, a call per send for gold), so a retry loop stops there. Freeze takes accepted gold only: batch 1 stays out
+    // until the owner approves it, later batches go in unless rejected.
+    const capOf = (n: number) => Math.ceil(1.5 * n);
+    const steps: [string, (() => number)?][] = [
+      ["ingest"], ["render"], ["triage", () => real.chosen(since, only).filter(({ dir, s }) => !real.triaged(dir, s)).length],
+      ["gold", () => real.wantGold(since, only, false).length], ["freeze"],
+    ];
+    for (const [next, calls] of steps) {
+      const n = calls?.();
+      if (n === 0) {
+        say(`real update: ${next}: nothing to do`);
+        continue;
+      }
+      o = { ...o, pos: [o.cmd, next], cap: n === undefined ? undefined : capOf(n) };
+      if (n !== undefined) say(`real update: ${next}: ${n} calls, cap ${capOf(n)}`);
+      if ((await realCmd()) === 1) return 1;
+    }
+    return 0;
+  }
   if (step === "ingest") for (const line of real.ingestStep(str("raw"))) say(`real ingest: ${line}`);
   else if (step === "render") {
     await shots(async (shot) => {
@@ -695,7 +752,7 @@ async function realCmd() {
     const r = real.freezeReal();
     commitHistory(`real freeze: R1 = ${r.cases} cases (${r.tune} tune, ${r.hold} hold), ${r.hash.slice(0, 12)}`);
     say(`real freeze: R1, ${r.cases} cases (${r.tune} R-tune from ${r.people.tune} people, ${r.hold} R-hold from ${r.people.hold}), ${r.merged} repeats merged, ${r.inkWaiting} waiting for synthesized ink${r.moved ? `, ${r.moved} left out (their gold was drawn for a send a later pull moved)` : ""}, hash ${r.hash.slice(0, 12)}`);
-  } else throw new Error("real ingest | render | triage | gold | review | freeze");
+  } else throw new Error("real ingest | render | triage | gold | review | freeze | update");
 }
 
 /** A checkpoint of today's champion (an owner step for `sync`), then the champion-miss digest from its losses. */
@@ -1644,7 +1701,7 @@ async function gc() {
 const COMMANDS: Record<string, () => Promise<number | void>> = {
   init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd, real: realCmd,
   checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, week: weekCmd, status,
-  remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc, packets: packetsCmd,
+  remetric: async () => void say(`remetric: ${js(remetric(o.pos[1]))}`), gc, packets: packetsCmd, cost: costCmd,
 };
 
 if (import.meta.main) {
