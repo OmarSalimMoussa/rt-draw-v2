@@ -301,7 +301,7 @@ const card = { id: "e1-h1", component: "draw", kind: "code", change: "draw prose
 const dRows = bench.filter(tuningOf).slice(0, 16).map((x, i) => ({ case: x.id, cluster: info.get(x.id).originSession, affected: true, class: "Q", s: -1, ttfc: [1000, 1010], ttd: [3000, 3030], ttfd: [1000, 1010], render: [8, 8], work: [1, 1], usd: [0.03, 0.03], thought: [false, false], overuse: [false, false], pics: [[0, 0], [0, 0]], ask: info.get(x.id).ask, firstArm: i % 2 ? "B" : "A" }));
 write(join(p.run("e1-h1-g2"), "rows.jsonl"), dRows.map((x) => JSON.stringify(x)).join("\n") + "\n");
 write(join(p.run("e1-h1-g2"), "run.json"), { id: "e1-h1-g2", kind: "ab", meter: { calls: 40, listUsd: 1.5, minutes: 9 } });
-const decision = decide({ tuning: dRows, exhausted: true, flips: { audited: 0, flipped: 0 }, cold: [0, 0], invariants: 0 }, card);
+const decision = decide({ tuning: dRows, exhausted: true, flips: { audited: 0, flipped: 0 }, cold: [{ n: 0, of: 0 }, { n: 0, of: 0 }], invariants: 0 }, card);
 const d = H.decisionRow({ id: "e1-h1", epoch: 8, card, candSha: cand, baseSha: c[7], run: "e1-h1-g2", judgeId: "j-check", result: { rows: dRows, decision }, affected: { tuning: 16, of: 64, topUp: 0 } });
 const head = H.recordDecision(d, { owner: ["3 failures in a row on draw"] });
 const patch = readFileSync(join(hist, "tried", "e1-h1.patch"), "utf8");

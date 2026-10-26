@@ -171,13 +171,16 @@ const vetoCases = {
   "void rate": [() => run(rows(32, { void: (i) => i % 5 === 0 })), "void", /voided/],
   "position flips": [() => run(rows(32), card(), { flips: { audited: 16, flipped: 6 } }), "void", /flips/],
   "dispatch order": [() => run(rows(32, { first: (i) => (i % 4 ? "A" : "B") })), "void", /dispatched first/],
-  "cold-start asymmetry": [() => run(rows(32), card(), { cold: [0.3, 0.1] }), "void", /cold starts/],
+  "cold-start asymmetry": [() => run(rows(32), card(), { cold: [{ n: 6, of: 20 }, { n: 2, of: 20 }] }), "void", /cold starts/],
   invariants: [() => run(rows(32), card(), { invariants: 1 }), "void", /invariants/],
 };
 for (const [name, [make, verdict, re]] of Object.entries(vetoCases)) {
   const d = make();
   check(says(d, verdict, re), `${name} veto: got ${d.verdict} (${[...d.reasons, ...d.vetoes].join("; ")}), want ${verdict} ${re}`);
 }
+// One cold call more is no asymmetry, though it's 20% of a dialogue card's 5 live sends (e76-h6).
+const oneCold = run(rows(32), card(), { cold: [{ n: 1, of: 5 }, { n: 0, of: 5 }] });
+check(oneCold.verdict !== "void" && !oneCold.reasons.some((x) => /cold starts/.test(x)), `one cold call of 5: ${oneCold.verdict} (${oneCold.reasons.join("; ")})`);
 // …and none of them on the clean set's near misses.
 const nearMisses = {
   "latency unchanged": run(rows(32, { lat: () => 1 })),

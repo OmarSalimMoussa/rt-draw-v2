@@ -494,13 +494,13 @@ export function begin(rig: Rig, s: RunSpec) {
       return settled.map((x) => (x as PromiseFulfilledResult<Row>).value);
     },
     flips: () => s.judge?.flips?.(),
-    /** Each arm's share of upstream product calls that waited on a process still starting (the cold-start asymmetry). */
-    cold(): [number, number] {
+    /** Each arm's upstream product calls that waited on a process still starting, of all it made (the cold-start asymmetry). */
+    cold() {
       const live = meter().filter((c) => product(c) && c.mode === "live" && c.shared !== "follower");
       return ARMS.map((a) => {
         const mine = live.filter((c) => c.arm === a);
-        return mine.length ? mine.filter((c) => c.readyAtTake === false).length / mine.length : 0;
-      }) as [number, number];
+        return { n: mine.filter((c) => c.readyAtTake === false).length, of: mine.length };
+      }) as [{ n: number; of: number }, { n: number; of: number }];
     },
     /** run.json, at the end: the arms, the frozen config, the load and the meter. */
     finish(extra: { judgeId?: string } = {}) {

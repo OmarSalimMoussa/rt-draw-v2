@@ -21,8 +21,8 @@ export type DecideInput = {
   exhausted?: boolean;
   /** The judge's audited second orders, and how many disagreed with the first. */
   flips?: { audited: number; flipped: number };
-  /** Each arm's share of product calls that waited on a starting process. */
-  cold?: Pair<number>;
+  /** Each arm's product calls that waited on a starting process, of all it made upstream. */
+  cold?: Pair<{ n: number; of: number }>;
   /** Per-case invariants tripped (§7.5). */
   invariants?: number;
 };
@@ -156,7 +156,9 @@ function untrusted(all: Row[], live: Row[], i: DecideInput): string[] {
     out.push(`position flips on ${i.flips.flipped} of ${i.flips.audited} audited cases`);
   const firstA = live.filter((r) => r.firstArm === "A").length / live.length;
   if (live.length >= LOOP.looks[0] && (firstA < LOOP.dispatchBand[0] || firstA > LOOP.dispatchBand[1])) out.push(`A dispatched first on ${(100 * firstA).toFixed(0)}% of cases`);
-  if (live.length >= LOOP.looks[0] && i.cold && Math.abs(i.cold[0] - i.cold[1]) > LOOP.coldAsymMax) out.push(`cold starts A ${(100 * i.cold[0]).toFixed(0)}% vs B ${(100 * i.cold[1]).toFixed(0)}%`);
+  // One cold call more isn't an asymmetry: a dialogue card's 5 live sends made it 20% alone (e76-h6, e77-h3).
+  const cold = i.cold?.map((c) => (c.of ? c.n / c.of : 0));
+  if (live.length >= LOOP.looks[0] && i.cold && cold && Math.abs(i.cold[0].n - i.cold[1].n) > 1 && Math.abs(cold[0] - cold[1]) > LOOP.coldAsymMax) out.push(`cold starts A ${(100 * cold[0]).toFixed(0)}% vs B ${(100 * cold[1]).toFixed(0)}%`);
   if (i.invariants) out.push(`${i.invariants} per-case invariants tripped`);
   return out;
 }
