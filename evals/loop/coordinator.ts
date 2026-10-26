@@ -183,16 +183,17 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
     ...(st.paused.length ? [`paused until the next checkpoint (dry well): cards on ${st.paused.join(", ")}`] : []),
     ...(rte.o.f["quality-only"] ? ["latency-goal cards: this run is --quality-only (they wait for the PGX)"] : []),
     ...(!hasU1() ? ["cards on the ink readers (marks, arrow, hit, link): no U1 set to check them on, they go to the owner"] : []),
-    "patch knobs, frozen areas and model switches other than picture.model: they go to the owner unmeasured",
-    ...(!variants().illustrationsCalibrated ? ["a picture.model keep: held for the owner until the judge is calibrated on illustrations"] : []),
+    "patch knobs and frozen areas: they go to the owner unmeasured",
+    ...(!variants().illustrationsCalibrated ? ["a keep that switches the picture model (a picture.*Model knob): held for the owner until the judge is calibrated on illustrations"] : []),
   ];
   const digest = analystDigest({
     championSha: sha, checkpoint: ck, runs: st.lastRuns, wont, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
     ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(), nearWins: nearWins(historyRows("decisions.jsonl") as DecisionRow[]),
   });
-  const analysis = await rte.engine().analyst(digest, run);
+  const tree = treeOf(sha);
+  const analysis = await rte.engine().analyst({ run, token: await agents.slotToken(rte.tokens(), gw), digest, tree, mockApi: await rte.agentMock() });
   const criticRun = `${st.stamp}-e${st.epoch}-critic`;
-  const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tried: triedIndex(), tree: treeOf(sha), mockApi: await rte.agentMock() });
+  const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tried: triedIndex(), tree, mockApi: await rte.agentMock() });
   // Its answer as written, so a dropped or empty epoch can be read back.
   put(runFile(criticRun, "critic.json"), { text: r.result?.text ?? "", cards: r.cards.map((c) => c.id), dropped: r.dropped });
   if (r.dropped.length) rte.say(`critic: dropped ${r.dropped.join("; ")}`);

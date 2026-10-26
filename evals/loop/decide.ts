@@ -7,16 +7,14 @@ import { judgeId, judging, lastServed, positionsFor, variants } from "../judge/j
 import { caseFile } from "../judge/packet.ts";
 import * as agents from "../optimizer/agents.ts";
 import { failureDigest, writeLossDigest } from "../optimizer/digest.ts";
-import { OWNER_KNOBS, cardOwnerReasons, diffOf, g0, modelShifts } from "../optimizer/gates.ts";
+import { OWNER_KNOBS, cardOwnerReasons, diffOf, g0 } from "../optimizer/gates.ts";
 import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, budgetGate, budgetPausedMs, harnessTag, judgedOnce, product, runAB } from "./ab.ts";
 import { nextTopUp, topUp } from "./bank.ts";
-import { readReply } from "./cache.ts";
 import { gatewayStatus } from "./client.ts";
 import { LOOP, configId } from "./config.ts";
 import { type ScanResult, sameOnTheClock, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom } from "./drive.ts";
 import { decisionRow, historyRows, openHistory, realLine, recordDecision } from "./history.ts";
-import { type MeterCall, readMeter } from "./meter.ts";
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { caseDir, put, runFile } from "./record.ts";
@@ -158,9 +156,9 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   }
   const diff = diffOf(p.repo, base, cand);
   const g = g0({ diff, tree, ownerOk: c.card.ownerOk });
-  // Model switches by what the change does to tuning.ts, whatever kind of card made it (a combo or a code card too);
-  // what the arms called says the rest (modelShifts, at the keep).
-  const models = [...new Set([...diff.matchAll(/^\+.*\b(?:K|B)\("([\w.]+?(?:[mM]odel|\.engine))",/gm)].map((m) => m[1]))];
+  // A picture model switch by what the change does to tuning.ts, whatever kind of card made it (a combo or a code card
+  // too): its keep waits for the judge's illustration calibration. Every other model switch or router is measured alone.
+  const pictureModels = [...diff.matchAll(/^\+.*\b(?:K|B)\("(picture\.\w*[mM]odel)",/gm)].map((m) => m[1]);
   if (g.waived) rte.say(`${id}: the owner waived ${g.waived.length} owner finding${g.waived.length > 1 ? "s" : ""}: ${g.waived.join("; ").slice(0, 300)}`);
   if (g.verdict !== "pass") return gate(g.verdict === "owner" ? "owner" : "revert", g.reasons);
   // An owner's knob moved by any card (a code card or a combo too, not only a knob card).
@@ -232,18 +230,10 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     if (d.ownerList) owner.push(`too rare to measure: ${result.rows.filter((r) => !r.void).length} affected cases`);
     if (d.verdict === "owner") owner.push(...d.vetoes);
     if (d.verdict === "keep") {
-      // What each arm called, every live run of this decision: a switch written any way shows (LOOP-V2.md C3). Only a knob
-      // card on picture.model alone runs the champion's code, so only there are its role labels trusted, to leave its
-      // picture calls out.
-      const pictureKnob = c.card.kind === "knob" && models.join() === "picture.model";
-      // A replay meters no tokens: it gets what was recorded, so a champion call served from the bank isn't read as gone.
-      const recorded = (l: MeterCall) => (l.mode === "replay" ? { ...l, outTokens: Number(readReply(p, l.reqHash, l.run, false)?.stats.outTokens ?? 0) } : l);
-      const shifts = modelShifts(readMeter(p.calls).filter((l): l is MeterCall => !("agent" in l) && l.run.startsWith(`${st.stamp}-${id}-`) && product(l) && !(pictureKnob && l.role === "picture")).map(recorded));
       const hold = [...new Set([
         ...cardOwnerReasons(c.card, { u1: hasU1() }),
         ...(c.card.goal === "craft" && !variants().craftCalibrated ? ["a craft keep before craft calibration passed"] : []),
-        ...(models.includes("picture.model") && !variants().illustrationsCalibrated ? ["a picture model switch before the judge is calibrated on illustrations"] : []),
-        ...(models.some((m) => m !== "picture.model") || shifts.length ? [`model switch: needs calibration evidence${shifts.length ? ` (${shifts.join("; ")})` : ""}`] : []),
+        ...(pictureModels.length && !variants().illustrationsCalibrated ? [`a picture model switch (${pictureModels.join(", ")}) before the judge is calibrated on illustrations`] : []),
       ])];
       if (hold.length) (d = { ...d, verdict: "owner", vetoes: [...d.vetoes, ...hold], codes: [...d.codes, "owner"] }), owner.push(...hold);
     }

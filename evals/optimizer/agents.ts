@@ -1,9 +1,11 @@
-// The optimizer's model roles (spec §8.2). The analyst and the failure analyst are one
-// gateway call each, no tools. The critic (read-only) and the engineer (edits src/core)
-// are Agent SDK sessions run here, on the gateway's current token slot with the §7.3 env
+// The optimizer's model roles (spec §8.2). The failure analyst is one gateway call, no
+// tools. The analyst and the critic (both read-only) and the engineer (edits src/core) are
+// Agent SDK sessions run here, on the gateway's current token slot with the §7.3 env
 // (5-minute cache, quiet, empty config dir), each capped in turns, minutes and list $ by
-// the meter's prices and logged as one meter line, so no agent is ever invisible. v1's
-// Opus coordinator re-read ~375k tokens a request (~$72); these are Sonnet on digests.
+// the meter's prices and logged as one meter line, so no agent is ever invisible. All three
+// may search the web and read pages, to research a better way (the owner, 2026-10-26); a
+// check's sessions have no network but the fake API. v1's Opus coordinator re-read ~375k
+// tokens a request (~$72); these are Sonnet on digests.
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { type CanUseTool, type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
@@ -22,9 +24,10 @@ import { ANALYST_SYSTEM, CRITIC_SYSTEM, ENGINEER_SYSTEM, FAILURE_SYSTEM } from "
 
 export type Caps = { turns: number; minutes: number; usd: number };
 /** Frozen per-session caps (§8.2). */
-export const CAPS = { critic: { turns: 20, minutes: 8, usd: 1.5 }, engineer: { turns: 40, minutes: 15, usd: 2.5 } } satisfies Record<string, Caps>;
+export const CAPS = { analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } } satisfies Record<string, Caps>;
 const MODEL = MODEL_IDS.sonnet;
-const TOOLS = { critic: ["Read", "Grep", "Glob"], engineer: ["Read", "Edit", "Write", "Grep", "Glob", "Bash"] };
+const WEB = ["WebSearch", "WebFetch"];
+const TOOLS = { analyst: ["Read", "Grep", "Glob", ...WEB], critic: ["Read", "Grep", "Glob", ...WEB], engineer: ["Read", "Edit", "Write", "Grep", "Glob", "Bash", ...WEB] };
 
 /**
  * The engineer's whole Bash commands (never npx: with no local TypeScript it fetches the unrelated package
@@ -38,10 +41,23 @@ export const BASH_ALLOW = [
   /^git (status|diff)(?!.*\.\.)( --(stat|short|name-only)| src\/core\/[\w./-]*)*$/,
 ];
 
+/**
+ * A page on the public web: never this machine or its network (the gateway, the review page with testers' sends), so a
+ * name, not an address, and not a local or tailnet one.
+ */
+export const publicUrl = (u: unknown) => {
+  try {
+    const { protocol, hostname: h } = new URL(String(u));
+    return /^https?:$/.test(protocol) && h.includes(".") && !/^[\d.]+$|^\[|(^|\.)(localhost|local|internal|lan|home|ts\.net)$/i.test(h);
+  } catch {
+    return false;
+  }
+};
+
 /** Why a tool call is refused, or undefined when it may run. */
 export type Rule = (tool: string, input: Record<string, unknown>) => string | undefined;
 
-/** Paths resolve against cwd and must stay under root; edit adds Edit, Write for new files only, and BASH_ALLOW. */
+/** Paths resolve against cwd and must stay under root; edit adds Edit, Write for new files only, and BASH_ALLOW. The public web is open. */
 export function toolRule(cwd: string, o: { root: string; edit: boolean }): Rule {
   const root = resolve(o.root);
   const inside = (p: unknown) => {
@@ -70,6 +86,10 @@ export function toolRule(cwd: string, o: { root: string; edit: boolean }): Rule 
         if (!o.edit) return "read-only";
         return BASH_ALLOW.some((re) => re.test(cmd)) ? undefined : `not on the allowlist: ${BASH_ALLOW.map((re) => re.source).join(" | ")}`;
       }
+      case "WebSearch":
+        return undefined;
+      case "WebFetch":
+        return publicUrl(input.url) ? undefined : "only public web pages (a host name, not this machine or its network)";
       default:
         return `${tool} isn't available`;
     }
@@ -202,11 +222,6 @@ export function jsonIn<T>(text: string, open: "[" | "{", ok: (v: unknown) => boo
   return undefined;
 }
 
-/** The analyst: one call, no tools, on the analyst digest (§8.2). */
-export async function analyst(digest: string, run: string): Promise<string> {
-  return (await ask({ role: "analyst", model: "sonnet", system: ANALYST_SYSTEM, user: digest, effort: "high", run })).text;
-}
-
 export type FailureNote = { case: string; component: string; evidence: string; tag: string };
 /** The failure analyst on a digest of at most 12 cases. */
 export async function failureAnalyst(digest: string, run: string): Promise<FailureNote[]> {
@@ -265,6 +280,13 @@ export function readCards(text: string): { cards: HypothesisCard[]; dropped: str
 }
 
 type Session = { run: string; token: Token; mockApi?: MockApi; caps?: Caps };
+
+/** The analyst: a read-only session in the champion's tree on the analyst digest (§8.2); its answer as written. */
+export async function analyst(o: Session & { digest: string; tree: string }): Promise<string> {
+  const result = await runAgent({ role: "analyst", run: o.run, cwd: o.tree, system: ANALYST_SYSTEM, prompt: o.digest, rule: toolRule(o.tree, { root: o.tree, edit: false }), caps: o.caps ?? CAPS.analyst, token: o.token, mockApi: o.mockApi });
+  // A session cut off by a cap has no answer: the critic proposes from the digest itself.
+  return result.text || `none: the analyst's session ended (${result.stop}) before it answered. Propose from the digest yourself.`;
+}
 
 /** The critic: a read-only session in the champion's tree on the analyst's output, the digest and the tried index. */
 export async function critic(o: Session & { analysis: string; digest: string; tried: string[]; tree: string }) {

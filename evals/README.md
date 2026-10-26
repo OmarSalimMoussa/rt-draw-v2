@@ -155,7 +155,7 @@ flowchart TD
     G3 --> V{"Verdict"}
     V -->|"better or faster, never slower"| KEEP["Keep: commit to loop/champion"]
     V -->|"no clear win"| REV["Revert: patch saved to tried/"]
-    V -->|"the look, a patch, a model switch"| OWN["Owner list"]
+    V -->|"the look, a patch"| OWN["Owner list"]
     V -->|"unfair measurement"| VOID["Void"]
   end
   setup --> rounds
@@ -180,14 +180,16 @@ decision pays for a driver. Cases are split three ways: **tuning** (the only one
 
 ### Proposing a change
 
-Each round, the **analyst** (one call) reads digests of at most 40k tokens built by frozen code from the bank and the
-runs (`optimizer/digest.ts`): where the champion itself fails first, then slow traces. The **critic** (a read-only
-Agent SDK session) turns that into up to six **cards**, each one change with its goal (latency, fidelity or craft),
-what it predicts and its risk. A sweep (one knob at several values, stopping at the first keep) and a combination of
-near wins (reverted changes that leaned the right way) are one card each (`LOOP-V2.md`, D). An **engineer** (an Agent SDK session) implements a card in its own git worktree. A
-candidate may only change `src/core/`, minus speech; every new number in it must become a named knob in `tuning.ts`.
-A person's cards go through the same queue: the seed cards (`optimizer/seed-cards.json`) start the first rounds, and
-`--seed-cards` adds more to a running loop.
+Each round, the **analyst** reads digests of at most 40k tokens built by frozen code from the bank and the runs
+(`optimizer/digest.ts`): where the champion itself fails first, then slow traces. It brainstorms hypotheses, one idea
+each, and may read the champion's code and research on the web. The **critic** turns those into up to six **cards**,
+each one change with its goal (latency, fidelity or craft) and its risk. Both are read-only Agent SDK sessions. Any
+model may be switched, or a send routed to one of several by how hard it is; each is measured like any other change. A
+sweep (one knob at several values, stopping at the first keep) and a combination of near wins (reverted changes that
+leaned the right way) are one card each (`LOOP-V2.md`, D). An **engineer** (an Agent SDK session that may also read
+docs on the web) implements a card in its own git worktree. A candidate may only change `src/core/`, minus speech;
+every new number in it must become a named knob in `tuning.ts`. A person's cards go through the same queue: the seed
+cards (`optimizer/seed-cards.json`) start the first rounds, and `--seed-cards` adds more to a running loop.
 
 ### The funnel: free first, paid last
 

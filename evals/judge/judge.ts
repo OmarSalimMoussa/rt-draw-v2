@@ -51,8 +51,8 @@ const current = (have: { judgeId: string } | undefined, role: Role) => !!have &&
 export const calibrationFile = () => join(paths().history, "judge", "calibration.json");
 /**
  * The prompt variants calibration chose (§4.5): 1 until a check adopts 2. craftCalibrated false: craft-goal keeps go
- * to the owner list. illustrationsCalibrated false (the owner hasn't labeled illustrations yet): picture.model keeps
- * go there too, and R1 decides nothing (LOOP-V2.md A5, C3).
+ * to the owner list. illustrationsCalibrated false (the owner hasn't labeled illustrations yet): keeps that switch the
+ * picture model go there too, and R1 decides nothing (LOOP-V2.md A5, C3).
  */
 export function variants(): { fidelity: P.Variant; craft: P.Variant; craftCalibrated: boolean; illustrationsCalibrated: boolean } {
   const use = maybe<{ use?: { fidelity?: P.Variant | null; craft?: P.Variant | null; illustrations?: boolean } }>(calibrationFile())?.use;

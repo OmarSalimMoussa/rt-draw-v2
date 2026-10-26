@@ -27,6 +27,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (s) => s.trim().split("\n").slice(-6).join(" | ").slice(0, 900);
 const HOOKS = join(ROOT, "evals/loop/node-hooks.mjs"), RUN = join(ROOT, "evals/loop/run.ts");
 const upstream = (ls) => ls.filter((l) => !l.agent && l.mode === "live" && l.shared !== "follower");
+/** The fake API requests meter lines account for: each upstream call, and each turn of an agent session (the analyst). */
+const requestsOf = (ls) => upstream(ls).length + ls.filter((l) => l.agent).reduce((n, l) => n + l.turns, 0);
 
 /** run.ts in its own process group (a SIGKILL takes its gateway, arm servers and Chrome with it). */
 const groups = new Set();
@@ -159,7 +161,7 @@ const key = (l) => `${l.run}|${l.case}|${l.arm}|${l.role}|${l.reqHash}`;
 const paidBefore = new Set(upstream(all.slice(0, meterAtKill)).map(key));
 const repaid = upstream(all.slice(meterAtKill)).filter((l) => paidBefore.has(key(l)));
 check(!repaid.length, `${repaid.length} calls paid before the kill were paid again: ${repaid.slice(0, 3).map(key).join(", ")}`);
-check(after.length === upstream(all.slice(meterAtKill)).length, `after the kill the fake API got ${after.length} requests for ${upstream(all.slice(meterAtKill)).length} upstream meter lines`);
+check(after.length === requestsOf(all.slice(meterAtKill)), `after the kill the fake API got ${after.length} requests for ${requestsOf(all.slice(meterAtKill))} metered`);
 
 // ---- What the two epochs decided, all on eval/history.
 const H = p.history;
@@ -328,9 +330,9 @@ const voided = [d("void", { at: new Date(T - 60_000).toISOString() }), d("void",
 check(rules({ ...base, recent: voided, ownerStepAt: T - 40_000 }).every((a) => !/void/.test(a.why)), "2 voids before the owner's sync still stop the loop");
 check(rules({ ...base, recent: [...voided, d("void")], ownerStepAt: T - 40_000 }).every((a) => !/void/.test(a.why)), "one void after the owner's sync stops the loop");
 
-// ---- No leak: every fake API request is a metered upstream call (but the ones the SIGKILL cut off), no Chrome left.
-const total = upstream(lines(p.calls)).length, cut = reqsAtKill - upstream(all.slice(0, meterAtKill)).length;
-check(api.requests.length === total + cut && cut <= 4, `the fake API got ${api.requests.length} requests for ${total} upstream meter lines and ${cut} cut off by the kill`);
+// ---- No leak: every fake API request is a metered upstream call or agent turn (but the ones the SIGKILL cut off), no Chrome left.
+const total = requestsOf(lines(p.calls)), cut = reqsAtKill - requestsOf(all.slice(0, meterAtKill));
+check(api.requests.length === total + cut && cut <= 4, `the fake API got ${api.requests.length} requests for ${total} metered and ${cut} cut off by the kill`);
 await api.close();
 check(chromeCount(join(p.home, "chrome")) === 0, "Chrome processes are left");
 console.error(`t21: ${total} fake calls, ${cut} cut off by the kill; decisions ${Object.values(dec).map((x) => `${x.id} ${x.verdict}`).join(", ")}; killed in ${hit.case} at ${new Date(killAt).toISOString()}`);

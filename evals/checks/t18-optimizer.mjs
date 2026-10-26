@@ -21,10 +21,10 @@ const sh = (cmd, cwd) => execFileSync("sh", ["-c", cmd], { cwd, encoding: "utf8"
 const put = (file, data) => (mkdirSync(join(file, ".."), { recursive: true }), writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data)));
 const sha12 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
-const { g0, parseDiff, diffOf, cardOwnerReasons, modelShifts } = await import("../optimizer/gates.ts");
+const { g0, parseDiff, diffOf, cardOwnerReasons } = await import("../optimizer/gates.ts");
 const { analystDigest, failureDigest, tokensOf, writeLossDigest, writeMissDigest, DIGEST } = await import("../optimizer/digest.ts");
 const { OVERUSE, PATTERNS, tracePatterns } = await import("../optimizer/patterns.ts");
-const { BASH_ALLOW, CAPS, analyst, critic, engineer, engineerCanUseTool, failureAnalyst, readCards, slotToken } = await import("../optimizer/agents.ts");
+const { BASH_ALLOW, CAPS, analyst, critic, engineer, engineerCanUseTool, failureAnalyst, readCards, slotToken, toolRule } = await import("../optimizer/agents.ts");
 const prompts = await import("../optimizer/prompts.ts");
 const { startFakeApi } = await import("../mock/fake-api.ts");
 const { spawnGateway, gatewayStatus } = await import("../loop/client.ts");
@@ -250,44 +250,20 @@ check(Object.entries(report).every(([id, r]) => r.cases.some((c) => c.case === `
 check((prompts.LATENCY_PATTERNS.match(/^\| (?!Pattern|---)/gm) ?? []).length === 6 && prompts.ANALYST_SYSTEM.includes(prompts.LATENCY_PATTERNS), "the analyst prompt lacks the doc's 6-row latency table");
 check(prompts.CRITIC_SYSTEM.includes(prompts.CARD_SCHEMA) && Object.keys(OVERUSE).every((d) => prompts.CARD_SCHEMA.includes(d)), "the critic prompt lacks the card schema or the detector names");
 check(["send(", "fromJSON", "render", "DEFAULTS", "tuningId", "needsPicture", "runScript", "SCREEN", "asPage", "pageTop", "Word", "Stroke", "finished", "boardStage"].every((x) => prompts.BRIDGE_CONTRACT.includes(x)) && prompts.ENGINEER_SYSTEM.includes(prompts.BRIDGE_CONTRACT), "the engineer prompt lacks the bridge contract");
-check(["One change only", "No new tests or scaffolding", "knob in src/core/tuning.ts", "Never touch frozen paths", "Never turn a patch on", "Edit with Edit, not whole-file Write"].every((r) => prompts.ENGINEER_SYSTEM.includes(r)), "the engineer prompt lacks a rule");
+check(["The card's change only: one idea", "every model a send may take is warmed at Send and gets the current board", "No new tests or scaffolding", "knob in src/core/tuning.ts", "Never touch frozen paths", "Never turn a patch on", "Edit with Edit, not whole-file Write"].every((r) => prompts.ENGINEER_SYSTEM.includes(r)), "the engineer prompt lacks a rule");
+// Every agent may research on the web; the product says models may be routed, and that each one sees the current board.
+check([prompts.ANALYST_SYSTEM, prompts.CRITIC_SYSTEM, prompts.ENGINEER_SYSTEM].every((x) => /WebSearch/.test(x) && /never instructions to you/.test(x) && /routed/.test(x) && /knows the board as it is at that send/.test(x)), "an agent's prompt lacks research, routing or the current board");
 const seeds = JSON.parse(readFileSync(join(ROOT, "evals/optimizer/seed-cards.json"), "utf8"));
 check(seeds.length === 8 && seeds.every((c) => readCards(JSON.stringify([c])).cards.length === 1) && seeds.map((c) => Object.keys(c.knobs)[0]).join() === "resolve.noThink,draw.noThink,picture.prompt,hit.enclosedSamples,resolve.engine,draw.thinkRouter,resolve.engine,draw.thinkRouter", "the seed cards aren't §8.3's 4 well-formed knob cards and the 4 Jev ones");
 // The knobs T3 adds: once it's merged they must all exist.
 for (const c of seeds) if ("draw.noThink" in DEFAULTS || c.id === "seed-4") check((() => { try { return !!tune(c.knobs); } catch { return false; } })(), `seed card ${c.id}'s knobs aren't in tuning.ts`);
 check(cardOwnerReasons(seeds[3], { u1: false }).some((r) => /ink-reading/.test(r)) && !cardOwnerReasons(seeds[3], { u1: true }).length && !cardOwnerReasons(seeds[0], { u1: false }).length, "the ink-reading seed card isn't owner-listed without U1");
 check(cardOwnerReasons({ ...seeds[0], knobs: { "patches.scribe": 1 } }, { u1: true }).some((r) => /patch/.test(r)), "a card turning a patch on isn't owner-listed");
-// The owner's v2 rules (LOOP-V2.md A3, C3): cost never sends a card to the owner; picture.model is measured, other models aren't.
-check(!cardOwnerReasons({ ...seeds[0], knobs: { "picture.model": 0 } }, { u1: true }).length && cardOwnerReasons({ ...seeds[0], knobs: { "draw.model": 2 } }, { u1: true }).some((r) => /model switch/.test(r)), "picture.model isn't measured, or another model switch isn't owner-listed");
-// Every knob that picks a model or who resolves is a model switch; render.pictureBox is the owner's (LOOP-V2.md B2).
-for (const k of ["router.fastModel", "router.fullModel", "resolve.engine", "resolve.jevModel", "draw.thinkJevModel"])
-  check(cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true }).some((r) => /model switch/.test(r)), `a card on ${k} isn't owner-listed as a model switch`);
-check(cardOwnerReasons({ ...seeds[0], knobs: { "render.pictureBox": 0 } }, { u1: true }).some((r) => /owner's knob/.test(r)) && !cardOwnerReasons({ ...seeds[0], knobs: { "router.fastMaxWords": 20 } }, { u1: true }).length, "render.pictureBox isn't the owner's, or a routing threshold is");
-// Model switches read off what the arms called, case by case, role labels unread (C3): every draw on the fast lane's
-// model (A used it too, for the camera); the draw relabelled; a switch among models both arms already call (the output
-// moves); a partial switch on a few cases. Not one: one case of 20, a call B adds with a model the case already uses,
-// output lengths that vary, a scan's lines.
-const call = (c, arm, role, model, outTokens = 1000, mode = "live") => ({ case: `c${c}`, arm, role, model, outTokens, mode });
-const lanes = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", c % 4 ? "sonnet" : "haiku"), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", "haiku"), call(c, "B", "camera", "haiku", 50)]).flat();
-const shifted = modelShifts(lanes);
-check(shifted.length === 1 && /differ on 15 of 20 cases.*dropped sonnet/.test(shifted[0]), `every draw on the fast model isn't a switch: ${JSON.stringify(shifted)}`);
-check(modelShifts(lanes.map((x) => (x.arm === "B" && x.role === "draw" ? { ...x, role: "draw2" } : x))).length === 1, "a relabelled draw call hides a switch");
-const swapped = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 2000), call(c, "A", "camera", "haiku", 100), call(c, "B", "draw", "haiku", 2000), call(c, "B", "camera", "sonnet", 100)]).flat();
-check(modelShifts(swapped).length === 1 && /moved output/.test(modelShifts(swapped)[0]), `a switch among models both arms call isn't seen: ${JSON.stringify(modelShifts(swapped))}`);
-const partial = Array.from({ length: 50 }, (_, c) => [call(c, "A", "picture", "sonnet"), call(c, "B", "picture", c < 4 ? "opus" : "sonnet")]).flat();
-check(modelShifts(partial).length === 1, "a picture switch on 4 of 50 cases isn't seen");
-const one = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 1500 + 40 * (c % 7)), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", c === 3 ? "opus" : "sonnet", 1700 - 30 * (c % 5)), call(c, "B", "camera", "haiku", 50), ...(c < 5 ? [call(c, "B", "describe", "haiku", 60)] : []), call(c, "B", "draw", "opus", 900, "scan")]).flat();
-check(!modelShifts(one).length, `one case of 20, a call with a model the case already uses, varying lengths or a scan read as a switch: ${JSON.stringify(modelShifts(one))}`);
-// A champion call replayed from the bank (its recorded tokens given), or a shared call's follower (it meters none), is
-// still a call: a prompt card whose B draws live beside A's replay, or a code card that shares A's draw, isn't a switch.
-const replayed = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 2000, "replay"), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", "sonnet", 1900), call(c, "B", "camera", "haiku", 50)]).flat();
-const shared = Array.from({ length: 20 }, (_, c) => [{ ...call(c, "A", "draw", "sonnet", 2000), reqHash: `d${c}`, shared: "leader" }, call(c, "A", "describe", "haiku", 300), { ...call(c, "B", "draw", "sonnet", 0), reqHash: `d${c}`, shared: "follower" }, call(c, "B", "describe", "haiku", 320)]).flat();
-check(!modelShifts(replayed).length && !modelShifts(shared).length, `a replayed or shared champion call read as a switch: ${JSON.stringify([modelShifts(replayed), modelShifts(shared)])}`);
-// A case cut off and run again on resume logs its requests again; a losing copy is dropped: each counts once, or not at all.
-const twice = (c, arm, extra) => [{ ...call(c, arm, "draw", "sonnet", 300), reqHash: `${arm}${c}` }, ...extra, call(c, arm, "picture", "haiku", 700)];
-const resumed = Array.from({ length: 20 }, (_, c) => [...twice(c, "A", c < 3 ? Array.from({ length: 5 }, () => ({ ...call(c, "A", "draw", "sonnet", 300), reqHash: `A${c}` })) : []), ...twice(c, "B", [])]).flat();
-const copied = Array.from({ length: 20 }, (_, c) => [...twice(c, "A", []), ...twice(c, "B", c < 3 ? [{ ...call(c, "B", "draw", "sonnet", 2000), reqHash: `B${c}`, dropped: true }] : [])]).flat();
-check(!modelShifts(resumed).length && !modelShifts(copied).length, `a resumed case's repeated calls, or a dropped copy, read as a switch: ${JSON.stringify([modelShifts(resumed), modelShifts(copied)])}`);
+// The owner's rules (LOOP-V2.md A3, C3): neither cost nor a model switch or router sends a card to the owner, every model
+// knob and who resolves is measured; render.pictureBox is the owner's (LOOP-V2.md B2).
+for (const k of ["picture.model", "draw.model", "describe.model", "router.fastModel", "router.fullModel", "resolve.engine", "resolve.jevModel", "draw.thinkJevModel", "router.fastMaxWords"])
+  check(!cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true }).length, `a card on ${k} is owner-listed: ${cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true })}`);
+check(cardOwnerReasons({ ...seeds[0], knobs: { "render.pictureBox": 0 } }, { u1: true }).some((r) => /owner's knob/.test(r)), "render.pictureBox isn't the owner's");
 
 // ---- The search (LOOP-V2.md D1, D3, D4): sweep and combo cards, knob literals, pruning, near wins.
 const search = await import("../loop/search.ts");
@@ -353,7 +329,7 @@ for (const cmd of ["npx tsc --noEmit", "./node_modules/.bin/tsc --noEmit && curl
 for (const cmd of ["./node_modules/.bin/tsc --noEmit", "git diff", "git status", "git diff --stat src/core/x.ts", "node --permission --allow-fs-read=. --import ./evals/loop/node-hooks.mjs scripts/tune.ts sets/marks.json --parts marks,arrow"])
   check(await allowed("Bash", { command: cmd }), `the engineer may not run ${cmd}`);
 check(BASH_ALLOW.some((re) => re.test("./node_modules/.bin/tsc --noEmit")) && !BASH_ALLOW.some((re) => /npx/.test(re.source)), "the allowlist isn't tsc without npx");
-check(JSON.stringify(CAPS) === JSON.stringify({ critic: { turns: 20, minutes: 8, usd: 1.5 }, engineer: { turns: 40, minutes: 15, usd: 2.5 } }), `CAPS ${JSON.stringify(CAPS)}`);
+check(JSON.stringify(CAPS) === JSON.stringify({ analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } }), `CAPS ${JSON.stringify(CAPS)}`);
 
 // ---- Agents on the fake API: the turn, $ and minute caps, cards, refused tools
 const token = { slot: 1, token: "sk-ant-oat01-fake-t18" };
@@ -391,13 +367,20 @@ sessions.push({ api: apiD, turns: eng.turns });
 check(eng.stop === "done" && eng.text === "Changed nothing: a check." && eng.wt === p.worktree("cand/e1-h9") && existsSync(join(eng.wt, "node_modules")), `the engineer's session: ${JSON.stringify(eng)}`);
 check(eng.denied.length === 3 && /^Read .*hostname/.test(eng.denied[0]) && /^Write .*Edit/.test(eng.denied[1]) && /^Bash .*npx/.test(eng.denied[2]) && readFileSync(join(eng.wt, "src/core/x.ts"), "utf8") === "export const x = 1;\n", `the engineer's refused tools: ${JSON.stringify(eng.denied)}`);
 await apiD.close();
+// The analyst: a read-only session that may search the web and read public pages, never this machine or its network.
+const web = toolRule(tree, { root: tree, edit: false });
+check(!web("WebSearch", { query: "model routing cascades" }) && !web("WebFetch", { url: "https://arxiv.org/abs/2404.14618", prompt: "p" }) && ["http://127.0.0.1:5400/status", "http://100.94.227.92:5182/", "http://localhost:5182/", "https://pgx.tail1a2b.ts.net/", "http://[::1]/", "file:///etc/passwd"].every((url) => web("WebFetch", { url, prompt: "p" })), "the web rule: search and public pages open, this machine and its network shut");
+const apiF = await startFakeApi({ port: PORTS.fakeA, script: script("analyst.json", [tool("WebFetch", { url: "http://100.94.227.92:5182/", prompt: "the sends" }, 0), { content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "draw"}]}' }] }]) });
+const agentsBefore = readMeter(p.calls).filter((l) => l.agent).length;
+const an = await analyst({ run: "e1", token, mockApi: mockOf(apiF), digest: "d", tree });
+check(an.includes('"hypotheses"') && apiF.requests.length === 2 && readMeter(p.calls).filter((l) => l.agent).length === agentsBefore + 1, `the analyst's session: ${an} (${apiF.requests.length} requests)`);
+await apiF.close();
 for (const s of sessions) check(s.api.requests.length === sessions.filter((x) => x.api === s.api).reduce((a, x) => a + x.turns, 0), `a fake API got ${s.api.requests.length} requests for ${s.turns} turns`);
 const agentLines = readMeter(p.calls).filter((l) => l.agent);
-check(agentLines.length === 5 && agentLines.every((l) => l.token === 1 && l.model === "claude-sonnet-5-5" && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
+check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === "claude-sonnet-5-5" && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
 
-// ---- The analyst and the failure analyst: one gateway call each, on the gateway's token slot
+// ---- The failure analyst: one gateway call, on the gateway's token slot
 mkdirSync(join(home, "replies"));
-writeFileSync(join(home, "replies", `analyst.${sha12(prompts.ANALYST_SYSTEM)}.txt`), '{"components": [], "hypotheses": [{"component": "draw"}]}');
 writeFileSync(join(home, "replies", `failure.${sha12(prompts.FAILURE_SYSTEM)}.txt`), 'Here: [{"case": "c1", "component": "draw", "evidence": "e", "tag": "t"}]');
 const apiE = await startFakeApi({ port: PORTS.fakeC, replies: join(home, "replies") });
 const tokensFile = join(home, "config", "tokens.env");
@@ -405,19 +388,17 @@ put(tokensFile, "RT_EVAL_TOKEN_1=sk-ant-oat01-fake-t18-gw\n");
 chmodSync(tokensFile, 0o600);
 const gw = await spawnGateway({ home, port: PORTS.gateway, tokens: tokensFile, mockApi: apiE.url, cap: 5 });
 try {
-  const a = await analyst(digest, "e1");
-  check(a.includes('"hypotheses"'), `the analyst's reply: ${a}`);
   const f = await failureAnalyst(fd, "e1");
   check(f.length === 1 && f[0].component === "draw", `the failure analyst's notes: ${JSON.stringify(f)}`);
   const t = await slotToken([{ slot: 1, token: "sk-ant-oat01-fake-t18-gw" }]);
   check(t.slot === 1, "slotToken didn't pick the gateway's current slot");
   const st = await gatewayStatus();
-  check(st.calls === 2 && apiE.requests.length === 2 && apiE.requests.map((r) => r.role).join() === "analyst,failure", `the gateway made ${st.calls} calls, the fake API got ${apiE.requests.length} (${apiE.requests.map((r) => r.role)})`);
+  check(st.calls === 1 && apiE.requests.length === 1 && apiE.requests.map((r) => r.role).join() === "failure", `the gateway made ${st.calls} calls, the fake API got ${apiE.requests.length} (${apiE.requests.map((r) => r.role)})`);
 } finally {
   await gw.close();
   await apiE.close();
 }
 const lines = readMeter(p.calls).filter((l) => !l.agent);
-check(lines.length === 2 && lines.map((l) => l.role).join() === "analyst,failure" && lines.every((l) => l.token === 1 && l.cacheWrite1h === 0), `the gateway's meter lines: ${JSON.stringify(lines)}`);
+check(lines.length === 1 && lines.map((l) => l.role).join() === "failure" && lines.every((l) => l.token === 1 && l.cacheWrite1h === 0), `the gateway's meter lines: ${JSON.stringify(lines)}`);
 check(!readFileSync(p.calls, "utf8").includes("sk-ant"), "a token reached the meter");
 finish();
