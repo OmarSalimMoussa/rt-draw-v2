@@ -6,7 +6,7 @@
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t12-judge.mjs
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
@@ -395,6 +395,12 @@ check(up2() - u2 === 24 && hc.detail.agree === 16 && hc.detail.n === 20 && hc.de
   `canary: ${up2() - u2} calls, ${JSON.stringify(hc.detail)}`);
 check(cl.length === 2 && cl[0].kind === "set" && cl[0].packets.length === 20 && cl[1].judgeId === J.judgeId("fidelity", SERVED), "canary.jsonl's set and run lines");
 check(!N.canaryDue(SERVED) && N.canaryDue("claude-sonnet-5-5-20261101") && N.canaryDue(SERVED, Date.now() + N.CANARY_EVERY_MS), "canaryDue isn't weekly and on a served-model change");
+// The set's run cleared away (a home's clean-up): the next run picks a new set from the runs there are.
+renameSync(join(home2, "runs", ST), join(home2, "runs", "newer-run"));
+const hc2 = await N.runCanary(SK);
+const cl2 = readFileSync(join(home2, "history", "judge", "canary.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const sets = cl2.filter((l) => l.kind === "set");
+check(hc2.detail.n === 20 && sets.length === 2 && sets[1].packets.every((k) => k.run === "newer-run"), `a canary set whose run is gone isn't picked again: ${JSON.stringify({ n: hc2.detail.n, sets: sets.length })}`);
 
 // ---- Nothing a judge was sent names an arm, commit, tuning, model, persona, rating or `testing`; the fakes saw only the gateways' calls.
 const all = [...api1.requests, ...api2.requests];
