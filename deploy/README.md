@@ -43,16 +43,16 @@ Signed in as omar@emberhub.dev:
    `Code.gs` with `deploy/mailer.gs`.
 2. **Project Settings → Script Properties:** add `SECRET`, with the value in
    `~/imagine-mailer-secret.txt` on Omar's laptop (the box has the same value as
-   `MAILER_SECRET` in `/srv/rtdraw/rtdraw-v2.env`). Optionally add `SHEET_ID`, the id of
+   `MAILER_SECRET` in the box's shared `/srv/emberhub.env`). Optionally add `SHEET_ID`, the id of
    a Google Sheet to keep a row per waitlist sign-up and invite.
 3. Choose **`authorise`** in the function dropdown, press **Run**, and accept. Its log
    should say `"secretSet": true` and a `quotaLeft` of 1500.
 4. **Deploy → New deployment → Web app.** Execute as: **Me**. Who has access:
    **Anyone** (every request without the secret is refused).
-5. Put the deployment URL, ending in `/exec`, on the box and restart:
+5. Put the deployment URL, ending in `/exec`, in the box's shared env file and restart:
 
    ```bash
-   ssh deploy@31.220.50.146 'echo "MAILER_URL=https://script.google.com/macros/s/…/exec" >> /srv/rtdraw/rtdraw-v2.env && cd /srv/rtdraw && RTDRAW_TAG=$(tail -1 deployed) docker compose up -d --wait'
+   ssh deploy@31.220.50.146 'sed -i "s|^MAILER_URL=.*|MAILER_URL=https://script.google.com/macros/s/…/exec|" /srv/emberhub.env && cd /srv/rtdraw && RTDRAW_TAG=$(tail -1 deployed) docker compose up -d --wait'
    ```
 
 A change to the script needs a new version of the deployment (Manage deployments →
