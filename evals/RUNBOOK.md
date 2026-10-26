@@ -178,7 +178,7 @@ update` (testers' sends from the last pull through to R1, every step but the own
 decision's numbers from its rows without the harness's code, numbers only.
 
 A loop stops on §6.7's rules (weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not passed, a
-sync conflict, the call cap, a blocked request), pauses on others (all slots past 0.60 of their five-hour window until the
+sync conflict, the call cap, a blocked request), pauses on others (all slots past 0.90 of their five-hour window until the
 earliest reset, overloads, disk, battery) and writes each to the owner list. Mornings: `/evals/progress/`,
 `owner-list.md`, `budget.jsonl`.
 
