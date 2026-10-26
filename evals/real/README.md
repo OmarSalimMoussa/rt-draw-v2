@@ -18,7 +18,7 @@ pull.sh (laptop)  →  rte real ingest  →  rte real render  →  rte real tria
 | `rte real triage --cap n` | Opus reads each session (11 sends per call, the whole session's words as context) and says, per send, what the person meant, whether it landed, the failure kinds (`prompts.ts` `CATEGORIES`) and whether a good result could be drawn for it | 1 per session (more past 11 sends) |
 | `rte real gold --cap n [--regold]` | For each send triage marked for gold that can replay (a send whose ink is lost can't enter R1, so it gets none) and has no gold yet: Opus at effort high, with none of the product's limits (gold is the ideal the product aims at), writes the product's own ops and draws every picture (no cap on elements or colors, detail matched to the ask), plus a rubric (should / must not) and free checks (`checks.ts`). The ops run on the before board with the product's `runScript`, the pictures go through `readPicture` (`gold.ts`), and gold is shot like a result. A prompt change doesn't redraw gold (the product's draw manual is part of gold's prompt, and the loop changes it); `--regold` redraws every unreviewed one | 1 per send |
 | `rte real review --host <tailscale ip>` | A page showing before, the app's result and gold side by side, with Approve and Reject (`review.ts`), on port 5182 | 0 |
-| `rte real freeze` | Accepted gold cases that replay become `real/bench/R1/<case>/`, one per distinct input (repeats merged), split R-tune / R-hold by person: the owner's sends tune, testers go to R-hold toward a third. Built aside and swapped in whole, and refused while a loop holds the lock. Gold drawn for a send that a later pull moved under the same key is left out (`sendHash`). A failure that a later commit fixed is the owner's to reject on the review page; a case both arms get right is a tie | 0 |
+| `rte real freeze` | Accepted gold cases that replay become `real/bench/R1/<case>/`, one per distinct input (repeats merged), split R-tune / R-hold by person: the owner's sends tune, testers go to R-hold toward a third (the split is reported; no proposer reads R-tune yet). Built aside and swapped in whole, and refused while a loop holds the lock. Gold drawn for a send that a later pull moved under the same key is left out (`sendHash`). A failure that a later commit fixed is the owner's to reject on the review page; a case both arms get right is a tie | 0 |
 
 Local sessions (the owner's dev server) count from `--since` (default 2026-10-22, when testers started on
 the hosted app); live ones always count. `--only <session>` runs one session.
@@ -44,5 +44,6 @@ ink as they were. Rebuilt sends without ink replay as typed words. Rebuilt sends
 
 ## Tradeoffs
 
-Nothing that makes imagine slower is kept on R1's say-so: a gain on R1 that costs latency or $ goes to the
-owner list.
+R1 decides nothing yet: it's scored beside every keep and checkpoint (`shadow.ts`) and reported, until the judge is
+calibrated on illustrations. A keep is decided on the bank's cases under the loop's rules, never slower first; cost is
+reported, never a reason to keep or drop a change.

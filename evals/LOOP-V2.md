@@ -30,20 +30,15 @@ re-validation passes and the owner has seen it.**
 | A5 | R1 rebuilt: duplicate inputs merged; split by person (the owner tunes, testers go to R-hold toward a third), not by session; every check fails a send that changed nothing; a case both arms already get right is a tie (the baseline and its `fixed.json` were removed on 2026-10-26: three rules in one evening, and the judge they leaned on isn't calibrated on illustrations). R1 runs beside every keep (after the keep's budget check, under its own run name, so its cost can't void the keep) and every checkpoint, and is reported in the ledger; it decides nothing until the judge is calibrated on illustrations. Every run on testers' sends (R1, its baseline, triage, gold) keeps its files and the gateway's records of its calls and images under `real/`, never `runs/` or `cache/`, which the pages server shows and `rte export` copies | `evals/real/real.ts`, `checks.ts`, `shadow.ts`, `evals/loop/run.ts`, `checkpoint.ts`, `history.ts`, `paths.ts`, `cache.ts` |
 | A6 | The checks that went stale pass again (below) | `evals/checks/` |
 
-**The tradeoff of "never slower".** The strict veto runs twice: on G2's cases and again on G3's held-out ones. With
-the session-swap test (t13 and an end-to-end simulation of whole decisions, 2026-10-25), a G2 at 48 cases from ~10
-sessions reverts 11% of changes that cost no latency, 29% of +5% slowdowns and 61% of +10% ones. Of the real
-fidelity winners Rule F keeps, the latency vetoes take 27% when they cost no latency (18 points at G2, 9 at G3) with
-separate vetoes, 18% with one pooled veto on G2's and G3's cases together. Overall such a winner is kept 42% of the
-time separate, 46.5% pooled; one 5% slower on first drawing 27% vs 23%, one 10% slower 9.5% vs 6% (the session
-bootstrap's 34% and 14% came from false alarms). Held-out cases from 4 sessions or fewer
-can't read surely anything (1/16 is the swap test's smallest p), so on a narrow card G3 vetoes nothing on latency: at
-these sample sizes no rule can promise "never slower" on a few sessions. **Pooled is better on both counts** (it keeps
-more winners and lets fewer slowdowns through); it misses only a slowdown confined to held-out sends, which for
-latency (unlike quality) there's no reason to expect. It is one switch, `LOOP.latVetoPooled`, left off: the owner's call. Pooled or not, a latency card keeps only with nothing surely slower on G2's own rows (its keep rule).
-Latency debt catches slow drift that single decisions miss; it starts on two checkpoints in a row and only once a
-same-run check of the champion at L against today's confirms it (chains alone started it in about a quarter of runs
-with no drift, since every chain since L shares L's own noisy link).
+**The tradeoff of "never slower".** One test decides (2026-10-26): a session-swap randomization test over every
+deciding stat at once (first drawing and render at the median, and their p90 and p95 once a tail holds 3 sends),
+family-wise, B surely slower at p < 0.05 (`verdict.ts` `latencyVeto`). A quality keep's veto reads G2's and G3's cases
+together, at G3. At 48 cases from ~10 sessions it reverts 4.7% of changes that cost no latency, where a test per stat on
+G2 and again on G3 reverted 10.7%; it catches 12.6% of 5% slowdowns and 33% of 10% ones, and on the ~80 cases a quality
+keep pools, 20% and 52% (t13). Held-out cases from 4 sessions or fewer can't read surely anything alone (1/16 is the
+swap test's smallest p); pooled with G2's they count. At these sample sizes no rule can promise "never slower" on a few
+sessions: each checkpoint measures the champion against A0 in the same run, and a surely slower champion goes on the
+owner list. A latency card keeps only with nothing surely slower on G2's own rows (its keep rule).
 
 **False keeps.** G3 must also lean the card's way once it has 8 affected held-out cases (fidelity or craft Z above
 0, a latency card's metric faster). A card that does nothing is kept about 1–2% of the time (quality) and 2.5%
@@ -154,6 +149,27 @@ void cap first; an engine that times out on the other arm's board is charged as 
 | H4 | A picture at fade 1 (render dims it to 0.3, not out) read as invisible; a brief change to a shown picture, later undone, counted | Effective opacity; a change counts only if the shape ends changed |
 | H5 | The effects gate flagged ordinary code (`filter: string`, `.blur()`, a `transition:` key, re-indenting today's fade filter) and missed SMIL, markup attributes, `setProperty`, `boxShadow` | CSS words only inside strings, style properties and animation APIs in code; only more effects added than removed |
 
+## Removed on 2026-10-26: what never changed a decision
+
+Two reviews of the harness found machinery that had never fired, or fired only falsely, in its history. The owner
+approved deleting it ("simplify, don't harden"):
+
+| What | Evidence | Now |
+|---|---|---|
+| Latency and quality debts, anchor moves, Q chains, era bridges | No debt ever started, the anchor never moved, and no bridge changed a decision | Every checkpoint runs the champion against A0, which never moves. A new judgeId or bench starts the next era, charted apart. A surely slower champion goes on the owner list |
+| The night cap, the window share, the calibrated W | Every slot that spent money had a five-hour reading from the server; W once calibrated to 4.6e-05 | A slot's use is the server's five-hour reading, its week the seven-day one |
+| The void rerun | Every rerun of a void voided again (the same harness asymmetry) | A void goes to the owner list; `rte decide --card` re-decides it once the cause is fixed |
+| The over-use hold | Its only hold, e65-h2, was false (the champion was over the cap itself) | Over-use is reported per arm, never decides |
+| Twelve latency tests per decision | 10.7% of changes that cost no latency reverted | One family-wise test, pooled on G2 and G3 (above) |
+| Warming a slot's first case only | 9 of 13 voids: a candidate's new prompt started cold, the champion's pools were warm | Every live case is warmed before it's timed |
+| Sampled craft, cards' `predicts` and `raisesCost`, the cost and overrun knobs | Never read by a decision | Gone |
+
+Why a decision went its way is now recorded as codes (`DecisionRow.codes`: latency, empty, pictures, heldout, floor,
+no-change, owner, …); the search reads them, and reads the words only for rows written before.
+
+**G0 is frozen as it stands.** A new gate, veto or hold needs evidence that it would have changed a decision in history,
+and replaces a rule rather than adding one.
+
 ## The checks
 
 All of `evals/checks/` at 0 real calls. Changed for v2: t2, t10 and t14 (Jev stubs and roles), t3 (later knobs and
@@ -170,7 +186,11 @@ t20 (debt checked against a metric's chain start, an unconfirmed check moves L).
 error), t6 (kept content only, a grown picture), t13 (`sameContent` board by board, render unmeasured goes to the
 owner), t18 (CSS effects, latency sweeps prune only on a veto), and t0's `SPEC_CONFIG_ID` (`renderUnmeasuredMax`). For
 H: t5 (a call cut short mid-stream is dropped, never banked or followed), t6 (a faded picture), t13 (cases timed on A's
-board alone count as unmeasured), t18 (effects moved, not added; ordinary code; G3's direction rule doesn't prune).
+board alone count as unmeasured), t18 (effects moved, not added; ordinary code; G3's direction rule doesn't prune). For
+the 2026-10-26 cleanup: t13 (one family-wise veto, its rates pinned again; decisions' codes), t20 (checkpoints against
+A0 alone, eras without bridges), t5 and t21 (no night cap, W or void rerun), t15 (every case warmed; a moved median is a
+schedule change whatever the session count), t18 (sweeps and near wins read codes), t23 (the real-use pipeline end to
+end on invented sessions), and t0's `SPEC_CONFIG_ID`. `npm run checks` runs the fast ones, `-- --slow` all.
 
 ## Re-validation (before any run)
 
