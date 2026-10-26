@@ -23,7 +23,10 @@ ssh "$PGX" bash -s -- "$branch" <<'EOF'
 set -euo pipefail
 branch=$1
 export PATH=$HOME/.local/share/pnpm:$HOME/.local/bin:$PATH RT_EVAL_HOME=$HOME/rt-eval
-[ -e "$RT_EVAL_HOME/lock" ] && { echo "deploy: the loop holds its lock ($(cat "$RT_EVAL_HOME/lock")): rte stop-after, then deploy" >&2; exit 1; }
+# The loop's lock (state.ts lock()): refused while its process lives; a crashed loop's stale lock resumes by itself.
+lock=$RT_EVAL_HOME/loop.lock
+pid=$([ -e "$lock" ] && sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$lock" || true)
+[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { echo "deploy: the loop holds its lock ($(cat "$lock")): rte stop-after, then deploy" >&2; exit 1; }
 from=$(node -e 'console.log(require(process.argv[1]).from)' "$RT_EVAL_HOME/init.json")
 echo "== $from: fast-forward to $branch"
 git -C "$from" fetch -q origin "$branch" && git -C "$from" merge -q --ff-only FETCH_HEAD
