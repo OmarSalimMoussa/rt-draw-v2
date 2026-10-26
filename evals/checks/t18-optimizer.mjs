@@ -283,6 +283,11 @@ check(!modelShifts(one).length, `one case of 20, a call with a model the case al
 const replayed = Array.from({ length: 20 }, (_, c) => [call(c, "A", "draw", "sonnet", 2000, "replay"), call(c, "A", "camera", "haiku", 50), call(c, "B", "draw", "sonnet", 1900), call(c, "B", "camera", "haiku", 50)]).flat();
 const shared = Array.from({ length: 20 }, (_, c) => [{ ...call(c, "A", "draw", "sonnet", 2000), reqHash: `d${c}`, shared: "leader" }, call(c, "A", "describe", "haiku", 300), { ...call(c, "B", "draw", "sonnet", 0), reqHash: `d${c}`, shared: "follower" }, call(c, "B", "describe", "haiku", 320)]).flat();
 check(!modelShifts(replayed).length && !modelShifts(shared).length, `a replayed or shared champion call read as a switch: ${JSON.stringify([modelShifts(replayed), modelShifts(shared)])}`);
+// A case cut off and run again on resume logs its requests again; a losing copy is dropped: each counts once, or not at all.
+const twice = (c, arm, extra) => [{ ...call(c, arm, "draw", "sonnet", 300), reqHash: `${arm}${c}` }, ...extra, call(c, arm, "picture", "haiku", 700)];
+const resumed = Array.from({ length: 20 }, (_, c) => [...twice(c, "A", c < 3 ? Array.from({ length: 5 }, () => ({ ...call(c, "A", "draw", "sonnet", 300), reqHash: `A${c}` })) : []), ...twice(c, "B", [])]).flat();
+const copied = Array.from({ length: 20 }, (_, c) => [...twice(c, "A", []), ...twice(c, "B", c < 3 ? [{ ...call(c, "B", "draw", "sonnet", 2000), reqHash: `B${c}`, dropped: true }] : [])]).flat();
+check(!modelShifts(resumed).length && !modelShifts(copied).length, `a resumed case's repeated calls, or a dropped copy, read as a switch: ${JSON.stringify([modelShifts(resumed), modelShifts(copied)])}`);
 
 // ---- The search (LOOP-V2.md D1, D3, D4): sweep and combo cards, knob literals, pruning, near wins.
 const search = await import("../loop/search.ts");

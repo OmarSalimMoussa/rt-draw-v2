@@ -327,11 +327,14 @@ const SHIFT_SHARE = 0.4;
  * replayed from the bank count (a scan's don't: it reads every banked case); a shared call's follower meters no tokens,
  * so it takes its leader's, and the caller gives a replay its recorded ones.
  */
-export function modelShifts(calls: { case?: string; arm?: string; model: string; mode?: string; outTokens?: number; reqHash?: string; shared?: string }[]): string[] {
+export function modelShifts(calls: { case?: string; arm?: string; model: string; mode?: string; outTokens?: number; reqHash?: string; shared?: string; dropped?: boolean }[]): string[] {
   type Arm = { models: Map<string, number>; out: number };
   const by = new Map<string, { A: Arm; B: Arm }>();
   const leaders = new Map(calls.filter((c) => c.shared === "leader").map((c) => [`${c.case} ${c.reqHash}`, c.outTokens ?? 0]));
-  for (const c of calls) {
+  // Each arm's request once, its last line: a case cut off and run again on resume sends its requests again. A copy its
+  // page dropped wasn't used.
+  const once = [...new Map(calls.filter((c) => !c.dropped).map((c, i) => [c.reqHash ? `${c.case} ${c.arm} ${c.reqHash}` : i, c] as const)).values()];
+  for (const c of once) {
     if (!c.case || (c.arm !== "A" && c.arm !== "B") || (c.mode !== "live" && c.mode !== "replay")) continue;
     const e = by.get(c.case) ?? by.set(c.case, { A: { models: new Map(), out: 0 }, B: { models: new Map(), out: 0 } }).get(c.case)!;
     const arm = e[c.arm];
