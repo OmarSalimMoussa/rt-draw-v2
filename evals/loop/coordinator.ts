@@ -154,7 +154,9 @@ async function halt(rte: Rte, gw: string, st: State, err?: unknown): Promise<boo
     await recheckWeeks(rte, gw);
     // A dry well's pause runs out after RULES.pauseEpochs epochs: with no keep there is no checkpoint, and every component
     // would stay paused until the epochs came up empty. Its reverts count again from here.
-    for (const c of st.paused.filter((x) => st.epoch - (st.pausedAt?.[x] ?? st.epoch) >= RULES.pauseEpochs)) {
+    // (A pause from before pausedAt existed starts its count now.)
+    for (const c of st.paused) (st.pausedAt ??= {})[c] ??= st.epoch;
+    for (const c of st.paused.filter((x) => st.epoch - st.pausedAt![x] >= RULES.pauseEpochs)) {
       st.paused = st.paused.filter((x) => x !== c);
       delete st.pausedAt?.[c];
       (st.wellFrom ??= {})[c] = new Date().toISOString();
