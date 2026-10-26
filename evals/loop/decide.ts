@@ -27,7 +27,7 @@ import { LockfileDiffers, treeOf, worktreeOf } from "./trees.ts";
 import type { Arm, CaseInfo, DecisionRow, Fork, HypothesisCard, Row, SceneJSON } from "./types.ts";
 import { type Decision, decide } from "./verdict.ts";
 import { realShadow } from "../real/shadow.ts";
-import { IDENT, type Rte, banked, championSha, commitAll, git, hasU1, isAncestor, maybe, msg, needBank, nextEpoch, sleep, tryGit, tuningIdOf } from "./rte.ts";
+import { IDENT, type Rte, championSha, commitAll, git, hasU1, isAncestor, maybe, msg, needBank, nextEpoch, scanCases, sleep, tryGit, tuningIdOf } from "./rte.ts";
 
 /** Request hashes this run already paid for: a resumed run gets them from the cache (§6.5's resume cache). */
 const paid = (run: string) => meterOf(run).filter((c) => product(c) && c.mode === "live" && c.shared !== "follower" && !c.apiError && !c.dropped).map((c) => c.reqHash);
@@ -173,7 +173,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   return rte.withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
     // G1: the diffscan at 0 calls (a finished scan is read back on resume).
     const scanRun = run("scan");
-    const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: banked(["tuning", "fresh", "heldout-gate"]) }));
+    const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) }));
     const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? [])];
     Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
     if (rte.o.f["quality-only"] && sc.class === "S") {

@@ -230,7 +230,7 @@ as eval/history-import), then `rte init --refresh` there.
 |---|---|
 | `repo/` | the loop's clone of the owner's master; `loop/champion`, `cand/e<E>-h<n>` branches, tag `eval-harness-<n>` |
 | `history/` | worktree of the orphan `eval/history`: decisions, checkpoints, epochs, budget, ledger, owner list, tried patches, bench/ |
-| `bank/cases/` | banked fork points (`c-<bank>-s<session>-<n>`); `bank/archive/` retired ones |
+| `bank/cases/` | banked fork points (`c-<bank>-s<session>-<n>`); `bank/archive/` a refused refresh's cases (none retire) |
 | `runs/<run>/` | every run's cases, rows, verdict; run ids `<stamp>-e<E>-h<n>-{g0,scan,ab}` |
 | `cache/replies/`, `cache/blobs/` | model replies by request hash, images |
 | `meter/calls.jsonl`, `meter/slots.json` | one line per model call (slot numbers only), each slot's window and week |

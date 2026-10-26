@@ -11,6 +11,7 @@ import { bankRefuses } from "./bank.ts";
 import type { Page } from "./chrome.ts";
 import { spawnGateway } from "./client.ts";
 import type { Pages } from "./drive.ts";
+import { LOOP } from "./config.ts";
 import { closedPort } from "./gateway.ts";
 import { historyRows } from "./history.ts";
 import type { Machine } from "./load.ts";
@@ -173,6 +174,11 @@ export function banked(sets: string[]): string[] {
 }
 /** Cases in a seeded order that keeps each origin session together (as decisions enter them). */
 export const ordered = (ids: string[], seed: string) => entryOrder(ids, (id) => maybe<CaseInfo>(join(paths().bankCase(id), "case.json"))!.originSession, seedOf(seed));
+/**
+ * What a decision's diffscan runs: every H-gate case, and every tuning case up to LOOP.bank.scanMax; past it a sample of
+ * whole sessions seeded by the decision, a different one each time, so no case drops out for good.
+ */
+export const scanCases = (seed: string) => [...ordered(banked(["tuning", "fresh"]), seed).slice(0, LOOP.bank.scanMax), ...banked(["heldout-gate"])].sort();
 
 /** A bank that failed §2.3 is used by nothing after it (bench, checkpoints, calibration, decisions) until rebuilt or accepted. */
 export function needBank() {

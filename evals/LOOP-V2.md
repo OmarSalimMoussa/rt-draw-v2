@@ -161,6 +161,7 @@ approved deleting it ("simplify, don't harden"):
 | The void rerun | Every rerun of a void voided again (the same harness asymmetry) | A void goes to the owner list; `rte decide --card` re-decides it once the cause is fixed |
 | The over-use hold | Its only hold, e65-h2, was false (the champion was over the cap itself) | Over-use is reported per arm, never decides |
 | Twelve latency tests per decision | 10.7% of changes that cost no latency reverted | One family-wise test, pooled on G2 and G3 (above) |
+| Retiring the 40 oldest tuning cases at each bank refresh | It never ran (no refresh yet); the owner wants old cases kept | Every case stays. Past `LOOP.bank.scanMax` (800) tuning cases, each decision's free diffscan takes its own seeded sample of whole sessions, so none drops out for good |
 | Warming a slot's first case only | 9 of 13 voids: a candidate's new prompt started cold, the champion's pools were warm | Every live case is warmed before it's timed |
 | Sampled craft, cards' `predicts` and `raisesCost`, the cost and overrun knobs | Never read by a decision | Gone |
 

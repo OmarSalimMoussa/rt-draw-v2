@@ -152,6 +152,26 @@ for (let k = 1; k <= 8; k++) for (let n = 1; n <= 4; n++) bankCase(`c-h-s${k}-${
 for (let k = 1; k <= 32; k++) for (let n = 1; n <= 2; n++) bankCase(`c-t-s${String(k).padStart(2, "0")}-${n}`, "tuning", `t-s${k}`, n, ASKS[(2 * k + 3 * n) % 8]);
 bankCase("c-g-s1-1", "heldout-gate", "g-s1", 1, "add");
 
+// ---- A decision's scan: no case retires, so past LOOP.bank.scanMax tuning cases each decision scans its own seeded
+// sample of whole sessions; under it, every case, as before the cap.
+{
+  const { scanCases } = await import("../loop/rte.ts");
+  const { LOOP } = await import("../loop/config.ts");
+  const all = scanCases("d1");
+  check(all.length === 65 && all.join() === [...all].sort().join(), `under the cap the scan didn't take all 64 tuning cases and the H-gate case, sorted: ${all.length}`);
+  const max = LOOP.bank.scanMax;
+  LOOP.bank.scanMax = 20;
+  const draws = ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"].map((s) => scanCases(s));
+  const again = scanCases("d1");
+  LOOP.bank.scanMax = max;
+  const tuningOf = (ids) => ids.filter((id) => id.startsWith("c-t-"));
+  const sessions = (ids) => new Set(tuningOf(ids).map((id) => id.replace(/-\d+$/, ""))).size;
+  check(draws.every((d) => tuningOf(d).length === 20 && sessions(d) === 10 && d.includes("c-g-s1-1")) && again.join() === draws[0].join(),
+    `past the cap a scan isn't 20 tuning cases in 10 whole sessions plus the H-gate case, the same for the same decision: ${draws.map((d) => `${tuningOf(d).length}/${sessions(d)}`).join(" ")}`);
+  const seen = new Set(draws.flatMap(tuningOf)).size;
+  check(new Set(draws.map((d) => d.join())).size === draws.length && seen >= 48, `8 decisions' samples aren't all different or reach only ${seen} of the 64 tuning cases`);
+}
+
 // ---- bench freeze: 32 H-chart + 32 tuning (one per session), a manifest whose hash recomputes; tampering is caught.
 const hist = H.openHistory();
 check(fails("-C", repo, "merge-base", "eval/history", "master") && existsSync(`${p.history}.void`) && JSON.parse(git("-C", repo, "show", "eval/history:judge/ids.json"))["j-early"], "a file written before the worktree wasn't adopted onto the orphan branch");

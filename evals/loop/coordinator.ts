@@ -220,7 +220,7 @@ async function between(rte: Rte, gw: string, st: State) {
         const no = await probed(rte, ctx, slots[0].A);
         if (no) throw new Error(no);
         const r = await refresh(ctx, slots, n);
-        rte.say(`refresh ${n}: ${r.cases.length} new cases, ${r.retired.length} to bank/archive${r.fails.length ? ` (the new cases failed ${r.fails.join("; ")})` : ""}`);
+        rte.say(`refresh ${n}: ${r.cases.length} new cases ${r.fails.length ? `refused, to bank/archive (the bank with them failed ${r.fails.join("; ")})` : "added"}`);
       });
     } catch (err) {
       ownerItem(`bank refresh ${n} failed: ${msg(err)}`);

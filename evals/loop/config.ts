@@ -53,9 +53,11 @@ export const LOOP = {
   // checkpoints (§5.2): the champion against A0, which never moves. bootstrap: the share band's draws of whole sessions,
   // and the swap test's random patterns past 11 sessions.
   checkpointEveryKeeps: 2, overfitGap: 0.15, bootstrap: 2000,
-  // bank (§2.1); B1 = all 32 H-chart cases + 32 tuning cases
+  // bank (§2.1); B1 = all 32 H-chart cases + 32 tuning cases. A refresh adds cases and none retire (the owner,
+  // 2026-10-26: old cases stay relevant). Past scanMax tuning cases, each decision's diffscan takes its own seeded
+  // sample of them (rte.ts scanCases): the scan replays ~0.2 s a case on the PGX, so 800 is about 3 minutes.
   bank: { tuning: 160, heldoutGate: 32, heldoutChart: 32, tuningSends: 5, heldoutSends: 4, refreshEveryKeeps: 5,
-          refreshCases: 40 },
+          scanMax: 800 },
   bench: { heldout: 32, tuning: 32 },
   // owner steps (§8.6)
   sync: { minHours: 24, sceneFailMax: 0.10 },

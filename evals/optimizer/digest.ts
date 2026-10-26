@@ -39,7 +39,7 @@ const read = <T>(file: string): T | undefined => {
 const cut = (s: string | undefined, n = DIGEST.textChars) => (!s ? "" : s.length > n ? `${s.slice(0, n - 1)}…` : s).replace(/\s+/g, " ");
 const q = (s?: string) => `"${cut(s)}"`;
 
-/** A banked case's folder: the bank, or the archive it retired to. */
+/** A banked case's folder: the bank, or the archive (cases from before 2026-10-26 could retire there). */
 const bankDir = (id: string) => (existsSync(paths().bankCase(id)) ? paths().bankCase(id) : join(paths().bankArchive, id));
 const bank = <T>(id: string, f: string) => read<T>(join(bankDir(id), f));
 /** Only tuning cases (the bank's, refreshes' and top-ups') are ever digested: held-out ones would teach the optimizer the yardstick. */
