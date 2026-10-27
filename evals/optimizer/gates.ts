@@ -289,13 +289,23 @@ export function sceneRoundTrip(tree: string, files: string[]): { loaded: number;
   }
 }
 
+/** The caps the owner ruled out (LOOP-V2.md B1): a picture's elements and colors, where 0 is none. */
+const NO_CAPS = ["picture.maxPaths", "picture.colors"];
+/** A default that sets one of them: a reject (e77-h2's and e82-h1's sweeps set them, six decisions on a rule the owner made). */
+export function capGate(files: FileDiff[]): Finding[] {
+  return (files.find((f) => f.path === "src/core/tuning.ts")?.added ?? []).flatMap((l) => {
+    const m = /\bK\("([\w.]+)",\s*(-?[\d.]+)/.exec(l);
+    return m && NO_CAPS.includes(m[1]) && Number(m[2]) !== 0 ? [{ verdict: "reject" as const, why: `${m[1]} ${m[2]}: no caps on a picture's elements or colors (the owner's rule, LOOP-V2.md B1)` }] : [];
+  });
+}
+
 /**
  * G0 on a candidate: the diff's checks first (cheapest), then, given its tree, the typecheck and the scene round trip.
  * Any finding stops it: a reject wins over an owner item.
  */
 export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?: boolean }): G0Result {
   const files = parseDiff(o.diff);
-  const all = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files)];
+  const all = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files), ...capGate(files)];
   // The owner's say-so (rte decide --owner-ok) waives the findings that are the owner's call; a reject still stands.
   const waived = o.ownerOk ? all.filter((f) => f.verdict === "owner") : [];
   const found = all.filter((f) => !waived.includes(f));

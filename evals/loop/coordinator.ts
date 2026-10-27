@@ -195,6 +195,7 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
     ...(rte.o.f["quality-only"] ? ["latency-goal cards: this run is --quality-only (they wait for the PGX)"] : []),
     ...(!hasU1() ? ["cards on the ink readers (marks, arrow, hit, link): no U1 set to check them on, they go to the owner"] : []),
     "patch knobs and frozen areas: they go to the owner unmeasured",
+    "a cap on a picture's elements or colors (picture.maxPaths, picture.colors above 0): the owner ruled caps out",
     ...(!variants().illustrationsCalibrated ? ["a keep that switches the picture model (a picture.*Model knob): held for the owner until the judge is calibrated on illustrations"] : []),
   ];
   const digest = analystDigest({
