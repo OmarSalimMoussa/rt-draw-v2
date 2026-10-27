@@ -10,6 +10,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { calib, checkpointCmd, packetsCmd, syncCmd } from "./commands/checkpoint.ts";
+import { noteCmd } from "./commands/note.ts";
 import { realCmd } from "./commands/real.ts";
 import { aaCmd, bakeCmd, bankCmd, benchCmd, costCmd, exportTo, gc, humanCmd, init, ladderCmd, probeCmd, readyCmd, smoke, status } from "./commands/setup.ts";
 import { loop, stopAfterCmd, weekCmd } from "./coordinator.ts";
@@ -33,13 +34,15 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
   week --cap n            (reads again the weekly use of each token parked on an old reading, one one-word call each)
   status (each token's use too)        cost <run>… (calls and list $, sub-runs included)   remetric <run>   gc --trees
-  packets <run>… (frames the changes a run's after captures missed, 0 calls)`;
+  packets <run>… (frames the changes a run's after captures missed, 0 calls)
+  note [<thread> "<text>" [--resolve] | <thread> --resolve | new "<text>"]   (the owner's threads on the progress page: no thread lists
+       those where he wrote last; a reply is Claude's, in $RT_EVAL_HOME/notes/threads.jsonl)`;
 
 /** Each command, given the command line (rte.ts' Rte): the commands are in commands/, decide.ts and coordinator.ts. */
 const COMMANDS: Record<string, (rte: Rte) => Promise<number | void>> = {
   init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd, real: realCmd,
   checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, week: weekCmd, status,
-  remetric: async (rte) => void rte.say(`remetric: ${js(remetric(rte.o.pos[1]))}`), gc, packets: packetsCmd, cost: costCmd,
+  remetric: async (rte) => void rte.say(`remetric: ${js(remetric(rte.o.pos[1]))}`), gc, packets: packetsCmd, cost: costCmd, note: noteCmd,
 };
 
 if (import.meta.main) {

@@ -2,7 +2,9 @@
 // temp RT_EVAL_HOME's history worktree and served by the real /api/eval/history)
 // with all 6 panels at 1280 and 390 px, its owner steps, era and marker ticks, a band
 // and line per era, hollow points and the slower-than-A0 ring where §5.4 puts them,
-// and a decision row opens its cases and calls. One headless
+// a decision row opens its cases and calls, and "Needs you" lists what waits for the
+// owner (held first, the count in the tab title), sends his note, shows Claude's reply
+// at the next poll with a half-typed answer kept, and resolves an item. One headless
 // Chrome; every /api/* request goes through a counted stub to the pages server's
 // endpoints. 0 model calls: there is no model endpoint and no stub for one.
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t17-progress.mjs
@@ -31,13 +33,13 @@ check(evals >= 0 && cardAt("/evals/progress/") > evals && cardAt("/evals/label/"
 // ---- The sample history in the worktree, plus what only a live loop writes.
 const SAMPLE = join(ROOT, "evals/progress/sample");
 mkdirSync(join(home, "history"));
-for (const f of readdirSync(SAMPLE)) copyFileSync(join(SAMPLE, f), join(home, "history", f));
+// The sample's threads go where the page's go, notes/ (never history/, which is pushed).
+for (const f of readdirSync(SAMPLE)) copyFileSync(join(SAMPLE, f), f === "threads.jsonl" ? (mkdirSync(join(home, "notes")), join(home, "notes", f)) : join(home, "history", f));
 const rows = (f) => readFileSync(join(SAMPLE, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const cks = rows("checkpoints.jsonl");
 const epochs = rows("epochs.jsonl");
 const at = (e) => epochs.find((x) => x.epoch === e).at;
 put(join(home, "history/health.jsonl"), [{ at: at(2), kind: "calib", pass: true, detail: {} }, { at: at(12), kind: "canary", pass: true, detail: {} }].map((r) => JSON.stringify(r)).join("\n") + "\n");
-put(join(home, "history/owner-list.md"), "# Owner list\n\n- [ ] e19-h2: patch to src/core/render.ts\n- [x] done one\n- [ ] craft not calibrated yet\n");
 put(join(home, "heartbeat.json"), JSON.stringify({ wall: Date.now(), mono: 1 }));
 put(join(home, "state.json"), JSON.stringify({ status: "running", phase: "e21-h1 measuring", slot: 2 }));
 
@@ -57,7 +59,7 @@ const proxy = ({ url, method, body }) => {
   const u = new URL(url);
   return fetch(`http://127.0.0.1:${PORT}${u.pathname}${u.search}`, { method, body: method === "GET" ? undefined : body }).then(async (r) => ({ status: r.status, type: r.headers.get("content-type"), body: Buffer.from(await r.arrayBuffer()) }));
 };
-const c = await openChrome({ width: 1280, height: 900, stubs: Object.fromEntries(["history", "file", "calls"].map((p) => [`/api/eval/${p}`, proxy])) });
+const c = await openChrome({ width: 1280, height: 900, stubs: Object.fromEntries(["history", "file", "calls", "threads"].map((p) => [`/api/eval/${p}`, proxy])) });
 const { page } = c;
 await page.goto("about:blank");
 const jpeg = await page.shot({ format: "jpeg", quality: 80, clip: { x: 0, y: 0, width: 640, height: 400, scale: 1 } });
@@ -117,7 +119,7 @@ const verify = (w) => {
   check(r.hollow[0] >= 1 && r.hollow[1] >= 3 && !r.strayHollow.length, `${w} px: hollow points ${r.hollow}, joined by a trend line: ${r.strayHollow}`);
   check(r.cost[0] === 1 && r.cost[1] === 1 && /List \$ per decision/.test(r.cost[2]) && /Minutes per decision/.test(r.cost[2]) && /v1: ~120 min per decision/.test(r.cost[2]) && /doc as written: 75 min/.test(r.cost[2]), `${w} px: the cost panel's per-decision charts, v1's band or the doc-as-written point (${r.cost[0]} bands, ${r.cost[1]} points)`);
   check(!/window per decision|estimated from list/.test(r.cost[2]), `${w} px: the cost panel still shows a five-hour-window share or a list-$ weekly estimate`);
-  check(/running/.test(r.status) && /\d+ GB free/.test(r.status) && /~\d+ days left|days left: plenty/.test(r.status) && /owner list: 2 open/.test(r.status) && /token 2/.test(r.status), `${w} px: status strip reads "${r.status.replace(/\s+/g, " ").trim()}"`);
+  check(/running/.test(r.status) && /\d+ GB free/.test(r.status) && /~\d+ days left|days left: plenty/.test(r.status) && /owner list: 5 open/.test(r.status) && /token 2/.test(r.status), `${w} px: status strip reads "${r.status.replace(/\s+/g, " ").trim()}"`);
   check(/against A0/.test(r.qualityTitle) && !/anchor/.test(r.qualityTitle), `${w} px: the quality title reads "${r.qualityTitle}", not against A0`);
   check(r.decisions === rows("decisions.jsonl").length, `${w} px: ${r.decisions} decision rows`);
 };
@@ -144,8 +146,38 @@ check(/fidelity/.test(callsText) && /claude-sonnet-5-5-20261101/.test(callsText)
 await page.eval(`document.querySelector('[data-calls] tr[data-call="2"]').click()`);
 await waitFor(`/SYSTEM PROMPT 2/.test(document.querySelector("[data-call-detail]")?.innerText ?? "") && /reply 2/.test(document.querySelector("[data-call-detail]").innerText)`, "the call's request and reply");
 
+// ---- Needs you: held first, then newest first; the count in the title; a note sent, Claude's reply at the next poll.
+const notesFile = join(home, "notes/threads.jsonl");
+const noteLines = () => readFileSync(notesFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const NEEDS = `(() => ({ items: [...document.querySelectorAll("#needs [data-items] > li")].map((l) => [l.dataset.item, l.classList.contains("held")]), chats: document.querySelectorAll("#needs [data-chats] > li").length,
+  title: document.title, badge: document.querySelector("#needs [data-count]")?.textContent, first: document.body.querySelector(".needs-wrap, main") === document.querySelector(".needs-wrap"),
+  settled: document.querySelector("#needs details")?.textContent ?? "", e20: document.querySelector('#needs [data-item="e20-h2"]')?.innerText ?? "" }))()`;
+let nv = await page.eval(NEEDS);
+const DRY = "2026-10-20-dry-well-6-reverts-in-a-row-on-draw";
+check(JSON.stringify(nv.items) === JSON.stringify([["e19-h3", true], ["e20-h2", false], ["e18-h3", false], [DRY, false]]) && nv.chats === 1 && nv.first, `Needs you lists ${JSON.stringify(nv.items)} and ${nv.chats} side chats${nv.first ? "" : ", not above the panels"}`);
+check(nv.title.startsWith("(5) ") && nv.badge === "5" && /e15-h3/.test(nv.settled), `the count reads "${nv.title}" / ${nv.badge}, or e15-h3 isn't under resolved (${nv.settled})`);
+const type = (key, text) => page.eval(`(() => { document.querySelector('#needs [data-open="${key}"]').click(); const t = document.querySelector('#needs textarea[data-key="${key}"]'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+const before = noteLines().length;
+await type("e20-h2", "Is the over-use real?");
+await page.eval(`document.querySelector('#needs [data-to="e20-h2"]').click()`);
+await waitFor(`document.title.startsWith("(4) ") && /waiting for Claude/.test(document.querySelector('#needs [data-item="e20-h2"]').innerText)`, "the owner's note on e20-h2");
+const sent = noteLines().at(-1);
+check(noteLines().length === before + 1 && sent.thread === "e20-h2" && sent.who === "owner" && sent.text === "Is the over-use real?", `the page wrote ${JSON.stringify(sent)}`);
+// Half an answer on e18-h3 while Claude replies on e20-h2: the reply lands at the 20 s poll, the draft and caret stay.
+await type("e18-h3", "half an answer");
+await page.eval(`document.querySelector('#needs textarea[data-key="e18-h3"]').focus()`);
+const { addNote } = await import("../pages/plugin.ts");
+addNote({ thread: "e20-h2", who: "claude", text: "Real: the next card scopes snaps to the shapes touched." });
+await waitFor(`/the next card scopes snaps/.test(document.querySelector('#needs [data-item="e20-h2"]').innerText)`, "Claude's reply without a reload", 25_000);
+nv = await page.eval(NEEDS);
+const kept = await page.eval(`({ v: document.querySelector('#needs textarea[data-key="e18-h3"]').value, focus: document.activeElement?.dataset.key })`);
+check(nv.title.startsWith("(5) ") && /Claude replied/.test(nv.e20) && kept.v === "half an answer" && kept.focus === "e18-h3", `after Claude's reply: "${nv.title}", draft ${JSON.stringify(kept)}`);
+await page.eval(`document.querySelector('#needs [data-resolve="e18-h3"]').click()`);
+await waitFor(`!document.querySelector('#needs [data-items] [data-item="e18-h3"]') && /e18-h3/.test(document.querySelector("#needs details").textContent)`, "e18-h3 resolved");
+check(noteLines().at(-1).resolved === true && noteLines().at(-1).text === "half an answer" && (await page.eval("document.title")).startsWith("(4) "), `resolving e18-h3 wrote ${JSON.stringify(noteLines().at(-1))}`);
+
 const n = c.counts();
-check(n.seen === n.stubbed && n["/api/eval/history"] >= 1 && n["/api/eval/calls"] === 1 && !n["/api/model"], `seen ${n.seen} != stubbed ${n.stubbed}: ${JSON.stringify(n)}`);
+check(n.seen === n.stubbed && n["/api/eval/history"] >= 1 && n["/api/eval/calls"] === 1 && n["/api/eval/threads"] >= 4 && !n["/api/model"], `seen ${n.seen} != stubbed ${n.stubbed}: ${JSON.stringify(n)}`);
 check(!c.errors.length, `page errors: ${c.errors.join(" | ")}`);
 const left = await c.close();
 check(left === 0, `${left} Chrome processes left`);

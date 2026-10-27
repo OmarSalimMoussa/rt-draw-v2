@@ -68,6 +68,8 @@ export function paths(home?: string) {
     calls: at("meter", "calls.jsonl"),
     labels: at("labels", "labels.jsonl"),
     human: at("human"),
+    /** The owner's and Claude's threads beside the progress page's "Needs you": never in history/, which is public. */
+    notes: at("notes", "threads.jsonl"),
     /** RT_DATA_DIR for any product plugin the harness starts. */
     data: at("data"),
     /** The empty CLAUDE_CONFIG_DIR for every Claude process the harness starts. */

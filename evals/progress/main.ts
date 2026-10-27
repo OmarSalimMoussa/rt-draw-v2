@@ -4,13 +4,17 @@
 // decisions with every case and call behind them, health, and the loop's status.
 // Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the
 // eval/history branch); the page holds no state and polls every 60 s while the
-// loop's heartbeat is fresh. ?sample=1 draws the fake history in ./sample/.
+// loop's heartbeat is fresh. Above it all, "Needs you" (attention.ts): what waits
+// for the owner, each with a thread he writes in and Claude answers through
+// `rte note` ($RT_EVAL_HOME/notes/threads.jsonl, outside git), read every 20 s.
+// ?sample=1 draws the fake history in ./sample/ (its threads kept in memory).
 // Rows written before 2026-10-26 may carry Q, anchor moves, chained ratios and
 // debts: the page ignores them, and skips their "anchor" markers.
 import { openModal } from "../../src/modal.ts";
 import { $, shell } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
 import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, SmokeRow } from "../loop/types.ts";
+import { type Item, type Note, type Thread, chatId, isChat, needsYou, yourTurn } from "./attention.ts";
 import { type Dot, type Frame, INK, type XY, frame, legend } from "./charts.ts";
 
 shell("", "Eval progress: what the loop kept and reverted, quality against A0 (a frozen first champion) on cases no decision sees, latency, and what it cost against v1. Read from the eval/history branch; no model call.");
@@ -48,6 +52,7 @@ function parse(h: History) {
     smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]),
     /** Open owner-list items: unchecked markdown tasks. */
     ownerOpen: (f["owner-list.md"]?.match(/^\s*- \[ \]/gm) ?? []).length,
+    ownerList: f["owner-list.md"] ?? "",
   };
 }
 
@@ -377,6 +382,146 @@ async function drill(dec: DecisionRow) {
   });
 }
 
+// ---- Needs you: what waits for the owner, newest first, each with its thread
+
+const NOTES_MS = 20_000;
+const TITLE = document.title;
+const SAMPLE = new URLSearchParams(location.search).has("sample");
+const VERDICT: Record<DecisionRow["verdict"], string> = { keep: "kept", revert: "reverted", void: "void", owner: "held" };
+let notes: Note[] = [];
+let sampleNotes: Note[] | undefined;
+let notesError: string | undefined;
+let sendError: string | undefined;
+/** What he is typing and which forms are open: a redraw (a reply landing) keeps both, and the caret. */
+const drafts = new Map<string, string>();
+const opened = new Set<string>();
+let settledOpen = false;
+
+const now = () => (SAMPLE && data ? data.status.now : Date.now());
+const noteHtml = (n: Note) =>
+  `<div class="note ${n.who}"><span class="stat muted">${n.who === "owner" ? "you" : "Claude"}, ${ago(Math.max(0, now() - Date.parse(n.at)))}${n.resolved === true ? " · resolved" : n.resolved === false ? " · reopened" : ""}</span>${n.text ? `<div class="text">${esc(n.text)}</div>` : ""}</div>`;
+const turnChip = (t?: Thread) => (!t?.last ? "" : t.last.who === "claude" ? '<span class="chip reply">Claude replied</span>' : '<span class="chip">waiting for Claude</span>');
+const form = (key: string, resolvable: boolean) =>
+  `<div data-form="${esc(key)}"${opened.has(key) || drafts.get(key) ? "" : " hidden"}><textarea data-key="${esc(key)}" rows="3" placeholder="${key === "new" ? "A side chat with Claude, about anything" : "Your answer or comment; Claude replies here"} (Ctrl+Enter sends)">${esc(drafts.get(key) ?? "")}</textarea>` +
+  `<div class="row"><button class="primary" data-to="${esc(key)}">Send</button>${resolvable ? `<button data-to="${esc(key)}" data-and-resolve>Send and resolve</button>` : ""}</div></div>`;
+const acts = (key: string, links = "") => `<div class="row acts">${links}<button data-open="${esc(key)}">answer</button><button data-resolve="${esc(key)}">resolve</button></div>`;
+
+function itemHtml(it: Item) {
+  const d = it.decision;
+  const link = (f: string, label: string) => `<a href="/api/eval/history?f=${encodeURIComponent(f)}" target="_blank" rel="noopener">${label}</a>`;
+  const links = d ? `<button data-drill="${esc(d.id)}">cases and calls</button>${link("ledger.md", "ledger")}${d.kind === "card" && d.verdict !== "keep" ? link(`tried/${d.id}.patch`, "patch") : ""}` : "";
+  const state = it.held ? '<span class="chip held">held for your call</span>' : d ? `<span class="chip">${VERDICT[d.verdict]}</span>` : it.notice ? '<span class="chip">notice</span>' : "";
+  const meta = [d?.card?.component, d?.goal === "owner" ? undefined : d?.goal, it.date].filter(Boolean).join(" · ");
+  return `<li class="item${it.held ? " held" : ""}${it.turn ? "" : " answered"}" data-item="${esc(it.id)}"><div class="row">${state}${it.notice ? "" : `<b>${esc(it.id)}</b>`}<span class="muted">${esc(meta)}</span>` +
+    `${it.since ? `<span class="chip">re-decided since: ${VERDICT[it.since.verdict]} (${esc(it.since.id)})</span>` : ""}${turnChip(it.thread)}</div>` +
+    `<p class="what"${d?.card ? ` title="${esc(d.card.change)}"` : ""}>${esc(it.what)}</p>${it.why.length ? `<ul class="why">${it.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}` +
+    `${(it.thread?.notes ?? []).map(noteHtml).join("")}${acts(it.id, links)}${form(it.id, true)}</li>`;
+}
+const chatHtml = (t: Thread) =>
+  `<li class="item${t.last?.who === "owner" ? " answered" : ""}" data-item="${esc(t.id)}"><div class="row"><span class="chip">side chat</span><span class="muted">${esc(t.id)}</span>${turnChip(t)}</div>${t.notes.map(noteHtml).join("")}${acts(t.id)}${form(t.id, true)}</li>`;
+
+function needs() {
+  if (!data) return;
+  const host = $("#needs");
+  const n = needsYou(data.ownerList, data.decisions, notes);
+  const count = yourTurn(n);
+  document.title = count ? `(${count}) ${TITLE}` : TITLE;
+  const held = n.items.filter((x) => x.held).length;
+  const answered = n.items.filter((x) => !x.turn).length + n.chats.filter((t) => t.last?.who === "owner").length;
+  const replies = [...n.items.map((x) => x.thread), ...n.chats].filter((t) => t?.last?.who === "claude").length;
+  const parts = [held && `${held} held for your call`, n.items.length - held && `${n.items.length - held} on the owner list`, replies && `${replies} answered by Claude`, answered && `${answered} waiting for Claude`];
+  const active = document.activeElement;
+  const caret = active instanceof HTMLTextAreaElement && host.contains(active) ? { key: active.dataset.key!, at: [active.selectionStart, active.selectionEnd] as const } : undefined;
+  const quiet = !n.items.length && !n.chats.length;
+  const settled = [...n.settled.map((x) => [x.id, x.what] as const), ...n.closed.map((t) => [t.id, t.last?.text ?? ""] as const)];
+  host.hidden = false;
+  host.classList.toggle("quiet", quiet);
+  host.innerHTML = `<div class="row"><h2>${quiet ? "Nothing needs you" : "Needs you"}${count ? ` <span class="badge" data-count>${count}</span>` : ""}</h2><span class="muted">${parts.filter(Boolean).join(" · ")}</span><span class="grow"></span><button data-open="new">New side chat</button></div>${form("new", false)}` +
+    `${n.items.length ? `<ol data-items>${n.items.map(itemHtml).join("")}</ol>` : ""}${n.chats.length ? `<h3>Side chats</h3><ol data-chats>${n.chats.map(chatHtml).join("")}</ol>` : ""}` +
+    `${settled.length ? `<details${settledOpen ? " open" : ""}><summary class="muted">Resolved here (${settled.length})${n.settled.length ? ": owner-list.md keeps them open until Claude ticks them there" : ""}</summary><ol>${settled.map(([id, what]) => `<li class="row"><b>${esc(id)}</b><span class="muted">${esc(what.slice(0, 140))}</span><button data-resolve="${esc(id)}" data-reopen>reopen</button></li>`).join("")}</ol></details>` : ""}` +
+    `${notesError || sendError ? `<div class="stat bad">${esc(sendError ? `Not sent: ${sendError}` : `Threads unavailable here: ${notesError}`)}</div>` : ""}`;
+  if (caret) {
+    const t = host.querySelector<HTMLTextAreaElement>(`textarea[data-key="${CSS.escape(caret.key)}"]`);
+    t?.focus();
+    t?.setSelectionRange(...caret.at);
+  }
+}
+
+/** The owner's note: to the pages server, or (?sample) to the sample's threads in memory. */
+async function post(b: { thread?: string; text: string; resolved?: boolean }) {
+  if (SAMPLE) {
+    const thread = b.thread ?? chatId(new Date(now() + (sampleNotes ?? []).length * 1000));
+    return void (sampleNotes ??= []).push({ at: new Date(now()).toISOString(), thread, ...(isChat(thread) ? {} : { item: thread }), who: "owner", text: b.text, ...(b.resolved === undefined ? {} : { resolved: b.resolved }) });
+  }
+  const r = await fetch("/api/eval/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+}
+let busy = false;
+async function send(key: string, resolved?: boolean) {
+  const text = (drafts.get(key) ?? "").trim();
+  if (busy || (!text && resolved === undefined)) return;
+  busy = true;
+  try {
+    await post({ ...(key === "new" ? {} : { thread: key }), text, ...(resolved === undefined ? {} : { resolved }) });
+    drafts.delete(key);
+    opened.delete(key);
+    sendError = undefined;
+  } catch (err) {
+    sendError = (err as Error).message;
+  }
+  busy = false;
+  await pollNotes();
+}
+
+let notesTimer: ReturnType<typeof setTimeout> | undefined;
+async function pollNotes() {
+  clearTimeout(notesTimer);
+  try {
+    if (SAMPLE) notes = [...(sampleNotes ?? [])];
+    else {
+      const r = await fetch("/api/eval/threads");
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      notes = j.notes;
+    }
+    notesError = undefined;
+  } catch (err) {
+    notesError = (err as Error).message;
+  }
+  needs();
+  notesTimer = setTimeout(pollNotes, NOTES_MS);
+}
+
+{
+  const host = $("#needs");
+  host.addEventListener("input", (e) => {
+    const t = e.target as HTMLTextAreaElement;
+    if (t.dataset.key) drafts.set(t.dataset.key, t.value);
+  });
+  host.addEventListener("keydown", (e) => {
+    const key = (e.target as HTMLElement).dataset.key;
+    if (key && e.key === "Enter" && (e.ctrlKey || e.metaKey)) e.preventDefault(), void send(key);
+  });
+  host.addEventListener("toggle", (e) => e.target instanceof HTMLDetailsElement && (settledOpen = e.target.open), true);
+  host.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("button");
+    const { open, to, resolve, drill: id } = b?.dataset ?? {};
+    if (open !== undefined) {
+      const f = host.querySelector<HTMLElement>(`[data-form="${CSS.escape(open)}"]`)!;
+      f.hidden = !f.hidden;
+      if (f.hidden) opened.delete(open);
+      else opened.add(open), f.querySelector("textarea")!.focus();
+    } else if (to !== undefined) void send(to, b!.dataset.andResolve !== undefined || undefined);
+    else if (resolve !== undefined) void send(resolve, b!.dataset.reopen === undefined);
+    else if (id !== undefined) {
+      const d = data?.decisions.findLast((x) => x.id === id);
+      if (d) void drill(d);
+    }
+  });
+  // Back on the tab: the replies now, not at the next poll.
+  window.addEventListener("focus", () => void pollNotes());
+}
+
 // ---- Load, draw, poll
 
 let data: Data | undefined;
@@ -397,8 +542,11 @@ function draw() {
 let timer: ReturnType<typeof setTimeout> | undefined;
 async function refresh() {
   try {
-    data = parse(new URLSearchParams(location.search).has("sample") ? await sample() : await (await fetch("/api/eval/history")).json());
+    const h: History = SAMPLE ? await sample() : await (await fetch("/api/eval/history")).json();
+    if (SAMPLE) sampleNotes ??= rowsOf<Note>(h.files["threads.jsonl"]);
+    data = parse(h);
     const running = draw();
+    needs();
     clearTimeout(timer);
     if (running) timer = setTimeout(refresh, POLL_MS);
   } catch (err) {
@@ -411,4 +559,4 @@ window.addEventListener("resize", () => {
   cancelAnimationFrame(resizing);
   resizing = requestAnimationFrame(() => draw());
 });
-void document.fonts.load("15px Excalifont").then(refresh, refresh);
+void document.fonts.load("15px Excalifont").then(refresh, refresh).then(pollNotes);

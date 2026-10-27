@@ -1,9 +1,10 @@
 // The eval pages' endpoints (frozen measuring side), in the owner's dev server
 // (vite.config.ts) and the harness pages server (evals/pages.vite.config.ts):
 // the history the progress page charts, the run files behind a decision, the
-// owner's calibration labels and his recorded sends. Reads only inside
-// $RT_EVAL_HOME (and the eval/history branch), writes only labels/ and human/
-// there, makes no model call and starts nothing until a request comes.
+// owner's calibration labels, his recorded sends and his threads with Claude.
+// Reads only inside $RT_EVAL_HOME (and the eval/history branch), writes only
+// labels/, human/ and notes/ there, makes no model call and starts nothing
+// until a request comes.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -12,6 +13,7 @@ import type { Plugin } from "vite";
 import { LOOP } from "../loop/config.ts";
 import { paths } from "../loop/paths.ts";
 import type { Arm, Packet } from "../loop/types.ts";
+import { type Note, THREAD_ID, chatId, isChat, threadsOf, waiting } from "../progress/attention.ts";
 
 /** The tracked files the progress page reads (§5.3), plus the owner list for its open count. */
 export const HISTORY_FILES = ["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "health.jsonl", "anchors.json", "eras.json", "markers.jsonl", "smoke.jsonl", "owner-list.md"];
@@ -280,13 +282,53 @@ const human: Handler = async (_q, req) => {
   return json(names.map((n) => JSON.parse(readFileSync(join(dir, n), "utf8"))));
 };
 
+// ---- The owner's threads beside "Needs you" (evals/progress/attention.ts): notes/threads.jsonl, outside git
+
+/** Every note, oldest first; a line still being written is skipped. */
+export function readNotes(): Note[] {
+  const f = paths().notes;
+  return (existsSync(f) ? readFileSync(f, "utf8").split("\n") : []).flatMap((l) => {
+    try {
+      return l ? [JSON.parse(l) as Note] : [];
+    } catch {
+      return []; // the line rte note or the page is appending right now
+    }
+  });
+}
+/** Appends one note, a whole line in one write (a `tail -F` sees whole lines); a thread not a side chat is its item's. */
+export function addNote(n: { thread: string; who: Note["who"]; text: string; resolved?: boolean }): Note {
+  if (!THREAD_ID.test(n.thread)) throw new Error(`no thread "${n.thread}": letters, digits, . _ and - only`);
+  const note: Note = { at: new Date().toISOString(), thread: n.thread, ...(isChat(n.thread) ? {} : { item: n.thread }), who: n.who, text: n.text, ...(n.resolved === undefined ? {} : { resolved: n.resolved }) };
+  mkdirSync(dirname(paths().notes), { recursive: true });
+  appendFileSync(paths().notes, `${JSON.stringify(note)}\n`);
+  return note;
+}
+
+/**
+ * GET /api/eval/threads: every note ({notes}); ?waiting: the threads where the owner wrote last ({waiting}), for a watcher.
+ * POST {thread?, text, resolved?}: the owner's note (always "owner": Claude writes through rte note); no thread starts a side chat.
+ */
+const threads: Handler = async (q, req) => {
+  if (req.method === "POST") {
+    const b = await body(req);
+    const text = typeof b.text === "string" ? b.text.trim() : "";
+    const resolved = typeof b.resolved === "boolean" ? b.resolved : undefined;
+    if (!text && resolved === undefined) return refuse(400, "a note needs text, or resolved");
+    if (text.length > 20_000) return refuse(413, "a note is at most 20000 characters");
+    const thread = b.thread === undefined ? chatId() : String(b.thread);
+    if (!THREAD_ID.test(thread)) return refuse(400, `no thread "${thread}"`);
+    return json(addNote({ thread, who: "owner", text, resolved }));
+  }
+  return json(q.has("waiting") ? { waiting: waiting(threadsOf(readNotes())) } : { notes: readNotes() });
+};
+
 /** The /api/eval/* endpoints. `git show` reads the branch from the repo this server serves. */
 export function evalPages(): Plugin {
   return {
     name: "eval-pages",
     apply: "serve",
     configureServer(server) {
-      const routes: Record<string, Handler> = { "GET /history": history(server.config.root), "GET /file": file, "GET /calls": calls, "GET /pairs": pairs, "POST /label": label, "POST /record": record, "GET /human": human, "POST /human": human };
+      const routes: Record<string, Handler> = { "GET /history": history(server.config.root), "GET /file": file, "GET /calls": calls, "GET /pairs": pairs, "POST /label": label, "POST /record": record, "GET /human": human, "POST /human": human, "GET /threads": threads, "POST /threads": threads };
       server.middlewares.use("/api/eval", async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const u = new URL(req.url ?? "/", "http://x");
         const route = routes[`${req.method} ${u.pathname}`];

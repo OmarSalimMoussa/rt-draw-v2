@@ -25,9 +25,33 @@
     .drill img { max-width: 100%; border: 1.5px solid var(--ink); border-radius: 6px; }
     .drill .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
     @media (max-width: 700px) { .drill { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+    .needs-wrap { max-width: 1240px; margin: 0 auto; padding: 16px 20px 0; }
+    #needs { border: 2.5px solid var(--bad); overflow-wrap: anywhere; }
+    #needs.quiet { border: 1.5px dashed var(--line); padding: 8px 12px; }
+    #needs.quiet h2 { font-size: 16px; color: var(--muted); }
+    #needs .grow { flex: 1; }
+    #needs .badge { display: inline-block; min-width: 26px; padding: 1px 8px; border-radius: 999px; background: var(--bad); color: #fff; font: 600 16px system-ui, sans-serif; text-align: center; vertical-align: 2px; }
+    #needs ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+    #needs h3 { margin: 6px 0 0; font: 16px Excalifont, cursive; }
+    #needs .item { border: 1.5px solid var(--line); border-left: 6px solid var(--accent); border-radius: 8px; padding: 8px 10px; display: grid; gap: 5px; }
+    #needs .item.held { border-left-color: var(--bad); background: #fff5f5; }
+    #needs .item.answered { border-left-color: var(--line); }
+    #needs .item.answered .what { font-weight: 400; }
+    #needs .what { margin: 0; font-size: 15px; font-weight: 600; }
+    #needs .why { margin: 0; padding-left: 18px; color: var(--muted); }
+    #needs .chip { font: 11px var(--mono); padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
+    #needs .chip.held { background: var(--bad); border-color: var(--bad); color: #fff; }
+    #needs .chip.reply { background: #e7f5ff; border-color: #1971c2; color: #1971c2; }
+    #needs .note { border-left: 3px solid var(--line); padding: 1px 8px; }
+    #needs .note.claude { border-left-color: #1971c2; }
+    #needs .note .text { white-space: pre-wrap; }
+    #needs .acts button, #needs .acts a { font-size: 12px; padding: 2px 8px; }
+    #needs textarea { font: 14px/1.45 system-ui, sans-serif; }
+    #needs details summary { cursor: pointer; }
   </style>
 </head>
 <body>
+  <div class="needs-wrap"><section class="card" id="needs" hidden></section></div>
   <main class="progress" id="panels"></main>
   <script type="module" src="./main.ts"></script>
 </body>

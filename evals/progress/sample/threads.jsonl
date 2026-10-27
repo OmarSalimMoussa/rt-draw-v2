@@ -1,0 +1,5 @@
+{"at":"2026-10-20T05:12:10.000Z","thread":"e15-h3","item":"e15-h3","who":"owner","text":"Declined: render.ts stays as it is.","resolved":true}
+{"at":"2026-10-20T05:13:00.000Z","thread":"chat-20261020-051300","who":"owner","text":"Can the loop try fewer render cards this week?"}
+{"at":"2026-10-20T05:13:40.000Z","thread":"e19-h3","item":"e19-h3","who":"owner","text":"Why does a camera knob need a patch to render.ts?"}
+{"at":"2026-10-20T05:14:30.000Z","thread":"chat-20261020-051300","who":"claude","text":"Yes. The critic gets render as a component to skip until Friday; draw and picture cards come first."}
+{"at":"2026-10-20T05:15:20.000Z","thread":"e19-h3","item":"e19-h3","who":"claude","text":"The engineer moved the camera clamp into render.ts. I can redo it as a knob in camera.ts, outside the frozen area, and decide it again.\nSay yes and I queue it."}
