@@ -81,6 +81,8 @@ export const KNOBS: Knob[] = [
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
   B("ops.waitForShape", 1, "ops wait for their shape", "on: an op naming a shape a later line makes waits for that line, and fails only if the reply ends without it; off: it fails at once"),
 
+  B("ops.earlyShape", 1, "paint a shape before its description", "on: a streaming shape() line whose id, kind, box and styles are complete and whose description quote is still open is applied as a provisional new shape and painted; the finished line replaces it, a line that fails or is cut off takes it away (best with the style-first draw prompt, which writes the description last)"),
+
   // Speech: turning the mic into timed words (ElevenLabs Scribe).
   patch("scribe", K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms")),
   patch("scribe", K("speech.shiftMs", 0, -500, 500, 10, "moves Scribe's word times later (+) or earlier (-), for a constant offset", "ms"), 0),
@@ -153,7 +155,7 @@ export const KNOBS: Knob[] = [
   K("draw.mapWords", 40, 0, 60, 1, "and this many words of each shape's description"),
   B("draw.mapBoxes", 1, "boxes in the site map", "on: the drawing model's site map gives each shape's box in board pixels, so it can copy, align and move what no picture shows"),
   K("draw.mapMaxShapes", 0, 0, 500, 10, "the id map (on a board, the site map) lists at most this many shapes, in map order, and counts the rest (0: every shape)"),
-  P("draw", 1),
+  P("draw", 2),
   B("draw.noThink", 0, "no thinking", "on: ask the API not to think (thinking delays the first op); off: the model decides"),
   B("draw.thinkRouter", 1, "Jev decides thinking", "on: Jev decides per send whether the drawing model may think (one call of about 0.1 s, alongside the resolver): a small clear edit goes without thinking; off: draw.noThink decides"),
   K("draw.thinkYes", 0.9, 0.05, 0.95, 0.05, "with draw.thinkRouter: the drawing model may think when Jev's probability that the send needs it is at or above this"),

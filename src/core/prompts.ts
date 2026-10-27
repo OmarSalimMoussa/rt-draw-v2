@@ -27,7 +27,12 @@ function drawIllustrated(board: boolean, w: number, h: number, cell: number, pag
   return drawManual(board, w, h, cell, pageW, true);
 }
 
-function drawManual(board: boolean, w: number, h: number, cell: number, pageW: number, illustrated: boolean): string {
+/** The illustrated manual with every style before the words: a shape() is drawn from its box and style while its description is still being written (ops.earlyShape). */
+function drawStyleFirst(board: boolean, w: number, h: number, cell: number, pageW: number): string {
+  return drawManual(board, w, h, cell, pageW, true, true);
+}
+
+function drawManual(board: boolean, w: number, h: number, cell: number, pageW: number, illustrated: boolean, styleFirst = false): string {
   const intro = board
     ? "You edit an infinite board of web pages and app screens, in board pixels (x right, y down). A page is a frame shape: its text is its name, shown above it, and the shapes inside its box are its content."
     : `You edit a drawing canvas of ${w}×${h} pixels (x right, y down, origin top-left).`;
@@ -36,8 +41,9 @@ function drawManual(board: boolean, w: number, h: number, cell: number, pageW: n
 
 Reply ONLY with op lines, one per line: no prose, no code fences. Each line is applied the moment it is complete, so put the most visible change first.
 
-shape(id, kind, box, "description", style...)   add a shape, or change only what you give
-text(id, "words", size:s|m|l|xl, color:..., align:left|center|right, weight:bold)
+${styleFirst ? `shape(id, kind, box, style..., "description")   add a shape, or change only what you give
+text(id, size:s|m|l|xl, color:..., align:left|center|right, weight:bold, "words")` : `shape(id, kind, box, "description", style...)   add a shape, or change only what you give
+text(id, "words", size:s|m|l|xl, color:..., align:left|center|right, weight:bold)`}
 ${illustrated ? `illustration(id, box, "what it shows")   a picture on its own: a subject, a scene, a sketch made real
 drawing(id, "what the picture shows", fade:0-1)  a picture inside a shape (a photo on a card); the shape's box is unseen unless you give it a fill or stroke` : `drawing(id, "what the picture shows", fade:0-1)  a doodle picture inside a shape`}
 layer(id, front | back | above:other | below:other)
@@ -46,11 +52,12 @@ camera(x y w h) or camera(id, ...)   move the screen: to where they ask to look 
 
 kind: rect, round, circle, pill, line, arrow (line and arrow run from the box's top-left to its bottom-right)${board ? `, frame (a page, ${pageW} wide for a website, or sized to fit whatever they ask for: a phone screen, a desktop, a diagram. An empty page is theirs to use: draw on it, resizing it to fit, rather than adding another beside it. Put a new one anywhere beside the others without overlapping them; the board moves pages into place after you finish. A frame is only ever a whole page: a strip, panel or card on a page is a rect)` : ""}.
 box: x y w h in ${board ? "board" : "canvas"} pixels${cells}, written bare, never in quotes. Quotes are only for descriptions and words.
-${illustrated ? `Example: shape(sale-badge, pill, 1100 90 150 50, "small yellow pill badge in the top right corner announcing a toy sale", fill:#ffd43b, stroke:none)` : `Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)`}
+${styleFirst ? `Example: shape(sale-badge, pill, 1100 90 150 50, fill:#ffd43b, stroke:none, "small yellow pill badge in the top right corner announcing a toy sale")` : illustrated ? `Example: shape(sale-badge, pill, 1100 90 150 50, "small yellow pill badge in the top right corner announcing a toy sale", fill:#ffd43b, stroke:none)` : `Example: shape(sale-badge, pill, 1100 90 150 50, "small red pill badge in the top right corner announcing a toy sale", fill:#e03131, stroke:none)`}
 style: fill:#hex  stroke:#hex|none  opacity:0-1  fade:0-1 (dims the picture, not the box).${board ? `
 Clicks: give link:<page id> (the id in [brackets] in the site map) to anything that opens another page (nav items, buttons, cards, a logo that goes home), and button:yes to anything else a visitor would click; link:none and button:no undo them. Never draw arrows between pages: the board draws them from the links. Aim the camera at a page by its id: camera(contact).` : ""}
 Ids are short readable names (hero-title, toy-l2). The same id changes that shape: never re-create an existing shape under a new id.
-A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.
+A NEW shape needs a box and a description of at least 6 words saying what it is and what it's for. Later sends find shapes by these descriptions.${styleFirst ? `
+In shape() and text() the quoted words always come last: write the id, kind, box and every style (fill, stroke, opacity, link, button, size, color...) first, so the shape shows on the board while you are still writing its description.` : ""}
 Order: a shape() always comes before any text(), drawing() or move() on its id, and a text() only targets a shape that already exists (a new id never gets a bare text(): shape it first). Put each drawing() on the line right after its shape(), before the page's text and chrome, so pictures can start drawing while you are still writing.${illustrated ? `
 Draw a subject they ask for (an animal, a person, an object, a scene) as one illustration(), early in your reply, rather than assembling it from boxes and circles, and never let a plain box stand in for it. Match the detail to what they ask: a sketch or an icon stays simple, and real detail comes only when they ask for it. When they ask to turn their sketch into something real, put the illustration() where the sketch is.` : ""}
 
@@ -125,6 +132,7 @@ export const PROMPTS: { draw: DrawText[]; resolve: ResolveText[]; describe: Desc
   draw: [
     { name: "shipped", system: drawShipped },
     { name: "illustrated", system: drawIllustrated },
+    { name: "style-first", system: drawStyleFirst },
   ],
   resolve: [{ name: "shipped", system: RESOLVE_SHIPPED }],
   resolveJev: [

@@ -14,7 +14,7 @@ import { type Mark, type Reading, groupStrokes, readMark } from "./marks.ts";
 import { type Ref, type Resolution, guessRefs, resolve } from "./resolve.ts";
 import { type ModelStats, callModel, jevOf, modelOf } from "./model.ts";
 import { decide } from "./decide.ts";
-import { OpStream, type Parsed, Waiting } from "./ops.ts";
+import { OpStream, type Parsed, Waiting, applyOp, earlyShape } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
 import { type TraceContext, mark, span, spanSync, timed } from "./trace.ts";
@@ -264,17 +264,47 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
   const shut = async () => !!gate && !(await gate);
   // Op lines naming a shape a later line makes wait for it (ops.waitForShape).
   const waiting = new Waiting(!!t["ops.waitForShape"]);
+  let marked = false;
   const emit = (r: OpResult) => {
     ops.push(r);
     // A camera move changes the screen, not the scene, so it's never the first op (F1).
     if (r.ok && !r.camera) firstOpMs ??= r.ms;
-    if (r.ok && !r.camera && ops.filter((o) => o.ok && !o.camera).length === 1) mark(ctx, "first op applied");
+    if (r.ok && !r.camera && !marked) {
+      marked = true;
+      mark(ctx, "first op applied");
+    }
     // The page's redraw after each op is part of the op's time on screen.
     spanSync(`op ${ops.length}: ${r.line.slice(0, 48)}`, ctx, () => onOp(r), { ok: r.ok, line: r.line });
+  };
+  // ops.earlyShape: the id of the shape painted from a shape() line still being written. The line's own end (its
+  // result, or a failure, or the reply cut off) takes it away first, so a line that fails leaves nothing behind.
+  let early: string | undefined;
+  const unearly = () => {
+    if (early) scene.remove(early);
+    early = undefined;
+  };
+  const showEarly = () => {
+    if (!t["ops.earlyShape"] || early || dropped || held) return;
+    const op = earlyShape(scene, stream.pending());
+    if (!op) return;
+    try {
+      applyOp(scene, op, opT);
+    } catch {
+      return;
+    }
+    early = op.args.find((a) => !a.key)!.value;
+    const ms = Math.round(performance.now() - t0);
+    firstOpMs ??= ms;
+    if (!marked) {
+      marked = true;
+      mark(ctx, "first op applied");
+    }
+    spanSync(`early shape: ${early}`, ctx, () => onOp({ line: op.line, ok: true, ms }), { ok: true, line: op.line });
   };
   const handle = (parsed: Parsed[]) => {
     if (dropped) return;
     if (held) return void held.push(...parsed);
+    if (parsed.length) unearly();
     for (const p of parsed) {
       if (p.ok === "skip") continue;
       const ms = Math.round(performance.now() - t0);
@@ -299,6 +329,7 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
   /** The reply's last line, then what still waits for a shape that never came. */
   const finish = () => {
     handle(stream.end());
+    unearly();
     if (dropped) return;
     const ms = Math.round(performance.now() - t0);
     for (const a of waiting.end()) emit({ line: a.op.line, ok: false, error: a.error, ms });
@@ -309,6 +340,7 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
     const copies = t["draw.copies"];
     const { text, stats } = await callModel({ model: modelOf(t["draw.model"]), system: prompt.system, user: prompt.user, images: prompt.images, from: "draw", ...thinking, warm: t["resolve.speculate"] || copies > 1 ? (t["resolve.speculate"] ? 2 : 1) * copies : undefined, copies, copyAfterMs: t["draw.copyAfterMs"] }, (chunk, soFar) => {
       handle(stream.push(chunk));
+      showEarly();
       onText?.(soFar);
     }, signal, ctx);
     if (await shut()) return { ops, firstOpMs, ms: Math.round(performance.now() - t0), stats, reply: text, error: "dropped: the resolver's answer gave another prompt" };

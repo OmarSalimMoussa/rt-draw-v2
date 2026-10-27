@@ -105,6 +105,10 @@ export class OpStream {
     this.buf = lines.pop() ?? "";
     return lines.map(parseLine).filter((p) => p.ok !== "skip");
   }
+  /** The line still being written. */
+  pending(): string {
+    return this.buf;
+  }
   /** The last line, if the reply ended without a newline. A cut-off line comes back as an error. */
   end(): Parsed[] {
     const rest = this.buf;
@@ -199,6 +203,28 @@ function idOf(scene: Scene, op: Op, id: string) {
   if (op.name === "illustration") return id;
   const name = id.toLowerCase();
   return scene.stacked().find((s) => s.kind === "frame" && s.text?.words.trim().toLowerCase() === name)?.id ?? id;
+}
+
+/**
+ * A shape() line still being written whose id, kind, box and styles are complete and whose description quote is open
+ * (ops.earlyShape), as an op with the id for a stand-in description. Only a shape the line would add: an existing id,
+ * a group or a page's name gives nothing, since those can't be taken back by removing the shape.
+ */
+export function earlyShape(scene: Scene, pending: string): Op | undefined {
+  const m = /^\s*shape\s*\(([^"]*),\s*"[^"]*$/.exec(pending);
+  if (!m) return undefined;
+  let args: Arg[];
+  try {
+    args = splitArgs(m[1]);
+  } catch {
+    return undefined;
+  }
+  const pos = args.filter((a) => !a.key);
+  const [id, ...rest] = pos.map((a) => a.value);
+  if (!id || scene.get(id) || scene.groups.has(id)) return undefined;
+  if (!rest.some((v) => KINDS.includes(v as Kind)) || !rest.some(looksLikeBox)) return undefined;
+  const op: Op = { name: "shape", args: [...args, { value: id, quoted: true }], line: pending };
+  return idOf(scene, op, id) === id ? op : undefined;
 }
 
 /** Applies one op. Throws with a short reason when it can't. */
