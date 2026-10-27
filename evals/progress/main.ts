@@ -282,14 +282,15 @@ function decisions(d: Data) {
   const host = card("decisions", true);
   const comp = (r: DecisionRow) => (r.kind === "owner-step" ? "<b>owner step</b>" : esc(r.card?.component ?? "-"));
   const trustColor = { green: "ok", amber: "", void: "bad" };
-  const rows = [...d.decisions].reverse().map((r) => {
+  // Keyed by place, not id: a card decided again (rte decide --card) has a row per run under one id.
+  const rows = [...d.decisions].map((r, i) => [r, i] as const).reverse().map(([r, i]) => {
     const n = r.counts.wins + r.counts.losses + r.counts.ties;
-    return `<tr data-decision="${esc(r.id)}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
+    return `<tr data-decision="${esc(r.id)}" data-i="${i}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
   });
   host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="12" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
   host.addEventListener("click", (e) => {
     const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-decision]");
-    if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions.find((r) => r.id === tr.dataset.decision)!);
+    if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions[Number(tr.dataset.i)]);
   });
 }
 

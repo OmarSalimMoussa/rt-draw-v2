@@ -115,7 +115,9 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   const record = (d: Decision, at: string, result: Omit<ABResult, "invariants"> = { rows: [] }, owner: string[] = []) => {
     const row = decisionRow({ id, epoch: st.epoch, card: c.card, candSha: cand, baseSha: base, run: at, judgeId: judgeId("fidelity", lastServed(), variants().fidelity), result: { ...result, decision: d }, affected });
     if (d.verdict === "keep") git(p.repo, "branch", "-f", "loop/champion", cand);
-    if (!historyRows("decisions.jsonl").some((x) => x.id === id)) recordDecision(row, { owner });
+    // Once per run: a resumed decision isn't recorded twice, and `rte decide --card` again on the same branch (a new run)
+    // is (d-cand-e80-h3's second re-decide, on the funnel audit's rules, went unrecorded under its id alone).
+    if (!historyRows("decisions.jsonl").some((x) => x.id === id && x.run === at)) recordDecision(row, { owner });
     c.run = at;
     rte.say(`${id}: ${d.verdict} (${d.class}, ${d.goal}): ${[...d.reasons, ...d.vetoes].join("; ")}`);
     return row;
