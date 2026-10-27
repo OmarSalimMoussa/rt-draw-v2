@@ -22,8 +22,8 @@ export const DIGEST = {
   failureCases: 12,
   /** Lines of the draw reply a failure digest shows. */
   drawLines: 30,
-  /** Longest spans a loss shows; cases shown per trace pattern; steps in the latency list. */
-  spans: 3, examples: 3, steps: 15,
+  /** Longest spans a loss shows; cases shown per trace pattern. */
+  spans: 3, examples: 3,
   /** Characters of said, meant and judge text per case line. */
   textChars: 220,
 };
@@ -203,23 +203,76 @@ export function writeLossDigest(run: string): string {
 
 // ---- 3. The champion's traces: patterns and latency per component
 
-/** The champion's spans per tuning case in these runs. */
-function championSpans(runs: CheckpointRef[]): { case: string; spans: SpanJSON[] }[] {
+/** The champion's arm of each tuning case in these runs: its spans, its clock and its calls. */
+function championArms(runs: CheckpointRef[]): { case: string; spans: SpanJSON[]; timing?: ArmTiming; calls: ArmResult["calls"] }[] {
   return runs.flatMap(({ run, champion }) => {
     const dir = runFile(run, "cases");
-    return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => tuningInfo(id)).map((id) => ({ case: id, spans: arm<SpanJSON[]>(run, id, champion, "spans.json") ?? [] }));
+    return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => tuningInfo(id)).map((id) => ({
+      case: id, spans: arm<SpanJSON[]>(run, id, champion, "spans.json") ?? [], timing: arm<ArmTiming>(run, id, champion, "timing.json"),
+      calls: arm<ArmResult>(run, id, champion, "result.json")?.calls ?? [],
+    }));
   });
 }
 
-const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-/** Median ms per step and per model role, by total time (the latency share). */
-function spanMedians(cases: { spans: SpanJSON[] }[]): string[] {
-  const by = new Map<string, number[]>();
-  for (const s of cases.flatMap((c) => c.spans)) {
-    const name = s.name.startsWith("model call · ") ? `model call · ${componentOf(String(s.attributes.from ?? s.name.split(" · ")[1]))}` : s.name.replace(/^picture: .*/, "picture: *");
-    by.set(name, [...(by.get(name) ?? []), s.endMs - s.startMs]);
+const pct = (xs: number[], p: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))];
+const msOf = (xs: number[]) => (xs.length ? `${Math.round(pct(xs, 0.5))} ms (p90 ${Math.round(pct(xs, 0.9))})` : "-");
+const PICTURE_OP = /^(illustration|drawing|picture)\(/;
+
+/**
+ * Time to first drawing, the deciding latency, by phase over the champion's sends: before the drawing call, its model's
+ * first text, the first op line streamed after it, then to the first visible stroke; and per role and model, first text,
+ * output speed and how often it thought. It replaced a table of every step by total time, which read pictures and time
+ * to done as the latency and mixed the Jev calls' first text in with the drawing model's (2026-10-27).
+ */
+function firstDrawingSteps(arms: ReturnType<typeof championArms>): string[] {
+  const P = { prep: [] as number[], first: [] as number[], op: [] as number[], after: [] as number[], ttfd: [] as number[], render: [] as number[] };
+  const models = new Map<string, { first: number[]; tps: number[]; calls: number; thought: number }>();
+  let sends = 0, pictureFirst = 0;
+  for (const a of arms) {
+    const e = a.timing?.enterAt;
+    const kid = (s: SpanJSON, name: string) => a.spans.find((k) => k.parentId === s.spanId && k.name === name);
+    const calls = a.spans.filter((s) => s.name.startsWith("model call · ")).sort((x, y) => x.startMs - y.startMs);
+    const modelOf = new Map(calls.map((s) => [s.name.split(" · ")[1], s.name.split(" · ")[2]] as const));
+    for (const s of calls) {
+      const key = s.name.split(" · ").slice(1, 3).join(" · ");
+      const m = models.get(key) ?? { first: [], tps: [], calls: 0, thought: 0 };
+      const ft = kid(s, "model: time to first text"), sr = kid(s, "model: streaming the reply");
+      const out = Number(s.attributes.outTokens ?? 0);
+      if (ft) m.first.push(ft.endMs - ft.startMs);
+      if (sr && out > 50 && sr.endMs > sr.startMs) m.tps.push((out / (sr.endMs - sr.startMs)) * 1000);
+      models.set(key, m);
+    }
+    for (const c of a.calls) {
+      const m = models.get(`${c.role} · ${modelOf.get(c.role) ?? "?"}`);
+      if (m) (m.calls++, (m.thought += (c.thinkingTokens ?? 0) > 0 ? 1 : 0));
+    }
+    const draw = calls.find((s) => s.name.startsWith("model call · draw · "));
+    if (e === undefined || !draw || a.timing?.ttfdMs === undefined) continue;
+    sends++;
+    const ft = kid(draw, "model: time to first text");
+    const op = a.spans.filter((s) => s.name.startsWith("op ") && s.attributes.ok).sort((x, y) => x.startMs - y.startMs)[0];
+    P.prep.push(draw.startMs - e);
+    P.ttfd.push(a.timing.ttfdMs);
+    if (ft) P.first.push(ft.endMs - ft.startMs);
+    if (ft && op) P.op.push(op.startMs - ft.endMs);
+    if (op) P.after.push(Math.max(0, e + a.timing.ttfdMs - op.startMs));
+    if (op && PICTURE_OP.test(String(op.attributes.line ?? ""))) pictureFirst++;
+    if (a.timing.renderP50Ms !== undefined) P.render.push(a.timing.renderP50Ms);
   }
-  return [...by].sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0)).slice(0, DIGEST.steps).map(([k, v]) => `${k}: median ${Math.round(median(v))} ms over ${v.length}`);
+  if (!sends) return ["First drawing by step: no champion send with a drawing call and a first drawing in these runs"];
+  const rate = (xs: number[]) => (xs.length ? `${Math.round(pct(xs, 0.5))} tok/s` : "- tok/s");
+  return [
+    `First drawing by step (the deciding latency, median and p90 over ${sends} champion sends):`,
+    `- before the drawing call (Jev, screenshots, the prompt): ${msOf(P.prep)}`,
+    `- the drawing model's first text: ${msOf(P.first)}`,
+    `- the first op line, streamed after it (nothing is drawn before a whole line): ${msOf(P.op)}`,
+    `- from the first op to the first drawing (paint, or a picture's strokes or a later op): ${msOf(P.after)}`,
+    `- first drawing: ${msOf(P.ttfd)}; render per op: p50 ${P.render.length ? pct(P.render, 0.5) : "-"} ms`,
+    `- ${pictureFirst} of ${sends} sends start with a picture op`,
+    "Models by role (first text, output speed while streaming, calls that thought):",
+    ...[...models].sort((a, b) => b[1].first.length - a[1].first.length)
+      .map(([k, m]) => `- ${k}: first text ${msOf(m.first)}, ${rate(m.tps)}, thought on ${m.thought} of ${m.calls}`),
+  ];
 }
 
 export type DigestInput = {
@@ -242,9 +295,9 @@ export function analystDigest(o: DigestInput): string {
   const losses = runs.length
     ? fit(["# 2. Candidate losses (the last decisions)"], runs.map((r) => lossSection(r, budget(DIGEST.share.losses) / runs.length - 20)), budget(DIGEST.share.losses))
     : "# 2. Candidate losses (the last decisions)\nnone yet";
-  const spans = championSpans([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
-  const report = Object.values(tracePatterns(spans)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
-  const rest = fit(["# 3. The champion's traces", "Patterns:", ...report, "Latency by step (median):", ...spanMedians(spans)],
+  const arms = championArms([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
+  const report = Object.values(tracePatterns(arms)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
+  const rest = fit(["# 3. The champion's traces", "Patterns:", ...report, ...firstDrawingSteps(arms)],
     [
       ...(o.nearWins?.length ? ["# 4. Near wins (reverted, but leaning the right way: combine them in a combo card, or retry with what differs)", ...o.nearWins] : []),
       ...(o.failures?.length ? ["# 5. Failure analysts", ...o.failures] : []), ...(o.ledger?.length ? ["# 6. Ledger", ...o.ledger] : []), ...(o.tried?.length ? ["# 7. Tried (don't repeat without saying what differs)", ...o.tried] : []),
