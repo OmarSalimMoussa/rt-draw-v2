@@ -277,8 +277,10 @@ export function pickViews(scene: Scene, camera: View, strokes: Stroke[], said: s
       middle.push(pageView(p, "you named it and it's off screen", t));
     }
   }
+  // An empty one-page board (draw.emptyBoardFast's test): the picture only has the ink to show, so it can be smaller.
+  const blank = !!t["draw.emptyBoardFast"] && !!t["board.blankWidthPx"] && scene.shapes.size === 1 && pagesOf(scene).length === 1;
   const last: NamedView[] = t["board.overview"]
-    ? [{ name: "the whole board", why: "the biggest zoom that holds every page", view: fitView(pagesOf(scene).length ? union(pagesOf(scene).map((p) => p.box)) : boardBounds(scene), 0.03), width: t["board.overviewWidthPx"], tags: !!t["board.overviewTags"] }]
+    ? [{ name: "the whole board", why: "the biggest zoom that holds every page", view: fitView(pagesOf(scene).length ? union(pagesOf(scene).map((p) => p.box)) : boardBounds(scene), t["board.overviewPadFrac"]), width: blank ? t["board.blankWidthPx"] : t["board.overviewWidthPx"], tags: !!t["board.overviewTags"] }]
     : [];
   // One page, and the camera shows nearly all of it at nearly the whole board's zoom: the two pictures show the same place, so keep the larger one, with tags.
   const pages = pagesOf(scene);

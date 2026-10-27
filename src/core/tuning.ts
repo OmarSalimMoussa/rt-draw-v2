@@ -205,6 +205,8 @@ export const KNOBS: Knob[] = [
   K("board.pageReadablePx", 400, 100, 1600, 20, "a page counts as shown when it's at least this wide in a picture", "px"),
   K("board.viewWidthPx", 960, 320, 1600, 32, "width of the camera, close-up and page pictures", "px"),
   K("board.overviewWidthPx", 1280, 320, 2000, 32, "width of the whole-board picture", "px"),
+  K("board.blankWidthPx", 768, 0, 2000, 32, "width of the whole-board picture on an empty one-page board (draw.emptyBoardFast's test); 0 = off, board.overviewWidthPx", "px"),
+  K("board.overviewPadFrac", 0.03, 0, 0.3, 0.01, "the whole-board picture leaves this margin around the pages, as a share of their size"),
   K("board.markPadFrac", 0.3, 0, 3, 0.05, "a close-up shows this much around its mark, as a share of the mark's size"),
   K("board.markMinViewPx", 480, 100, 2000, 20, "a close-up shows at least this much of the board across", "px"),
   K("board.markZoomFrac", 0.35, 0.2, 1, 0.05, "skip a close-up unless it's at most this share of the camera's width (zoomed in enough to add something)"),
