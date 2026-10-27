@@ -62,9 +62,10 @@ process.env.RT_EVAL_HOME = home;
 // and render decide with no allowance, no cost cap, the 60% / 50% budget, the search's numbers), then the cleanup's
 // deletions (2026-10-26: the debts, the night cap, the window share, the over-use and cost thresholds, sampled craft,
 // the void rerun's knobs; one pooled latency test), then the illustrations round's bars (2026-10-26, RUNBOOK 7b), then the
-// audit's search (2026-10-27: 4 to 8 hypotheses, no near-wins list). Changing a frozen number changes what decides: update
-// this on purpose.
-const SPEC_CONFIG_ID = "93a5ea59de70690f4f1b0083e2a5e3c9edd815b3e839d9f3ec28b8ab62f0572a";
+// audit's search (2026-10-27: 4 to 8 hypotheses, no near-wins list), then the funnel audit's (2026-10-27: Rule F to 160
+// with looser early reverts, G3's veto at −1.645 and its direction from 16 cases). Changing a frozen number changes what
+// decides: update this on purpose.
+const SPEC_CONFIG_ID = "7c042ed9004ef7e42b1963c8062598ad185f04a44a8328e5e8ef37282618ba18";
 const cfg = await import("../loop/config.ts");
 check(cfg.configId === SPEC_CONFIG_ID, "config.ts' LOOP or DRIVE_VIEW differ from spec §1.6");
 check(cfg.configId === sha(JSON.stringify({ LOOP: cfg.LOOP, DRIVE_VIEW: cfg.DRIVE_VIEW })), "configId isn't sha256(JSON.stringify({ LOOP, DRIVE_VIEW }))");

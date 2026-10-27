@@ -138,7 +138,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     record(d, run("g0"), undefined, o.owner ?? (verdict === "owner" ? reasons : []));
     return settle({ id, verdict, component: c.card.component, at: new Date().toISOString() });
   };
-  // Past 30 min of measuring at 8 slots: harness suspect (§6.7). Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
+  // Past RULES.decisionMaxMin of measuring at 8 slots: harness suspect (§6.7). Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
   const overBy = (slots: number) => {
     const minutes = (Date.now() - t0 - (budgetPausedMs() - paused0)) / 60_000;
     return overrun(minutes, slots) ? `overran: ${minutes.toFixed(0)} min of measuring (${RULES.decisionMaxMin} at 8 slots)` : undefined;
@@ -171,7 +171,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   return rte.withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
     // G1: the diffscan at 0 calls (a finished scan is read back on resume).
     const scanRun = run("scan");
-    const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) }));
+    const sc = hedgeScan(c.card, maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) })));
     const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? [])];
     Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
     if (rte.o.f["quality-only"] && sc.class === "S") {
@@ -272,6 +272,20 @@ async function freeSlot(rte: Rte, gw: string): Promise<Token | undefined> {
       await sleep(Math.max(60_000, (s.pace.pauseUntil ?? 0) - Date.now()));
     }
   }
+}
+
+/**
+ * A hedge (more copies of a call, or sooner: draw.copies, picture.copyAfterMs, …) answers nothing in a scan or a replay
+ * (gateway.ts: a copy is live only), so the scan reads it as no effect or a schedule change: e74-h2, e76-h1 and e76-h2
+ * were decided at 0 calls that way. It goes live on every scanned case, none from the cache: each arm's first call is
+ * one shared live call, B's copies fresh ones, and the first to stream wins.
+ */
+export function hedgeScan(card: HypothesisCard, sc: ScanResult): ScanResult {
+  const hedge = Object.keys(card.knobs ?? {}).some((k) => /\.(copies|copyAfterMs)$/.test(k));
+  if (!hedge || (sc.class !== "N" && sc.class !== "S")) return sc;
+  const affected: ScanResult["affected"] = {};
+  for (const x of sc.cases) (affected[x.set] ??= []).push(x.case);
+  return { ...sc, class: "Q", affected, cached: [] };
 }
 
 /** Builds a card on its branch (cand/e<E>-h<n>, off the champion): a commit, or the champion itself when nothing changed. */

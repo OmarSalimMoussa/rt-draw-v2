@@ -4,12 +4,16 @@
 
 /** Every number the loop decides with. Frozen measuring side: the optimizer can read it, never write it. */
 export const LOOP = {
-  // Rule F (§1.3), looks on affected cases
-  looks: [16, 32, 48, 80], keepZ: [Infinity, 2.3, 1.8, 1.4], revertZ: [-0.2, 0.3, 0.7, 1.4], minDecisive: [10, 20, 30, 0],
+  // Rule F (§1.3), looks on affected cases. To 160 with looser early reverts (the funnel audit, 2026-10-27): the early
+  // reverts stopped a third of the 60/40 winners before 80. On t13's planning generator a 60/40 card now keeps 58% of
+  // the time (was 42%), a no-op 8.9% (was 8.2%; the audit's 1.6 and 1.5 lines at 80 and 160 made it 11.3%), and a
+  // no-op costs 66 cases where it cost 35.
+  looks: [16, 32, 48, 80, 160], keepZ: [Infinity, 2.3, 1.9, 1.8, 1.7], revertZ: [-1, -0.5, 0, 0.6, 1.7], minDecisive: [10, 20, 30, 0, 0],
   rareMin: 32, topUpMaxSends: 48,
   // latency and craft goals (§1.3)
   latFutility16: 1.0, latKeepP: 0.10, latRevert48: 0.98, qualityFloorZ: -1.0, workFloorZ: -0.5,
-  // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on
+  // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on. Its length is the
+  // latency rule's looks: it ends at 80, so the 160 look is fidelity's and craft's (another p < latKeepP look adds false keeps).
   latFloorZ: [Infinity, 0, -0.5, -1.0], latFutilityZ: -1.25,
   // the slow sends too (the owner, 2026-10-19): a latency keep may come from the p90 or p95 send (both arms' quantile,
   // B/A) as well as the median paired ratio: a tail keeps when surely under latTailKeepHi95 (swap test p < latTailKeepP), at least
@@ -29,8 +33,10 @@ export const LOOP = {
   // vetoes and trust (§1.4)
   latVeto: { p: 0.05 },
   // G3 confirms in direction (held-out fidelity or craft Z above 0, a latency card's metric faster) once it has
-  // heldoutConfirmMin affected cases; with fewer it can only veto.
-  heldoutVetoZ: -1.0, heldoutMax: 32, heldoutConfirmMin: 8,
+  // heldoutConfirmMin affected cases; with fewer it can only veto. Was −1.0 and 8 until the funnel audit (2026-10-27):
+  // two G2 keeps were thrown away on held-out fidelity, d-cand-e70-h1 at Z −1.15 and d-cand-e80-h3 at −0.63 on 13 cases
+  // (pooled with G2's, 1.50).
+  heldoutVetoZ: -1.645, heldoutMax: 32, heldoutConfirmMin: 16,
   // The search (LOOP-V2.md D1, D3, D4): the analyst's hypotheses an epoch, the critic's cards (a sweep is one card of up
   // to sweepMax values, a combo one card of up to comboMax tried patches), and the near wins the digest lists.
   // A sweep's k values share one card's error (D3): each keeps past keepZ raised by z(1 − sweepAlpha/k) − z(1 − sweepAlpha),

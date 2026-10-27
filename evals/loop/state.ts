@@ -95,12 +95,13 @@ export function lock(): { stale: boolean; release(): void } {
 // ---- §6.7's stop and pause rules
 
 // The dry well scales with the search (LOOP-V2.md D1): two epochs' cards in a row reverted, or one epoch's on a component.
-export const RULES = { decisionMaxMin: 30, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 2 * LOOP.search.cards, componentRevertsInRow: LOOP.search.cards, pauseEpochs: 3, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
-/** The ladder's slots §6's 30 minutes assume (the PGX's). */
+export const RULES = { decisionMaxMin: 45, voidsInRow: 2, emptyEpochs: 2, revertsInRow: 2 * LOOP.search.cards, componentRevertsInRow: LOOP.search.cards, pauseEpochs: 3, overloads: 3, overloadWindowMs: 600_000, recheckMs: 60_000 };
+/** The ladder's slots §6's minutes assume (the PGX's). */
 const SLOTS_30MIN = 8;
 /**
- * A decision is closed as void (harness suspect) past 30 min of measuring at 8 slots (scaled for fewer): the loop's
- * wall-clock bound, as --cap is its calls'. (A $ bound per case fired twice in history, both times on accounting bugs.)
+ * A decision is closed as void (harness suspect) past RULES.decisionMaxMin of measuring at 8 slots (scaled for fewer): the
+ * loop's wall-clock bound, as --cap is its calls'. (A $ bound per case fired twice in history, both times on accounting
+ * bugs.) 30 min until Rule F's last look went from 80 cases to 160 (2026-10-27); the slowest 80-case run had taken 10.
  */
 export const overrun = (minutes: number, slots: number) => minutes > RULES.decisionMaxMin * Math.max(1, SLOTS_30MIN / slots);
 

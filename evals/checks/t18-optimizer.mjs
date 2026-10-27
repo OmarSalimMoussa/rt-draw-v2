@@ -309,6 +309,13 @@ check(sw.cards[0].id === "e5-h1" && vals === "e5-h2a=0.95,e5-h2b=1,e5-h2c=0.6" &
 check(sw.cards.filter((c) => c.sweep).every((c) => c.card.sweep?.values.join() === "0.95,1,0.6"), "a sweep's knob cards don't carry the values run, which share its error");
 const verdictMod = await import("../loop/verdict.ts");
 check(verdictMod.sweepShift(1) === 0 && Math.abs(verdictMod.sweepShift(4) - 0.606) < 0.01 && verdictMod.sweepShift(2) < verdictMod.sweepShift(3), `a sweep's keep line isn't raised by its values (LOOP-V2.md D3): ${[1, 2, 3, 4].map(verdictMod.sweepShift)}`);
+// A hedge (copies of a call) goes live on every scanned case, none from the cache: a scan or a replay can't see a copy.
+const { hedgeScan } = await import("../loop/decide.ts");
+const scanned = { run: "s", class: "N", mismatch: false, cases: [{ case: "c1", set: "tuning", affected: false }, { case: "c2", set: "heldout-gate", affected: false }], affected: {}, cached: ["h1"] };
+const hedged = hedgeScan({ knobs: { "draw.copies": 2 } }, scanned);
+check(hedged.class === "Q" && hedged.affected.tuning?.join() === "c1" && hedged.affected["heldout-gate"]?.join() === "c2" && !hedged.cached.length
+  && hedgeScan({ knobs: { "draw.thinkYes": 0.8 } }, scanned) === scanned && hedgeScan({ knobs: { "picture.copyAfterMs": 400 } }, { ...scanned, class: "Q" }).cached.length === 1,
+  `a hedge card isn't measured live on every scanned case, or another card is: ${JSON.stringify(hedged)}`);
 const [a, b, c2] = sw.cards.filter((c) => c.sweep);
 const row = (id, verdict, looks, o = {}) => ({ id, verdict, class: "Q", reasons: [`Rule F at look ${16 * looks}`], looks: Array.from({ length: looks }, () => ({ n: 16, decisive: 10, z: -1.5 })), ...o });
 const aLost = sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "revert" } : c));

@@ -64,7 +64,14 @@ export function ruleF<T extends { cluster: string }>(rows: T[], score: (r: T) =>
   const looks: Look[] = [];
   for (let i = 0; i < LOOP.looks.length; i++) {
     const n = LOOP.looks[i];
-    if (rows.length < n) return { looks, next: exhausted ? undefined : n };
+    if (rows.length < n && (!exhausted || rows.length < LOOP.rareMin)) return { looks, next: exhausted ? undefined : n };
+    // Out of cases short of look n: one last look on them all at n's keep line, where a card used to revert unlooked
+    // (e66-h5: Z 1.79 at look 48 against 1.8, then 1.66 on all 59).
+    if (rows.length < n) {
+      const z = clusteredZ(rows.map((r) => ({ s: score(r), cluster: r.cluster })));
+      looks.push({ n: rows.length, decisive: z.decisive, z: z.z });
+      return { looks, keep: z.z >= LOOP.keepZ[i] + keepShift, n: rows.length };
+    }
     const z = clusteredZ(rows.slice(0, n).map((r) => ({ s: score(r), cluster: r.cluster })));
     looks.push({ n, decisive: z.decisive, z: z.z });
     if (z.decisive < LOOP.minDecisive[i] && i < LOOP.looks.length - 1) continue;
@@ -107,6 +114,9 @@ export function latencyVeto(rows: Row[]): string | undefined {
   return `latency veto: surely slower (p ${t.slower.toFixed(3)} over every deciding stat), most on ${r ? stat(m, k, r) : t.worst}`;
 }
 
+/** The latency rule's looks, one per LOOP.latFloorZ: to 80, not Rule F's 160. */
+const LAT_LOOKS = LOOP.looks.slice(0, LOOP.latFloorZ.length);
+
 /**
  * The goal-latency rule (§1.3) at each look, on the median send and the slow ones (LOOP.latTails): a keep when any of
  * them is surely faster and nothing surely slower, on either deciding latency (a faster first drawing that paints
@@ -116,8 +126,8 @@ export function latencyVeto(rows: Row[]): string | undefined {
 function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) => { ok: boolean; why: string; futile?: boolean }, exhausted: boolean, family = 1): Core {
   const looks: Look[] = [];
   let why = "";
-  for (let i = 0; i < LOOP.looks.length; i++) {
-    const n = LOOP.looks[i];
+  for (let i = 0; i < LAT_LOOKS.length; i++) {
+    const n = LAT_LOOKS[i];
     if (rows.length < n) return { looks, next: exhausted ? undefined : n, why };
     const at = rows.slice(0, n);
     const stats = Object.entries(latencyStats(at, m));
@@ -125,7 +135,7 @@ function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) =
     looks.push({ n, decisive: at.filter((x) => x.s).length, z: zOf(at) });
     if (q.futile) return { looks, keep: false, n, why: q.why, floor: true };
     if (!stats.length) continue;
-    const last = i === LOOP.looks.length - 1;
+    const last = i === LAT_LOOKS.length - 1;
     const said = stats.map(([k, r]) => stat(m, k, r)).join("; ");
     if (i === 0 && stats.every(([, r]) => r.est > LOOP.latFutility16)) return { looks, keep: false, n, why: `${said} at look ${n}` };
     // A tail keeps only once it holds LOOP.latTailMinSends sends: p95 on 32 is the second-slowest send alone.
@@ -139,7 +149,7 @@ function latencyRule(rows: Row[], m: Gated, holds: (rows: Row[], look: number) =
     }
     if ((i === 2 && stats.every(([, r]) => r.est >= LOOP.latRevert48)) || last) return { looks, keep: false, n, why: why || slower || `${said} at look ${n}`, floor: !!why };
   }
-  return { looks, keep: false, n: LOOP.looks.at(-1)!, why, floor: !!why };
+  return { looks, keep: false, n: LAT_LOOKS.at(-1)!, why, floor: !!why };
 }
 type Core = { looks: Look[]; keep?: boolean; n?: number; next?: number; why?: string; floor?: boolean };
 
@@ -202,7 +212,7 @@ export function decide(input: DecideInput, card: HypothesisCard): Decision {
   // What every outcome reports, on the cases the deciding look saw.
   const seen = {
     counts: { wins: at.filter((r) => score(r) > 0).length, losses: at.filter((r) => score(r) < 0).length, ties: at.filter((r) => !score(r)).length, n: at.length, look: core.n ?? at.length },
-    caveat: core.n && core.n < LOOP.looks.at(-1)! ? `stopped at look ${core.n}: an early-stopped decision's share is biased (a no-op reads ~0.47); the quality chart uses checkpoints` : undefined,
+    caveat: core.n && core.n < (goal === "latency" ? LAT_LOOKS : LOOP.looks).at(-1)! ? `stopped at look ${core.n}: an early-stopped decision's share is biased (a no-op reads ~0.47); the quality chart uses checkpoints` : undefined,
     latency: { ttfc, ttd, ttfd, render, tails, byThinking: byThinking(at, metric) },
     // A lost case is Rule F's loss, but no send to measure: one hiccup isn't an empty send.
     work: ratio(sent, (r, a) => r.work[a]),
