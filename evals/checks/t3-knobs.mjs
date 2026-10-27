@@ -35,7 +35,7 @@ const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "pict
 const LATER = { "draw.addHint": 1, "draw.addYes": 0.5, "draw.addWaitMs": 1500, "picture.strokeWidth": 3, "render.captionMaxShare": 0.4, "render.minTextScale": 0.4,
   "ops.waitForShape": 1, "picture.context": 2, "picture.contextColors": 8, "picture.contextPoints": 300, "render.pictureBox": 1,
   "ops.earlyShape": 1, "ops.earlyAtBox": 1, "draw.emptyBoardFast": 1, "board.oneViewWhenSame": 1, "board.sameViewShare": 0.9, "board.sameViewWidthRatio": 1.25,
-  "camera.guard": 1, "camera.lookYes": 0.5, "camera.shownShare": 0.9 };
+  "camera.guard": 1, "camera.lookYes": 0.5, "camera.shownShare": 0.9, "board.blankWidthPx": 768, "board.overviewPadFrac": 0.03 };
 // Defaults the owner changed since T3 (decisions on eval/history, and LOOP-V2.md's product fixes), and later knobs that
 // change what a send asks or shows, at their T3-time behaviour: the comparisons with the code before T3 run under these,
 // since they're about T3's refactor, not later decisions.
