@@ -138,5 +138,13 @@ export const NOTIFY = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon
  */
 export const WEEK_CHECK = { afterH: 6 };
 
+/**
+ * An eval role's output, at most: the model's own maximum. Only the product's calls keep dev/claude.ts' MAX_TOKENS, as
+ * the hosted app does: gold is the ideal the product aims at, so nothing throttles it, nor triage, the judge or the
+ * loop's agents (e86's Opus analyst ran out at 4096 thinking). Here, not in dev/: a candidate's tree has the champion's.
+ * Not in configId: it bounds no measurement.
+ */
+export const EVAL_MAX_TOKENS = 128_000;
+
 /** Logged on every decision and checkpoint: a change to LOOP or DRIVE_VIEW changes it. */
 export const configId = sha256(JSON.stringify({ LOOP, DRIVE_VIEW }));

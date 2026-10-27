@@ -111,7 +111,7 @@ Rules:
 - Never touch frozen paths (evals/, dev/, scripts/, playgrounds/, src/fixtures/, vite.config.ts, package.json, tsconfig.json), the editor's look, or speech.
 - Never turn a patch on, and never change a patches.* knob.
 - Keep the bridge contract's exports and signatures (above).
-- Edit with Edit, not whole-file Write: replies are capped at 4096 tokens, so a whole-file Write of a long file is cut off.`;
+- Edit with Edit, not whole-file Write: a whole-file Write of a long file pays for every line again and can drop one.`;
 
 export const FAILURE_SYSTEM = `You are the failure analyst of an automatic improvement loop for a product.
 

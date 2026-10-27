@@ -413,6 +413,8 @@ check(!web("WebSearch", { query: "model routing cascades" }) && !web("WebFetch",
 const apiF = await startFakeApi({ port: PORTS.fakeA, script: script("analyst.json", [tool("WebFetch", { url: "http://100.94.227.92:5182/", prompt: "the sends" }, 0), { content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "draw"}]}' }] }]) });
 const agentsBefore = readMeter(p.calls).filter((l) => l.agent).length;
 const an = await analyst({ run: "e1", token, mockApi: mockOf(apiF), digest: "d", tree });
+// An agent's replies get the eval roles' output, not the product's 4096 tokens (e86's analyst ran out thinking).
+check(apiF.requests.every((r) => r.maxTokens === 128_000), `the analyst's requests ask for ${apiF.requests.map((r) => r.maxTokens)} output tokens, not 128000`);
 check(an.includes('"hypotheses"') && apiF.requests.length === 2 && readMeter(p.calls).filter((l) => l.agent).length === agentsBefore + 1, `the analyst's session: ${an} (${apiF.requests.length} requests)`);
 await apiF.close();
 for (const s of sessions) check(s.api.requests.length === sessions.filter((x) => x.api === s.api).reduce((a, x) => a + x.turns, 0), `a fake API got ${s.api.requests.length} requests for ${s.turns} turns`);

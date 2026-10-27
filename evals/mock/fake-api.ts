@@ -45,7 +45,7 @@ export type FakeOpts = {
 export type FakeRequest = {
   at: number; endAt?: number; path: string; model: string; mode: FakeMode; status: number; role?: string;
   /** sha12 of each system block (Claude Code adds its own blocks before ours). */
-  systemSha: string[]; ttls: string[]; beta: string; firstUser: string; thinking?: unknown; effort?: string;
+  systemSha: string[]; ttls: string[]; beta: string; firstUser: string; thinking?: unknown; effort?: string; maxTokens?: number;
   images: number; assistantTurns: number;
   /** sha12 of each image's base64 data, in order. */
   imageSha: string[];
@@ -56,7 +56,7 @@ export type FakeRequest = {
 const sha12 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 type Block = { type: string; text?: string; cache_control?: { ttl?: string }; [k: string]: unknown };
-type Body = { model: string; system?: string | Block[]; messages: { role: string; content: string | Block[] }[]; thinking?: unknown; output_config?: { effort?: string } };
+type Body = { model: string; system?: string | Block[]; messages: { role: string; content: string | Block[] }[]; thinking?: unknown; output_config?: { effort?: string }; max_tokens?: number };
 type Turn = { content: Block[]; stop_reason?: string; usage?: Record<string, number> };
 type Timed = { firstMs: number; restMs: number; chunks: number };
 
@@ -226,7 +226,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
     const first = b.messages.find((m) => m.role === "user");
     const rec: FakeRequest = {
       at: Date.now(), path, model: b.model, mode: o.mode!, status: 200, systemSha: system.map((x) => sha12(x.text ?? "")), ttls: ttls(b),
-      beta: String(req.headers["anthropic-beta"] ?? ""), firstUser: first ? textOf(first.content) : "", thinking: b.thinking, effort: b.output_config?.effort,
+      beta: String(req.headers["anthropic-beta"] ?? ""), firstUser: first ? textOf(first.content) : "", thinking: b.thinking, effort: b.output_config?.effort, maxTokens: b.max_tokens,
       images: b.messages.flatMap((m) => (typeof m.content === "string" ? [] : m.content)).filter((x) => x.type === "image").length,
       assistantTurns: b.messages.filter((m) => m.role === "assistant").length,
       imageSha: b.messages.flatMap((m) => (typeof m.content === "string" ? [] : m.content)).filter((x) => x.type === "image").map((x) => sha12(String((x.source as { data?: string } | undefined)?.data ?? ""))),

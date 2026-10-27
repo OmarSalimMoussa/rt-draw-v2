@@ -30,6 +30,7 @@ import { CallError, type CallStats, EFFORTS, type Effort, MODEL_IDS, type MockAp
 import { JEV_SETTINGS, callJev, isJev } from "../../dev/jev.ts";
 import { type Chunk, Flights, type Req, readReply, replay, replyName, reqHash, standIn, storeImages, writeReply } from "./cache.ts";
 import { listUsd, meterCall } from "./meter.ts";
+import { EVAL_MAX_TOKENS } from "./config.ts";
 import { type Paths, paths } from "./paths.ts";
 import { type SlotN, Slots, type Token, loadDevToken, loadJevKey, loadTokens } from "./tokens.ts";
 import type { Arm, CallMode, RecordedReply, Shared } from "./types.ts";
@@ -47,11 +48,6 @@ const TIMEOUT_MS = 120_000;
  * over twice the slowest gold ever drawn (38 min at max effort); every other role finished within 2 min in history.
  */
 const evalHangMs = (role: string) => (role === "real-gold" ? 90 : 15) * 60_000;
-/**
- * An eval role's output, at most: the model's own maximum. Only the product's calls keep MAX_TOKENS, as the hosted app
- * does: gold is the ideal the product aims at, so nothing throttles it (nor triage, the judge or the analyst).
- */
-const EVAL_MAX_TOKENS = 128_000;
 const LOOP_RESOLUTION_MS = 10;
 const LATE_MAX_MS = 1000;
 /** A warm scan's case end waits this long, at most, for the processes it started to finish starting. */

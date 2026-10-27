@@ -5,13 +5,14 @@
 // the meter's prices and logged as one meter line, so no agent is ever invisible. All three
 // may search the web and read pages, to research a better way (the owner, 2026-10-26); a
 // check's sessions have no network but the fake API. v1's Opus coordinator re-read ~375k
-// tokens a request (~$72); these are Sonnet on digests.
+// tokens a request (~$72); these work on digests. Their replies get the eval roles' output, not the product's 4096
+// tokens: e86's Opus analyst ran out thinking, and the critic got the error for an answer.
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { type CanUseTool, type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import { MODEL_IDS, type MockApi, type RateLimit, childEnv } from "../../dev/claude.ts";
 import { ask, gatewayStatus, recordSpend } from "../loop/client.ts";
-import { LOOP } from "../loop/config.ts";
+import { EVAL_MAX_TOKENS, LOOP } from "../loop/config.ts";
 import { listUsd, meterAgent } from "../loop/meter.ts";
 import { paths } from "../loop/paths.ts";
 import { put } from "../loop/record.ts";
@@ -143,7 +144,7 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
     prompt: a.prompt,
     options: {
       model, systemPrompt: a.system, tools: TOOLS[a.role], settingSources: [], persistSession: false, includePartialMessages: true, effort: "high",
-      maxTurns: a.caps.turns, cwd: a.cwd, env: childEnv(a.token.token, { configDir: p.claudeConfig, model, maxRetries: 2, mockApi: a.mockApi }),
+      maxTurns: a.caps.turns, cwd: a.cwd, env: childEnv(a.token.token, { configDir: p.claudeConfig, model, maxRetries: 2, mockApi: a.mockApi, maxTokens: EVAL_MAX_TOKENS }),
       // "default": every ask reaches canUseTool (left unset, Claude Code may pick auto mode and its classifier calls).
       permissionMode: "default", canUseTool: canUseToolOf(a.rule),
       // Claude Code runs read-only tools and some Bash without asking: the hook sees every call.
