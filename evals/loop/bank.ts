@@ -2,8 +2,9 @@
 // champion and reused by every decision, so a decision pays for no driver. Built once (tuning,
 // H-gate, H-chart; first-timers first, so the pages they build exist as the site:<target> starts
 // of the held-out explorers and breakers), refreshed every 5 keeps or weekly (40 fresh cases in,
-// the 40 oldest tuning cases to bank/archive/, never deleted), and topped up by the fork sends of
-// a decision that ran short. A bank that fails a §2.3 gate is refused: run.ts stops and names it.
+// none out: a decision samples once there are too many, rte.ts scanCases), and topped up by the
+// fork sends of a decision that ran short. A bank that fails a §2.3 gate is refused: run.ts stops
+// and names it.
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { type GateCase, HELDOUT_CHART, HELDOUT_GATE, type Scenario, TUNING, fresh, gates } from "../core/scenarios.ts";
@@ -70,22 +71,20 @@ export async function buildBank(ctx: DriveCtx, slots: Pages[], o: { bank: string
 }
 
 /**
- * A refresh (§1.5): 8 fresh sessions × 5 sends on the champion. The 40 oldest tuning cases retire to bank/archive/,
- * unless the refreshed bank fails a gate: then the new cases go there instead and the bank stays as it was.
+ * A refresh (§1.5): 8 fresh sessions × 5 sends on the champion, added to the bank; no case retires. If the bank with
+ * them fails a gate, they go to bank/archive/ instead and the bank stays as it was.
  */
-export async function refresh(ctx: DriveCtx, slots: Pages[], n: number): Promise<BankResult & { retired: string[] }> {
+export async function refresh(ctx: DriveCtx, slots: Pages[], n: number): Promise<BankResult & { refused: string[] }> {
   const list = fresh(n);
   const missing = missingStarts(list.map((s) => s.start), savedIn(paths().resume));
   if (missing.length) throw new Error(`refresh ${n}: no saved page for ${missing.join(", ")} (the bank build saves them)`);
-  const oldest = gateCases().filter((c) => !c.void && (c.set === "tuning" || c.set === "fresh")).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)).map((c) => c.id);
   const cases = await runSessions(ctx, slots, `f${n}`, list.map((s, i) => ({ s, n: i + 1 })));
-  const old = new Set(oldest.slice(0, LOOP.bank.refreshCases));
-  const fails = gates(gateCases().filter((c) => !old.has(c.id)));
+  const fails = gates(gateCases());
   // Refused: every case dir of this refresh goes, voided ones too, so they can't count against the bank that stays.
-  const retired = fails.length ? readdirSync(paths().bankCases).filter((d) => d.startsWith(`c-f${n}-`)) : [...old];
-  mkdirSync(paths().bankArchive, { recursive: true });
-  for (const id of retired) renameSync(paths().bankCase(id), join(paths().bankArchive, id));
-  return { ...judged(ctx, { cases, fails }, { refresh: n, kept: fails.length ? "old" : "new" }), retired };
+  const refused = fails.length ? readdirSync(paths().bankCases).filter((d) => d.startsWith(`c-f${n}-`)) : [];
+  if (refused.length) mkdirSync(paths().bankArchive, { recursive: true });
+  for (const id of refused) renameSync(paths().bankCase(id), join(paths().bankArchive, id));
+  return { ...judged(ctx, { cases, fails }, { refresh: n, kept: fails.length ? "old" : "new" }), refused };
 }
 
 /**

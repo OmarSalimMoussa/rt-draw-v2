@@ -32,6 +32,8 @@ const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g,
 const post = (url: string, body: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
 
+/** ?set=illustrations: the judge on pictures alone, a round of its own (rte calib --illustrations). */
+const SET = new URLSearchParams(location.search).get("set") ?? undefined;
 let tab: "pairs" | "sends" = "pairs";
 let data: Pairs | undefined;
 let shownAt = performance.now();
@@ -41,17 +43,18 @@ let busy = false;
 // ---- Pairs
 
 async function loadPairs() {
-  data = await fetch("/api/eval/pairs").then((r) => r.json());
+  data = await fetch(`/api/eval/pairs${SET ? `?${new URLSearchParams({ set: SET })}` : ""}`).then((r) => r.json());
   showPair();
 }
 
 function showPair() {
   const host = $("#pairs");
   const p = data?.progress;
-  const head = p ? `${p.clear} of ${p.clearGoal} clear fidelity labels · ${p.craft} of ${p.craftGoal} craft · ${data!.pairs.length} pairs left` : "";
+  const head = p ? `${SET ? "Illustrations: the two sides differ only in their pictures · " : ""}${p.clear} of ${p.clearGoal} clear fidelity labels · ${p.craft} of ${p.craftGoal} craft · ${data!.pairs.length} pairs left` : "";
   const pair = data?.pairs[0];
   if (!pair) {
-    host.innerHTML = `<div class="card"><h2>${data?.error ? "Can't load the pairs" : data?.total ? "All labelled" : "No pairs yet"}</h2><p class="muted">${esc(data?.error ?? (data?.total ? `${head}. Next: rte calib --check.` : "They appear after checkpoint 0 and the contrast run: rte calib --contrast draw.model=0 --cap 200."))}</p></div>`;
+    const next = SET ? ["rte calib --check --illustrations", "rte calib --illustrations --contrast picture.model=0 --cap 600"] : ["rte calib --check", "checkpoint 0 and the contrast run: rte calib --contrast draw.model=0 --cap 200"];
+    host.innerHTML = `<div class="card"><h2>${data?.error ? "Can't load the pairs" : data?.total ? "All labelled" : "No pairs yet"}</h2><p class="muted">${esc(data?.error ?? (data?.total ? `${head}. Next: ${next[0]}.` : `They appear after ${next[1]}.`))}</p></div>`;
     return;
   }
   const side = (name: string, s: Side) => `<figure><figcaption>${name}${s.framed ? ", where the board changed (a screen moved away)" : ""}</figcaption><img src="${esc(s.image)}" alt="${name} result">${s.changed ? `<figcaption>${name}, where it changed (the screen moved away)</figcaption><img src="${esc(s.changed)}" alt="${name} result where it changed">` : ""}${s.changes ? `<ul>${s.changes.map((c) => `<li>${esc(c)}</li>`).join("") || "<li>nothing changed</li>"}</ul>` : ""}</figure>`;
@@ -76,8 +79,8 @@ async function choose(key: string) {
   if (busy || (key !== "u" && !(k && pair))) return;
   busy = true;
   try {
-    if (key === "u") await post("/api/eval/label", { undo: true });
-    else await post("/api/eval/label", { pair: pair!.id, question: pair!.question, side: k.side, strength: k.strength ?? null, ms: Math.round(performance.now() - shownAt) });
+    if (key === "u") await post("/api/eval/label", { undo: true, set: SET });
+    else await post("/api/eval/label", { pair: pair!.id, question: pair!.question, side: k.side, strength: k.strength ?? null, ms: Math.round(performance.now() - shownAt), set: SET });
     await loadPairs();
   } finally {
     busy = false;

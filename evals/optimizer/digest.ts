@@ -39,7 +39,7 @@ const read = <T>(file: string): T | undefined => {
 const cut = (s: string | undefined, n = DIGEST.textChars) => (!s ? "" : s.length > n ? `${s.slice(0, n - 1)}…` : s).replace(/\s+/g, " ");
 const q = (s?: string) => `"${cut(s)}"`;
 
-/** A banked case's folder: the bank, or the archive it retired to. */
+/** A banked case's folder: the bank, or the archive (cases from before 2026-10-26 could retire there). */
 const bankDir = (id: string) => (existsSync(paths().bankCase(id)) ? paths().bankCase(id) : join(paths().bankArchive, id));
 const bank = <T>(id: string, f: string) => read<T>(join(bankDir(id), f));
 /** Only tuning cases (the bank's, refreshes' and top-ups') are ever digested: held-out ones would teach the optimizer the yardstick. */
@@ -231,6 +231,8 @@ export type DigestInput = {
   failures?: string[]; ledger?: string[]; tried?: string[];
   /** What the coordinator would drop unrun now (paused components, --quality-only, owner-only kinds). */
   wont?: string[];
+  /** Reverted cards that leaned the right way without proving it (run.ts' nearWins): to combine or retry. */
+  nearWins?: string[];
 };
 
 /** The analyst's input: champion misses first, then candidate losses, trace patterns, latency, failures, ledger, tried. */
@@ -243,7 +245,10 @@ export function analystDigest(o: DigestInput): string {
   const spans = championSpans([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
   const report = Object.values(tracePatterns(spans)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
   const rest = fit(["# 3. The champion's traces", "Patterns:", ...report, "Latency by step (median):", ...spanMedians(spans)],
-    [...(o.failures?.length ? ["# 4. Failure analysts", ...o.failures] : []), ...(o.ledger?.length ? ["# 5. Ledger", ...o.ledger] : []), ...(o.tried?.length ? ["# 6. Tried (don't repeat without saying what differs)", ...o.tried] : [])],
+    [
+      ...(o.nearWins?.length ? ["# 4. Near wins (reverted, but leaning the right way: combine them in a combo card, or retry with what differs)", ...o.nearWins] : []),
+      ...(o.failures?.length ? ["# 5. Failure analysts", ...o.failures] : []), ...(o.ledger?.length ? ["# 6. Ledger", ...o.ledger] : []), ...(o.tried?.length ? ["# 7. Tried (don't repeat without saying what differs)", ...o.tried] : []),
+    ],
     budget(DIGEST.share.rest));
   const wont = o.wont?.length ? `# 0. What the loop won't run now (don't propose it)\n${o.wont.map((w) => `- ${w}`).join("\n")}` : undefined;
   return [...(wont ? [wont] : []), missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
@@ -261,7 +266,7 @@ export function failureDigest(items: { case: string; run?: string }[]): string {
     const replies = bank<RecordedReply[]>(id, "replies.json") ?? [];
     const result = run ? arm<ArmResult>(run, id, "B", "result.json") : undefined;
     const timing = (a: Arm) => (run ? arm<ArmTiming>(run, id, a, "timing.json") : undefined);
-    const fmt = (t?: ArmTiming) => (t ? `TTFC ${t.ttfcMs ?? "-"} ms (first text ${t.firstTextMs ?? "-"}, resolver ${t.resolverMs ?? "-"}, pictures ${t.picturesMs ?? "-"}), TTD ${t.ttdMs} ms` : "-");
+    const fmt = (t?: ArmTiming) => (t ? `first drawing ${t.ttfdMs ?? "-"} ms (first text ${t.firstTextMs ?? "-"}, resolver ${t.resolverMs ?? "-"}, pictures ${t.picturesMs ?? "-"}), render p90 ${t.renderP90Ms ?? "-"} ms (max ${t.renderMaxMs ?? "-"}), TTFC ${t.ttfcMs ?? "-"} ms, TTD ${t.ttdMs} ms` : "-");
     const draw = run ? result?.reply : replyText(replies.find((r) => r.role === "draw"));
     const thinking = run ? (result?.calls ?? []).filter((c) => (c.thinkingTokens ?? 0) > 0).map((c) => c.role) : replies.filter((r) => (read<{ stats?: { thinkingTokens?: number } }>(paths().reply(r.cacheFile.replace(/\.json$/, "")))?.stats?.thinkingTokens ?? 0) > 0).map((r) => r.role);
     return [

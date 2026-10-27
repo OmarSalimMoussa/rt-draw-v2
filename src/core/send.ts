@@ -6,7 +6,7 @@ import type { View } from "./board.ts";
 import { type OpResult, type Prompt, type SendResult, buildPrompt, run } from "./draw.ts";
 import type { Stroke } from "./ink.ts";
 import type { Word } from "./link.ts";
-import { pictureFiller } from "./picture.ts";
+import { type SendContext, pictureFiller } from "./picture.ts";
 import type { Scene } from "./scene.ts";
 import { type TraceContext, spanSync } from "./trace.ts";
 import type { Tuning } from "./tuning.ts";
@@ -35,9 +35,13 @@ export type Sent = { prompt: Prompt; result: SendResult; pics?: { drawn: number;
 export async function send(scene: Scene, input: SendInput, t: Tuning, hooks: SendHooks = {}, camera?: View): Promise<Sent> {
   const { draw = () => {}, signal, parent } = hooks;
   // Made first, so the picture processes start while the prompt is built; each picture starts as its drawing() op lands.
-  const pictures = t["draw.fillPictures"] ? pictureFiller(scene, t, draw, signal, parent) : undefined;
+  // What a picture may follow (picture.context): their words, and their sketches as the prompt read them. Set before
+  // any drawing op can land: ops only land once the final prompt is built (a guess's are held until then).
+  const context: SendContext = { said: typeof input.words === "string" ? input.words : input.words.map((w) => w.word).join(" "), sketches: [] };
+  const pictures = t["draw.fillPictures"] ? pictureFiller(scene, t, draw, signal, parent, context) : undefined;
   let guess: Promise<Prompt | undefined> | undefined;
   const final = buildPrompt(scene, input.strokes, input.words, t, parent, camera, (g) => (guess = g));
+  void final.then((p) => (context.sketches = p.sketches ?? []), () => {});
   let gliding: Promise<void> = Promise.resolve();
   const onOp = (r: OpResult) => {
     hooks.onOp?.(r);

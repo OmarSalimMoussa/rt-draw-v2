@@ -3,6 +3,7 @@
 // The gateway reads the tokens file itself; this process hands it the path only,
 // and its env carries no token or key.
 import { type ChildProcess, spawn } from "node:child_process";
+import { request } from "node:http";
 import { fileURLToPath } from "node:url";
 import type { Effort, RateLimit, Thinking } from "../../dev/claude.ts";
 import type { RunMode } from "./gateway.ts";
@@ -71,9 +72,13 @@ export type AskRequest = {
   token?: SlotN;
 };
 
-/** One eval-role call through the gateway. Throws on any error (never an empty success). */
+/** The gateway's --cap is reached: the step stops, never just the call or the case (a typed error, so no one reads the words). */
+export class CapReached extends Error {}
+
+/** One eval-role call through the gateway. Throws on any error (never an empty success); CapReached at the cap. */
 export async function ask(r: AskRequest, url = gatewayUrl): Promise<{ text: string; stats: Record<string, unknown> }> {
   const j = await post("/call", r, url);
+  if (j.capped) throw new CapReached(j.error);
   if (j.error) throw new Error(j.error);
   return j;
 }
@@ -83,7 +88,7 @@ export async function ask(r: AskRequest, url = gatewayUrl): Promise<{ text: stri
  * checkpoints); cached: request hashes the diffscan found identical in both arms, served from the bank cache in a live run;
  * warm (a scan only): each call also starts the processes it would take, and the case's end waits until they're up.
  */
-export const setMode = (run: string, mode: RunMode, o: { share?: boolean; cached?: string[]; warm?: boolean } = {}, url = gatewayUrl) => post("/run", { run, mode, ...o }, url);
+export const setMode = (run: string, mode: RunMode, o: { share?: boolean; cached?: string[]; warm?: boolean; timed?: boolean } = {}, url = gatewayUrl) => post("/run", { run, mode, ...o }, url);
 /** An agent session's list $ and last rate-limit state on its slot: the slot's window and week count agents too (§6.6). */
 export const recordSpend = (o: { slot: SlotN; usd: number; rateLimit?: RateLimit }, url = gatewayUrl) => post("/spend", o, url);
 /** The case is over: the gateway's event-loop delay p99 over it, and its calls per arm (replies.json's rows). */
@@ -97,7 +102,29 @@ function need(url: string | undefined): string {
   return url;
 }
 async function post(path: string, body: unknown, url: string | undefined) {
-  const res = await fetch(`${need(url)}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const j = await res.json().catch(() => ({ error: `gateway HTTP ${res.status}` }));
-  return res.ok || j.error ? j : { ...j, error: `gateway HTTP ${res.status}` };
+  const res = await postJson(`${need(url)}${path}`, JSON.stringify(body));
+  let j;
+  try {
+    j = JSON.parse(res.text);
+  } catch {
+    j = { error: `gateway HTTP ${res.status}` };
+  }
+  return (res.status >= 200 && res.status < 300) || j.error ? j : { ...j, error: `gateway HTTP ${res.status}` };
+}
+/**
+ * One JSON POST over node:http, not fetch: fetch gives up after 300 s without the answer's headers, and the gateway
+ * answers an eval role's call only when it's done (gold at max effort took up to 38 minutes; the gateway's hang guard ends a stuck one).
+ */
+function postJson(url: string, body: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request(url, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (c: string) => (text += c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
 }

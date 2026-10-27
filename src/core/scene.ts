@@ -3,6 +3,14 @@
 
 import type { El } from "./picture.ts";
 export type Box = { x: number; y: number; w: number; h: number };
+/** An op named a shape that isn't on the board (yet: ops.waitForShape holds the op until a later line makes it). */
+export class NoShape extends Error {
+  readonly id: string;
+  constructor(id: string) {
+    super(`no shape "${id}"`);
+    this.id = id;
+  }
+}
 /** "frame" is a page (or app screen) on the board: its text is its name, shown above it, and the shapes inside it are its content. */
 export type Kind = "rect" | "round" | "circle" | "pill" | "line" | "arrow" | "frame";
 export const KINDS: Kind[] = ["rect", "round", "circle", "pill", "line", "arrow", "frame"];
@@ -87,18 +95,37 @@ export class Scene {
     if (this.home === id) this.home = this.order.find((o) => this.shapes.get(o)?.kind === "frame");
   }
 
-  /** Front, back, or right above / below another shape. */
+  /**
+   * Front, back, or right above / below another shape. Back is the back of the shape's page: right above the frame its
+   * middle is in (the topmost, if pages overlap), so it never goes behind the page and out of sight; below a page means
+   * the same for a shape that isn't one. A page, or a shape on no page, goes to the back of the board.
+   */
   layer(id: string, where: "front" | "back" | { above: string } | { below: string }) {
     const rest = this.order.filter((o) => o !== id);
+    const s = this.shapes.get(id);
+    const onPage = !!s && s.kind !== "frame";
     if (where === "front") rest.push(id);
-    else if (where === "back") rest.unshift(id);
-    else {
+    else if (where === "back") {
+      const page = onPage ? this.pageAt(s.box.x + s.box.w / 2, s.box.y + s.box.h / 2, id) : undefined;
+      rest.splice(page ? rest.indexOf(page) + 1 : 0, 0, id);
+    } else if ("below" in where && onPage && this.shapes.get(where.below)?.kind === "frame" && rest.includes(where.below)) {
+      rest.splice(rest.indexOf(where.below) + 1, 0, id);
+    } else {
       const other = "above" in where ? where.above : where.below;
       const i = rest.indexOf(other);
-      if (i < 0) throw new Error(`no shape ${other}`);
+      if (i < 0) throw new NoShape(other);
       rest.splice("above" in where ? i + 1 : i, 0, id);
     }
     this.order = rest;
+  }
+
+  /** The topmost page (frame) holding the point, other than `not`: the one a shape there is seen on. */
+  private pageAt(x: number, y: number, not?: string): string | undefined {
+    const holds = (b: Box) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+    return this.order.findLast((o) => {
+      const f = this.shapes.get(o);
+      return !!f && f.kind === "frame" && o !== not && holds(f.box);
+    });
   }
 
   /** Moves a shape, or a group by the same offset for all its members. */
@@ -106,7 +133,7 @@ export class Scene {
     const members = this.groups.get(id);
     if (!members) {
       const s = this.shapes.get(id);
-      if (!s) throw new Error(`no shape ${id}`);
+      if (!s) throw new NoShape(id);
       s.box = { ...s.box, ...box };
       return;
     }

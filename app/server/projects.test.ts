@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -94,5 +94,18 @@ describe("projects API", () => {
     await b("/api/project/save", { id: "kept01", versions: [version(1)], meta: { name: "Kept" } });
     const owner = first.cookie().split("=")[1];
     expect(existsSync(join(data, "app", "owners", owner, "kept01.ndjson"))).toBe(true);
+  });
+
+  it("the send log appends each send under RT_DATA_DIR/app/sends, even before the project's first save", async () => {
+    const b = browser();
+    const first = await b("/api/projects");
+    const send = (id: string) => ({ id, project: "log001", before: { v: 1 }, words: "a cat", strokes: [] });
+    expect((await b("/api/sends", send("s-1"))).json).toEqual({ ok: true });
+    await b("/api/sends", send("s-2"));
+    const owner = first.cookie().split("=")[1];
+    const lines = readFileSync(join(data, "app", "sends", owner, "log001.ndjson"), "utf8").trim().split("\n").map((l) => JSON.parse(l).id);
+    expect(lines).toEqual(["s-1", "s-2"]);
+    expect((await b("/api/sends", { ...send("s-3"), project: "../x" })).res.status).toBe(400);
+    expect((await b("/api/sends", { project: "log001" })).res.status).toBe(400);
   });
 });

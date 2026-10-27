@@ -44,10 +44,13 @@ export function canaryDue(served = lastServed(), now = Date.now()): boolean {
   return now - Date.parse(last.at) >= CANARY_EVERY_MS || (served !== undefined && judgeId("fidelity", served, variants().fidelity) !== last.judgeId);
 }
 
-/** One canary run (the set is picked on the first and kept in canary.jsonl); the HealthRow is for health.jsonl. */
+/**
+ * One canary run (the set is picked on the first and kept in canary.jsonl, until a packet of it is gone: a home's clean-up
+ * deleted checkpoint 0's run, and the canary could never run again); the HealthRow is for health.jsonl.
+ */
 export async function runCanary(seed: string | number = "canary"): Promise<HealthRow> {
-  let set = lines().find((l) => l.kind === "set")?.packets as Stable[] | undefined;
-  if (!set) {
+  let set = lines().filter((l) => l.kind === "set").at(-1)?.packets as Stable[] | undefined;
+  if (!set || set.some((k) => !existsSync(join(paths().run(k.run), "cases", k.case, "judge", "packet.json")))) {
     set = stablePackets(seed).slice(0, LOOP.canary.packets);
     if (set.length < LOOP.canary.packets) throw new Error(`only ${set.length} stable packets: the canary needs ${LOOP.canary.packets}`);
     appendLine(file(), { kind: "set", at: new Date().toISOString(), packets: set });

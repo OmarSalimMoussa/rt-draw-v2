@@ -174,7 +174,17 @@ const calls: Handler = (q) => {
 
 // ---- Calibration labels (§4.5)
 
-const pairsFile = () => join(dirname(paths().labels), "pairs.json");
+/**
+ * A label set's files: the judge's calibration in labels/, or a round of its own beside it (illustrations: the judge on
+ * pictures alone, rte calib --illustrations) in labels/<set>/. Undefined for a set that doesn't exist.
+ */
+export const LABEL_SETS = ["illustrations"];
+export function labelFiles(set?: string | null): { pairs: string; labels: string } | undefined {
+  if (!set) return { pairs: join(dirname(paths().labels), "pairs.json"), labels: paths().labels };
+  if (!LABEL_SETS.includes(set)) return undefined;
+  const dir = join(dirname(paths().labels), set);
+  return { pairs: join(dir, "pairs.json"), labels: join(dir, "labels.jsonl") };
+}
 /** Labels still standing: every line not undone later. */
 export function standingLabels(file: string): Label[] {
   const all = lines<Label & { undo?: string }>(file);
@@ -184,19 +194,22 @@ export function standingLabels(file: string): Label[] {
 const packetOf = (p: PairRef): Packet => JSON.parse(readFileSync(join(paths().run(p.run), "cases", p.case, "judge", "packet.json"), "utf8"));
 const url = (p: PairRef, f: string) => `/api/eval/file?${new URLSearchParams({ run: p.run, case: p.case, f })}`;
 
-/** GET /api/eval/pairs: the pairs left to label, fidelity before craft, as the judge saw them minus the positions. */
-const pairs: Handler = () => {
-  const all: PairRef[] = readJson(pairsFile()) ?? [];
-  const done = standingLabels(paths().labels);
+/** GET /api/eval/pairs[?set=]: the pairs left to label, fidelity before craft, as the judge saw them minus the positions. */
+const pairs: Handler = (q) => {
+  const files = labelFiles(q.get("set"));
+  if (!files) return refuse(404, `no label set ${q.get("set")}`);
+  const all: PairRef[] = readJson(files.pairs) ?? [];
+  const done = standingLabels(files.labels);
   const seen = new Set(done.map((l) => l.pair));
   const clear = done.filter((l) => l.question === "fidelity" && l.strength === "clear").length;
   const craft = done.filter((l) => l.question === "craft" && l.label !== "skip").length;
-  // Labelling stops at 60 clear fidelity labels and 30 craft labels.
-  const want = { fidelity: clear < LOOP.calib.clear, craft: craft < LOOP.calib.craftPairs };
+  // Labelling stops at 60 clear fidelity labels and 30 craft labels (the illustrations round: 30 and 15).
+  const goal = q.get("set") ? LOOP.calib.illustrations : LOOP.calib;
+  const want = { fidelity: clear < goal.clear, craft: craft < goal.craftPairs };
   const left = all.filter((p) => !seen.has(p.id) && want[p.question]).sort((a, b) => Number(a.question === "craft") - Number(b.question === "craft"));
   return json({
     total: all.length,
-    progress: { clear, clearGoal: LOOP.calib.clear, craft, craftGoal: LOOP.calib.craftPairs, labelled: done.length },
+    progress: { clear, clearGoal: goal.clear, craft, craftGoal: goal.craftPairs, labelled: done.length },
     pairs: left.map((p) => {
       const k = packetOf(p);
       const framed = (f?: string) => (f ? { changed: url(p, f) } : {});
@@ -210,10 +223,12 @@ const pairs: Handler = () => {
   });
 };
 
-/** POST /api/eval/label {pair, question, side, strength, ms} appends one label (the side mapped to its arm here); {undo: true} undoes the last one. */
+/** POST /api/eval/label {pair, question, side, strength, ms, set?} appends one label (the side mapped to its arm here); {undo: true} undoes the last one. */
 const label: Handler = async (_q, req) => {
   const b = await body(req);
-  const file = paths().labels;
+  const files = labelFiles(b.set as string | undefined);
+  if (!files) return refuse(404, `no label set ${b.set}`);
+  const file = files.labels;
   mkdirSync(dirname(file), { recursive: true });
   const at = new Date().toISOString();
   if (b.undo) {
@@ -223,7 +238,7 @@ const label: Handler = async (_q, req) => {
     appendFileSync(file, `${JSON.stringify({ undo: last.id, at })}\n`);
     return json({ undone: last.id, pair: last.pair });
   }
-  const p = ((readJson(pairsFile()) ?? []) as PairRef[]).find((x) => x.id === b.pair);
+  const p = ((readJson(files.pairs) ?? []) as PairRef[]).find((x) => x.id === b.pair);
   if (!p) return refuse(404, `no pair ${b.pair}`);
   if (b.question !== p.question || !["left", "right", "tie", "skip"].includes(b.side)) return refuse(400, "question or side doesn't fit the pair");
   const pos = packetOf(p).positions;

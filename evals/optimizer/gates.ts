@@ -185,7 +185,8 @@ const OUTLINE_SET = /\b(roughness|strokeWidth)\s*(:|=(?!=))/;
  * and INK can't be redefined or dropped, no text gets a font of its own (the grid labels' monospace aside), and these go
  * to the owner (a crisp page could win the craft judge): a hand-drawn knob set under 0.8× today's value, an outline's
  * roughness or width set in render.ts, picture.ts or ops.ts other than from its knob, a dropped read of one of those knobs, and
- * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape).
+ * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape). The word itself: "a rough
+ * box" is the user's ink (e80-h3's false hold), and every true one in history named roughness or stroke-width.
  */
 export function lookGate(files: FileDiff[]): Finding[] {
   const out: Finding[] = [];
@@ -207,10 +208,35 @@ export function lookGate(files: FileDiff[]): Finding[] {
   const reads = (ls: string[]) => ls.filter(knobRead).length;
   if (reads(core.flatMap((f) => f.added)) < reads(core.flatMap((f) => f.removed))) out.push({ verdict: "owner", why: `a read of ${HAND_DRAWN.join(", ")} dropped: how hand-drawn the page looks is the owner's` });
   for (const l of files.find((f) => f.path === "src/core/prompts.ts")?.added ?? [])
-    if (/rough|stroke.?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
+    if (/roughness|stroke.?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
+  // More effects added than removed: moving or re-indenting today's (render.ts' fade filter) isn't a new one.
+  for (const f of files.filter((x) => x.path.startsWith("src/") && !/\.test\.tsx?$/.test(x.path))) {
+    const n = (ls: string[]) => ls.reduce((a, l) => a + effectsIn(l).length, 0);
+    const gone = new Set(f.removed.map((l) => l.trim()));
+    const line = f.added.find((l) => effectsIn(l).length && !gone.has(l.trim())) ?? f.added.find((l) => effectsIn(l).length);
+    if (n(f.added) > n(f.removed)) out.push({ verdict: "owner", why: `an SVG or CSS effect (filter, mask, pattern, blend, shadow, animation) in ${f.path}, whose cost the browser pays after the engine's timing: "${line?.trim().slice(0, 120)}"` });
+  }
   return out;
 }
-
+/**
+ * SVG and CSS effects (filters, masks, patterns, blending, shadows, animations): the browser composites or runs them after
+ * render() returns, where the engine's timing (LOOP-V2.md A2) doesn't see them, so adding one is the owner's call. In a
+ * line's strings: an element or attribute name ("filter", "<mask", `filter="…"`), a CSS property or function; in its
+ * code: a style property or an animation API. Code alone never matches a CSS word, so `filter: string`, `.blur()` or a
+ * `transition:` key don't.
+ */
+const EFFECT_STRING = [
+  /^\s*<?\s*(?:filter|mask|pattern|animate(?:Transform|Motion)?|fe[A-Z]\w*)\b/g,
+  /<(?:filter|mask|pattern|animate\w*|set|fe[A-Z]\w*)\b/g,
+  /\b(?:filter|mask)\s*=/g,
+  /\b(?:filter|mask|transition|animation)\s*:/g,
+  /\b(?:mix-blend-mode|backdrop-filter|box-shadow)\b|drop-shadow|\bblur\(|@keyframes/g,
+];
+const EFFECT_CODE = /\.style\.(?:filter|mask|mixBlendMode|backdropFilter|boxShadow|transition|animation)\b|\bmixBlendMode\b|\bKeyframeEffect\b/g;
+const effectsIn = (l: string): string[] => {
+  const { code, strings } = codeOf(l);
+  return [...strings.flatMap((x) => EFFECT_STRING.flatMap((re) => x.match(re) ?? [])), ...(code.match(EFFECT_CODE) ?? [])];
+};
 /** Patch knobs are never the loop's to turn on or move: any changed line about them in tuning.ts. */
 export function patchGate(files: FileDiff[]): Finding[] {
   const t = files.find((f) => f.path === "src/core/tuning.ts");
@@ -285,17 +311,23 @@ export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?
 }
 
 /**
- * The card rules of §8.4 that send a card to the owner list (the coordinator applies them: a patch or cost
- * question with its A/B evidence, the rest before anything is built).
+ * Knobs only the owner sets: render.pictureBox (B2: a picture's box unseen, so the first drawing is its picture's first
+ * element, never an outline shown before it).
+ */
+export const OWNER_KNOBS = ["render.pictureBox"];
+/**
+ * The card rules of §8.4 that send a card to the owner list (the coordinator applies them: a patch question with
+ * its A/B evidence, the rest before anything is built). Cost never does: it is reported, never gating (the owner,
+ * LOOP-V2.md A3), nor does a model switch or a router: those are measured like any change (C3). A keep that switches
+ * the picture model waits for the judge's illustration calibration (the coordinator's hold).
  */
 export function cardOwnerReasons(card: HypothesisCard, o: { u1: boolean }): string[] {
   const keys = Object.keys(card.knobs ?? {});
   const patch = card.isPatch || keys.some((k) => k.startsWith("patches.") || KNOBS.find((x) => x.key === k)?.patches);
   return [
     ...(patch ? ["a patch knob proposed: the owner turns patches on"] : []),
-    ...(card.raisesCost ? ["cost-raising change"] : []),
     ...(card.touchesFrozen ? ["needs a frozen area"] : []),
-    ...(keys.some((k) => k.endsWith(".model")) ? ["model switch: needs calibration evidence"] : []),
+    ...(keys.some((k) => OWNER_KNOBS.includes(k)) ? [`an owner's knob: ${keys.filter((k) => OWNER_KNOBS.includes(k)).join(", ")}`] : []),
     ...(card.kind === "op" && !card.generality?.trim() ? ["new op without a generality note"] : []),
     ...(!o.u1 && [card.component, ...keys.map((k) => k.split(".")[0])].some((c) => INK_PARTS.includes(c)) ? ["ink-reading change and no U1 to check it on"] : []),
   ];

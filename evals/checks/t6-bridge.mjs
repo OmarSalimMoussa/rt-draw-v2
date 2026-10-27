@@ -1,6 +1,7 @@
 // T6's acceptance check: the bridge page (window.rtEval) and the harness clock.
 // Model replies stream from a local endpoint over time (resolver, drawing ops line by
-// line, doodles element by element), so TTFC and TTD are measured on real frames.
+// line, doodles element by element), so TTFC, TTD, time to first drawing (TTFD) and
+// render time are measured on real frames.
 // 0 model calls: one Chrome, every /api/* stubbed and counted (seen == stubbed), a
 // Vite with no plugins but the stream endpoint, so nothing could reach a model.
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t6-bridge.mjs
@@ -47,7 +48,11 @@ const RECOLOUR = "shape(home-nav, fill:#ffe3e3)\n";
 const TMP = 'shape(tmp-box, rect, 300 300 200 100, "a temporary grey box that is about to be removed", fill:#dee2e6)\n';
 const DOODLE = ['<circle cx="50" cy="50" r="30" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>\n', '<rect x="20" y="20" width="20" height="20" fill="#e03131"/>\n', '<line x1="10" y1="90" x2="90" y2="90" stroke="#1e1e1e"/>\n', '<ellipse cx="70" cy="30" rx="12" ry="8" fill="#74c0fc"/>\n'];
 let drawPlan = [];
+/** The picture's streamed elements, DOODLE unless a check sets others. */
+let picPlan;
 let calls = [];
+let jev = [];
+const { JEV_VERSIONS: JEV } = await import("../../src/core/model.ts");
 let n = 0;
 const stream = (steps) => (plans.set(String(++n), steps), { redirect: `/__stream/${n}` });
 const c = await openChrome({
@@ -55,10 +60,17 @@ const c = await openChrome({
     "/api/model": ({ body }) => {
       const r = JSON.parse(body);
       if (!r.user) return `${JSON.stringify({ done: true, warmed: true })}\n`;
+      // Jev's yes/no calls (the resolver by default, resolve.engine 1; the add hint; the think router): yes only to the nav
+      // as the reference, no to the rest. The resolver's takes RESOLVER_MS; the others answer at once.
+      if (JEV.includes(r.model)) {
+        jev.push(r.from);
+        const ids = Object.keys(JSON.parse(r.user).questions);
+        return stream([[r.from.startsWith("draw-refs") ? RESOLVER_MS : 1, JSON.stringify(Object.fromEntries(ids.map((id) => [id, { noul: id === "home-nav" ? 0.97 : 0.02 }])))]]);
+      }
       calls.push(r.from);
       if (r.from === "draw-refs") return stream([[RESOLVER_MS, '{"refs": [{"phrase": "the nav", "ids": ["home-nav"]}]}']]);
       if (r.from === "draw") return stream(drawPlan);
-      if (r.from === "picture") return stream(DOODLE.map((el) => [PIC_GAP, el]));
+      if (r.from === "picture") return stream((picPlan ?? DOODLE).map((el) => [PIC_GAP, el]));
       fail(`an unexpected model call from ${r.from}`);
     },
   },
@@ -78,8 +90,9 @@ const load = (scene = TOY) => page.eval(`rtEval.load(${js({ scene, camera: CAMER
 async function send(steps, words = "make the nav pink") {
   drawPlan = steps;
   calls = [];
+  jev = [];
   const out = await page.eval(`rtEval.send(${js({ words, strokes: [] })})`);
-  return { ...out, calls: [...calls] };
+  return { ...out, calls: [...calls], jev: [...jev] };
 }
 
 await page.goto(BRIDGE);
@@ -127,21 +140,28 @@ await load();
 const recolour = await send([[DRAW_MS, RECOLOUR]]);
 const t1 = recolour.timing;
 check(t1.ttfcMs >= RESOLVER_MS + DRAW_MS && t1.ttdMs >= t1.ttfcMs, `a recolour: TTFC ${t1.ttfcMs} (want ≥ the resolver's ${RESOLVER_MS} + ${DRAW_MS}), TTD ${t1.ttdMs}`);
-check(isDeepStrictEqual(recolour.calls, ["draw-refs", "draw"]), `a recolour send made these calls: ${recolour.calls.join(" ")} (no picture call expected)`);
+check(isDeepStrictEqual(recolour.calls, ["draw"]) && recolour.jev.includes("draw-refs-jev"), `a recolour send made these calls: ${recolour.calls.join(" ")}, Jev ${recolour.jev.join(" ")} (Jev's resolver and the drawing call expected, no picture call)`);
 check(recolour.ops.length === 1 && recolour.ops[0].ok && recolour.after.shapes.find((s) => s.id === "home-nav").style.fill === "#ffe3e3", "the recolour's outcome is wrong");
 check(t1.renders >= 1 && t1.heapMb > 0 && t1.enterAt > 0 && t1.ttloMs >= RESOLVER_MS, `timing: ${js(t1)}`);
+// A recolour's first drawing is its lasting change; every frame of the send is timed.
+check(t1.ttfdMs === t1.ttfcMs, `a recolour: TTFD ${t1.ttfdMs} isn't its TTFC ${t1.ttfcMs}`);
+check(t1.renderP90Ms > 0 && t1.renderP50Ms <= t1.renderP90Ms && t1.renderP90Ms <= t1.renderMaxMs, `a recolour's render times: p50 ${t1.renderP50Ms}, p90 ${t1.renderP90Ms}, max ${t1.renderMaxMs}`);
 check(recolour.spans.some((s) => s.name === "build the prompt") && recolour.spans.every((s) => s.startMs >= t1.enterAt - 1 && s.endMs >= s.startMs), "the send's spans are missing or not this send's");
 
 await load();
 const transient = await send([[DRAW_MS, TMP], [GAP, "remove(tmp-box)\n"]]);
 check(transient.timing.ttfcMs === undefined && transient.ops.every((o) => o.ok), `a shape added and removed again got a TTFC: ${js(transient.timing)}`);
+// Nothing kept: its first drawing is the send's end, so doing nothing never reads as fast.
+check(transient.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + GAP - 15, `a send that kept nothing has TTFD ${transient.timing.ttfdMs} ms (want its end, ≥ ${RESOLVER_MS + DRAW_MS + GAP})`);
 await load();
 const later = await send([[DRAW_MS, TMP], [GAP, "remove(tmp-box)\n"], [GAP, RECOLOUR]]);
 check(later.timing.ttfcMs >= RESOLVER_MS + DRAW_MS + 2 * GAP - 20, `TTFC came from the added-then-removed shape: ${later.timing.ttfcMs} ms (the recolour landed at ≥ ${RESOLVER_MS + DRAW_MS + 2 * GAP})`);
+check(later.timing.ttfdMs === later.timing.ttfcMs, `TTFD came from the added-then-removed shape: ${later.timing.ttfdMs} ms (the recolour, kept, at ${later.timing.ttfcMs})`);
 
 await load();
 const cam = await send([[DRAW_MS, "camera(0 0 2560 1600)\n"]], "zoom out");
 check(cam.timing.ttfcMs === undefined && cam.camera.w === 2560 && cam.ops[0]?.ok, `a camera-only reply: TTFC ${cam.timing.ttfcMs}, camera ${js(cam.camera)}`);
+check(cam.timing.ttfdMs >= DRAW_MS, `a camera-only reply drew nothing but has TTFD ${cam.timing.ttfdMs} ms (want its end)`);
 
 await load();
 const pictured = await send([[DRAW_MS, 'shape(gift, rect, 900 700 200 160, "a small gift box picture near the bottom right of the banner")\ndrawing(gift, "a gift box with a bow")\n']]);
@@ -149,6 +169,67 @@ const picEnd = Math.max(...pictured.spans.filter((s) => s.name.startsWith("pictu
 check(pictured.calls.filter((x) => x === "picture").length === 1 && pictured.pics?.drawn === 1, `the new drawing didn't get one picture call: ${pictured.calls.join(" ")}`);
 check(pictured.timing.ttdMs >= picEnd - 20 && pictured.timing.ttdMs >= RESOLVER_MS + DRAW_MS + DOODLE.length * PIC_GAP, `TTD ${pictured.timing.ttdMs} ms is before the last picture landed (${Math.round(picEnd)} ms)`);
 check(pictured.timing.ttfcMs === pictured.timing.ttdMs, `the placeholder counted as a lasting change: TTFC ${pictured.timing.ttfcMs}, TTD ${pictured.timing.ttdMs}`);
+// The picture's first streamed element is its first drawing: never the placeholder (on screen from the drawing() op, ~${RESOLVER_MS + DRAW_MS} ms),
+// and well before the last element.
+const placeholderMs = Math.min(...pictured.ops.filter((o) => o.line.startsWith("drawing(")).map((o) => o.ms));
+check(pictured.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + PIC_GAP - 15, `the placeholder counted as a first drawing: TTFD ${pictured.timing.ttfdMs} ms (the first element lands ≥ ${RESOLVER_MS + DRAW_MS + PIC_GAP}; the drawing() op at ${placeholderMs} ms from the drawing call)`);
+check(pictured.timing.ttfdMs <= pictured.timing.ttdMs - (DOODLE.length - 2) * PIC_GAP, `TTFD ${pictured.timing.ttfdMs} ms waited for the picture to finish (TTD ${pictured.timing.ttdMs} ms): a picture's first stroke counts`);
+
+// Only visible ink counts (LOOP-V2.md A1): a speck, a white line and a see-through rect streamed first aren't the first
+// drawing, the doodle's first real element (the 4th) is; nor is a shape nobody can see, drawn before one they can.
+picPlan = ['<circle cx="50" cy="50" r="1" fill="#1e1e1e"/>\n', '<line x1="0" y1="50" x2="100" y2="50" stroke="#ffffff" stroke-width="3"/>\n', '<rect x="0" y="0" width="100" height="100" fill="#e03131" opacity="0"/>\n', ...DOODLE];
+await load();
+const specks = await send([[DRAW_MS, 'shape(gift, rect, 900 700 200 160, "a small gift box picture near the bottom right of the banner")\ndrawing(gift, "a gift box with a bow")\n']]);
+picPlan = undefined;
+check(specks.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + 4 * PIC_GAP - 15, `a speck, a white line or a see-through rect counted as the first drawing: TTFD ${specks.timing.ttfdMs} ms (the first real element lands ≥ ${RESOLVER_MS + DRAW_MS + 4 * PIC_GAP})`);
+await load();
+const unseen = await send([[DRAW_MS, 'shape(ghost, rect, 100 100 200 100, "an empty box nobody sees", stroke:transparent)\n'], [GAP, 'shape(seen, rect, 400 100 200 100, "a pink box", fill:#ffe3e3)\n']]);
+check(unseen.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + GAP - 15, `a shape nobody sees counted as the first drawing: TTFD ${unseen.timing.ttfdMs} ms (the pink box lands ≥ ${RESOLVER_MS + DRAW_MS + GAP})`);
+// A shape already on the board counts only once it visibly changed: a 1-unit nudge and a barely-there recolour sent first
+// aren't the first drawing, the nav's recolour is (cream to pink, ΔE 12.6).
+await load();
+const nudged = await send([[DRAW_MS, 'move(card-robot, 81 740 340 420)\nshape(card-teddy, fill:#fff1f6)\n'], [GAP, RECOLOUR]]);
+check(nudged.ops.every((o) => o.ok) && nudged.timing.ttfcMs < nudged.timing.ttfdMs && nudged.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + GAP - 15, `a nudge or a faint recolour counted as the first drawing: TTFC ${nudged.timing.ttfcMs}, TTFD ${nudged.timing.ttfdMs} ms (the recolour lands ≥ ${RESOLVER_MS + DRAW_MS + GAP}); ops ${nudged.ops.map((o) => o.error ?? "ok").join(", ")}`);
+// A shape that ends with a drawing counts by its picture's first element or its words, never by its box, styled or not.
+await load();
+const boxed = await send([[DRAW_MS, 'shape(gift, rect, 900 700 200 160, "a small gift box picture near the bottom right of the banner", fill:#ffe3e3, stroke:#e03131)\ndrawing(gift, "a gift box with a bow")\n']]);
+check(boxed.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + PIC_GAP - 15, `a pictured shape's styled box counted as its first drawing: TTFD ${boxed.timing.ttfdMs} ms (the first element lands ≥ ${RESOLVER_MS + DRAW_MS + PIC_GAP})`);
+// Two specks first, so the picture's first visible element lands well after the words.
+picPlan = ['<circle cx="50" cy="50" r="1" fill="#1e1e1e"/>\n', '<circle cx="50" cy="50" r="1" fill="#1e1e1e"/>\n', ...DOODLE];
+await load();
+const worded = await send([[DRAW_MS, 'shape(gift, rect, 900 700 200 160, "a small gift box picture near the bottom right of the banner")\ntext(gift, "Gifts")\ndrawing(gift, "a gift box with a bow")\n']]);
+picPlan = undefined;
+check(worded.timing.ttfdMs < RESOLVER_MS + DRAW_MS + 2 * PIC_GAP, `a pictured shape's words didn't count before its picture: TTFD ${worded.timing.ttfdMs} ms (the words land at ~${RESOLVER_MS + DRAW_MS}, the first visible element ≥ ${RESOLVER_MS + DRAW_MS + 3 * PIC_GAP})`);
+
+// A picture drawn faded still shows (fade 1 dims it to 0.3): its first element is its first drawing, not the send's end.
+await load();
+const faded = await send([[DRAW_MS, 'shape(gift, rect, 900 700 200 160, "a small gift box picture near the bottom right of the banner", fade:1)\ndrawing(gift, "a gift box with a bow")\n']]);
+check(faded.ops.every((o) => o.ok) && faded.timing.ttfdMs <= faded.timing.ttdMs - (DOODLE.length - 2) * PIC_GAP, `a faded picture's first element didn't count: TTFD ${faded.timing.ttfdMs} ms, TTD ${faded.timing.ttdMs} ms; ops ${faded.ops.map((o) => o.error ?? "ok").join(", ")}`);
+// A caption shown only until the picture comes isn't its first drawing: only content the shape keeps counts.
+await load();
+const captioned = await send([[DRAW_MS, 'shape(gift, rect, 900 700 200 160, "a small gift box picture near the bottom right of the banner")\ntext(gift, "drawing a gift")\ndrawing(gift, "a gift box with a bow")\n'], [GAP, 'text(gift, "Gifts")\n']]);
+check(captioned.timing.ttfdMs >= RESOLVER_MS + DRAW_MS + PIC_GAP - 15, `a caption replaced before the end counted as the first drawing: TTFD ${captioned.timing.ttfdMs} ms (the first element lands ≥ ${RESOLVER_MS + DRAW_MS + PIC_GAP})`);
+// A picture already on screen, made bigger, is drawn when it grows, not when the reply ends (a camera move 3 gaps later).
+await load();
+const grown = await send([[DRAW_MS, "move(logo, 24 16 480 480)\n"], [3 * GAP, "camera(0 0 2560 1600)\n"]], "make the logo much bigger");
+check(grown.ops.every((o) => o.ok) && grown.timing.ttfdMs < RESOLVER_MS + DRAW_MS + GAP, `a picture made bigger wasn't drawn when it grew: TTFD ${grown.timing.ttfdMs} ms (the move lands at ~${RESOLVER_MS + DRAW_MS}, the reply ends ≥ ${RESOLVER_MS + DRAW_MS + 3 * GAP})`);
+
+// engine() times a real frame on both boards in one view: the board one change short painted, then the board, from fresh
+// copies (A2), with how many lines applied and what each board held, so ab.ts can tell the same content from another.
+const lines = (o) => o.ops.filter((x) => x.ok).map((x) => x.line);
+const engIn = (other) => `rtEval.engine(${js({ before: TOY, view: CAMERA, own: { ops: lines(unseen), after: unseen.after }, other })})`;
+await page.eval(`rtEval.restore(${js(unseen.after)})`);
+const eng = await page.eval(engIn({ ops: [], after: TOY }));
+check(eng.paintMs > 0 && eng.other?.paintMs > 0 && eng.ops === 2 && eng.applied === 2 && eng.other.ops === 0 && /^[0-9a-f]{64}$/.test(eng.board) && eng.other.board !== eng.board && !eng.deferred && !eng.skew, `engine() didn't time a frame on both boards: ${js(eng)}`);
+const same = await page.eval(engIn({ ops: lines(unseen), after: unseen.after }));
+check(same.other.board === same.board && same.other.applied === same.applied, `one board timed twice didn't read as the same content: ${js(same)}`);
+// A renderer that leaves work for after render() returns (a timer that changes the stage) is caught.
+await page.eval(`(() => { const svg = document.querySelector("#stage svg"); let k = 0;
+  window.__late = new MutationObserver((rs) => rs.some((r) => r.type === "childList") && setTimeout(() => svg.firstElementChild?.setAttribute("data-late", String(++k)), 0));
+  window.__late.observe(svg, { childList: true }); return true; })()`);
+const late = await page.eval(engIn({ ops: [], after: TOY }));
+await page.eval("window.__late.disconnect(), true");
+check(late.deferred === true, `a render that finishes after it returns wasn't caught: ${js(late)}`);
 
 // ---- Spoken words work too; a 16-picture fill renders at most once per animation frame.
 await load(BARE);
@@ -160,6 +241,7 @@ const per = Object.values((await page.eval("window.__frames")).per);
 check(fill.calls.filter((x) => x === "picture").length === 16 && fill.pics?.drawn === 16, `the fill made ${fill.calls.filter((x) => x === "picture").length} picture calls, drew ${fill.pics?.drawn}`);
 check(per.length >= 16 && Math.max(...per) === 1 && fill.timing.renders >= per.length - 1, `renders per frame during the fill: max ${Math.max(...per)} over ${per.length} frames (bridge counted ${fill.timing.renders})`);
 check(fill.after.shapes.filter((s) => s.drawing).every((s) => s.picture?.done), "the fill left a picture undone");
+check(fill.timing.ttfdMs < fill.timing.ttdMs - 2 * PIC_GAP && fill.timing.renderP90Ms > 0, `a 16-picture fill: TTFD ${fill.timing.ttfdMs} ms, TTD ${fill.timing.ttdMs} ms, render p90 ${fill.timing.renderP90Ms} ms`);
 
 // ---- After a reload, load() is ready within a second; the ink overlay draws numbered ink and goes again.
 const reloaded = new Promise((r) => c.onEvent((m) => m.method === "Page.loadEventFired" && r()));

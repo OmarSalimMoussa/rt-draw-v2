@@ -12,7 +12,7 @@ export function projectsApi(o: { owner?: OwnerOf } = {}): Plugin {
     apply: "serve",
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        if (!req.url?.startsWith("/api/project")) return next();
+        if (!req.url?.startsWith("/api/project") && !req.url?.startsWith("/api/sends")) return next();
         try {
           if (!(await router.handle(req, res))) next();
         } catch (err) {

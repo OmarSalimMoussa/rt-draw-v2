@@ -39,17 +39,29 @@ export type Clock = {
    * TTFC: the first frame in which some shape differs from before and already has its final signature for good (its
    * last change); TTD: the frame from which every shape whose final signature differs from before (added, removed or
    * changed) holds it. A placeholder or a nudge later undone never counts. Both undefined when nothing changed.
+   * TTFD, time to first drawing (the owner's latency, LOOP-V2.md): the first frame in which some shape the send keeps
+   * (its final signature differs from before) showed anything new that counts as drawn, its final form or not. A
+   * picture still a placeholder doesn't count (`drawn`); one whose first stroke has streamed in does. `firstOf(id,
+   * first)` may put another time on a shape (the bridge: a shape that ends with a drawing counts only from content its
+   * final state keeps, not from an outline it showed, before its drawing() landed or after).
    */
-  measure: (before: Map<string, string>, enterAt: number) => { ttfcMs?: number; ttdMs?: number; changed: string[] };
+  measure: (before: Map<string, string>, enterAt: number, firstOf?: (id: string, first: number | undefined) => number | undefined) => { ttfcMs?: number; ttdMs?: number; ttfdMs?: number; changed: string[] };
   /** When the stage last changed at all (a glide's viewBox included): the send quiesces on it. */
   lastMutation: () => number;
 };
 
-/** Watches the stage's <svg>: after each frame that touched shapes, recomputes their signatures and notes which changed. */
-export function watch(svg: SVGSVGElement): Clock {
+/**
+ * Watches the stage's <svg>: after each frame that touched shapes, recomputes their signatures and notes which changed.
+ * `drawn(id, at)`: whether the shape as it is now, at frame `at`, counts as drawn (the page's own scene says; a removed
+ * shape does).
+ */
+export function watch(svg: SVGSVGElement, drawn: (id: string, at: number) => boolean = () => true): Clock {
   const now = signatures(svg);
   /** Each shape's last signature change: the frame (ms, performance.now) from which it holds what it has now. */
   const changedAt = new Map<string, number>();
+  /** The signatures at Enter, and each shape's first frame since that differed from them and counted as drawn. */
+  let base = new Map(now);
+  const firstAt = new Map<string, number>();
   let lastMutation = performance.now();
   const seen = (records: MutationRecord[]) => {
     if (!records.length) return;
@@ -74,6 +86,7 @@ export function watch(svg: SVGSVGElement): Clock {
       if (sig) now.set(id, sig);
       else now.delete(id);
       changedAt.set(id, at);
+      if (sig !== base.get(id) && drawn(id, at) && !firstAt.has(id)) firstAt.set(id, at);
     }
   };
   const observer = new MutationObserver(seen);
@@ -81,12 +94,18 @@ export function watch(svg: SVGSVGElement): Clock {
 
   return {
     // Records not delivered yet (a render in this same task) belong before Enter.
-    enter: () => (seen(observer.takeRecords()), changedAt.clear(), new Map(now)),
-    measure(before, enterAt) {
+    enter: () => (seen(observer.takeRecords()), changedAt.clear(), firstAt.clear(), (base = new Map(now)), new Map(now)),
+    measure(before, enterAt, firstOf = (_, first) => first) {
       seen(observer.takeRecords());
       const changed = [...new Set([...before.keys(), ...now.keys()])].filter((id) => before.get(id) !== now.get(id));
       const settled = changed.map((id) => (changedAt.get(id) ?? enterAt) - enterAt);
-      return changed.length ? { ttfcMs: Math.round(Math.min(...settled)), ttdMs: Math.round(Math.max(...settled)), changed } : { changed };
+      // Only shapes the send keeps, and only once drawn: a picture that never left its placeholder never counts.
+      const firsts = changed.flatMap((id) => {
+        const at = firstOf(id, firstAt.get(id));
+        return at === undefined ? [] : [at - enterAt];
+      });
+      if (!changed.length) return { changed };
+      return { ttfcMs: Math.round(Math.min(...settled)), ttdMs: Math.round(Math.max(...settled)), ...(firsts.length ? { ttfdMs: Math.round(Math.min(...firsts)) } : {}), changed };
     },
     lastMutation: () => lastMutation,
   };

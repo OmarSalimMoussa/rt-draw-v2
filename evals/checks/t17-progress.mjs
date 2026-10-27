@@ -1,7 +1,8 @@
 // T17's acceptance check: the progress page draws the sample history (copied into a
 // temp RT_EVAL_HOME's history worktree and served by the real /api/eval/history)
-// with all 7 panels at 1280 and 390 px, its steps, ticks, bands and hollow points
-// where §5.4 puts them, and a decision row opens its cases and calls. One headless
+// with all 6 panels at 1280 and 390 px, its owner steps, era and marker ticks, a band
+// and line per era, hollow points and the slower-than-A0 ring where §5.4 puts them,
+// and a decision row opens its cases and calls. One headless
 // Chrome; every /api/* request goes through a counted stub to the pages server's
 // endpoints. 0 model calls: there is no model endpoint and no stub for one.
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t17-progress.mjs
@@ -63,12 +64,14 @@ const jpeg = await page.shot({ format: "jpeg", quality: 80, clip: { x: 0, y: 0, 
 for (const f of ["cases/c-b1-s01-1/A/after.jpg", "cases/c-b1-s01-1/B/after.jpg"]) put(join(run, f), jpeg);
 put(join(home, "bank/cases/c-b1-s01-1/before-ink.jpg"), jpeg);
 
-const PANELS = ["status", "quality", "latency", "q", "health", "cost", "decisions"];
+const PANELS = ["status", "quality", "latency", "health", "cost", "decisions"];
 const waitFor = async (expr, what, ms = 8000) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if (await page.eval(expr)) return;
   fail(`timed out waiting for ${what}`);
 };
-const green = cks.filter((x) => x.trust === "green").map((x) => x.id);
+// The trusted checkpoints in runs of one era: a line (and a band) per era with two points or more.
+const eraRuns = cks.filter((x) => x.trust === "green").reduce((runs, x) => (runs.at(-1)?.era === x.era ? runs.at(-1).ids.push(x.id) : runs.push({ era: x.era, ids: [x.id] }), runs), []).filter((r) => r.ids.length > 1).map((r) => r.ids.join(" "));
+const slower = cks.filter((x) => x.latency.slower);
 // What the page drew, read off the data-* attributes charts.ts puts on every mark.
 const READ = `(() => {
   const P = (n) => document.querySelector('[data-panel="' + n + '"]');
@@ -79,19 +82,21 @@ const READ = `(() => {
   });
   return {
     panels: [...document.querySelectorAll("[data-panel]")].map((p) => p.dataset.panel),
-    drawn: ${JSON.stringify(PANELS.slice(1, 6))}.map((p) => n(p, "svg path")),
+    drawn: ${JSON.stringify(PANELS.slice(1, 5))}.map((p) => n(p, "svg path")),
     scroll: document.documentElement.scrollWidth - innerWidth,
     wideSvg: [...document.querySelectorAll("[data-panel] svg")].filter((s) => s.getBoundingClientRect().right > s.closest("[data-panel]").getBoundingClientRect().right + 1).length,
-    steps: Object.fromEntries(["quality", "latency", "q"].map((p) => [p, ["era", "anchor", "owner"].map((k) => n(p, '[data-step="' + k + '"]'))])),
-    ticks: Object.fromEntries(["quality", "latency", "q"].map((p) => [p, ["harness", "served-model", "owner-step", "anchor"].map((k) => n(p, '[data-tick="' + k + '"]'))])),
+    steps: Object.fromEntries(["quality", "latency"].map((p) => [p, [n(p, '[data-step="owner"]'), n(p, "[data-step]")]])),
+    ticks: Object.fromEntries(["quality", "latency"].map((p) => [p, ["harness", "served-model", "owner-step", "era", "anchor"].map((k) => n(p, '[data-tick="' + k + '"]'))])),
     healthTicks: ["aa", "canary", "calib"].map((k) => n("health", '[data-tick="' + k + '"]')),
-    mainIds: P("quality")?.querySelector('[data-series="all"]')?.dataset.ids,
-    debt: [n("quality", '[data-debt="quality"]'), n("latency", '[data-debt="latency"]')],
+    mainIds: [...(P("quality")?.querySelectorAll('[data-series="all"]') ?? [])].map((g) => g.dataset.ids),
+    bands: n("quality", '[data-band="share90"]'),
+    debt: document.querySelectorAll("[data-debt]").length,
+    slower: [[...(P("latency")?.querySelectorAll("[data-slower]") ?? [])].map((g) => g.dataset.slower), P("latency")?.textContent ?? ""],
     hollow: [n("quality", "[data-hollow]"), n("latency", "[data-hollow]")],
     strayHollow,
     cost: [n("cost", '[data-band="v1"]'), n("cost", '[data-point="doc"]'), P("cost")?.textContent ?? ""],
     status: P("status")?.textContent ?? "",
-    qTitle: P("q")?.textContent ?? "",
+    qualityTitle: P("quality")?.querySelector("h2")?.textContent ?? "",
     decisions: n("decisions", "tr[data-decision]"),
   };
 })()`;
@@ -100,16 +105,20 @@ const verify = (w) => {
   check(JSON.stringify(r.panels) === JSON.stringify(PANELS), `${w} px: panels ${r.panels}`);
   check(r.drawn.every((k) => k > 0), `${w} px: a chart panel drew nothing (${r.drawn})`);
   check(r.scroll <= 0 && r.wideSvg === 0, `${w} px: horizontal scroll (${r.scroll} px over, ${r.wideSvg} charts wider than their card)`);
-  // 2 bridged era changes, 2 anchor moves, 1 owner step; Q chains through anchor moves, so no anchor step there.
-  check(JSON.stringify(r.steps) === JSON.stringify({ quality: [2, 2, 1], latency: [2, 0, 1], q: [2, 0, 1] }), `${w} px: steps (era, anchor, owner) ${JSON.stringify(r.steps)}`);
-  check(Object.values(r.ticks).every((t) => JSON.stringify(t) === "[2,1,1,2]"), `${w} px: marker ticks (harness, served-model, owner-step, anchor) ${JSON.stringify(r.ticks)}`);
+  // The one owner step, on each panel's main line, and no other step (no anchor moves or era bridges now).
+  check(JSON.stringify(r.steps) === JSON.stringify({ quality: [1, 1], latency: [1, 1] }), `${w} px: steps (owner, all) ${JSON.stringify(r.steps)}`);
+  // 2 harness tags, 1 served model, 1 owner step, 2 era starts; no anchor ticks.
+  check(Object.values(r.ticks).every((t) => JSON.stringify(t) === "[2,1,1,2,0]"), `${w} px: marker ticks (harness, served-model, owner-step, era, anchor) ${JSON.stringify(r.ticks)}`);
   check(r.healthTicks.every((k) => k === 1), `${w} px: health ticks (A/A, canary, calibration) ${r.healthTicks}`);
-  check(r.mainIds === green.join(" "), `${w} px: the share line isn't one continuous line through every trusted checkpoint (${r.mainIds})`);
-  check(r.debt[0] >= 1 && r.debt[1] >= 1, `${w} px: debt bands (quality, latency) ${r.debt}`);
+  check(JSON.stringify(r.mainIds) === JSON.stringify(eraRuns), `${w} px: the share line isn't one line per era through its trusted checkpoints (${JSON.stringify(r.mainIds)}, wanted ${JSON.stringify(eraRuns)})`);
+  check(r.bands === eraRuns.length, `${w} px: ${r.bands} share bands for ${eraRuns.length} eras`);
+  check(r.debt === 0, `${w} px: ${r.debt} debt bands drawn`);
+  check(slower.length > 0 && JSON.stringify(r.slower[0]) === JSON.stringify(slower.map((x) => x.id)) && slower.every((x) => r.slower[1].includes(x.latency.slower)), `${w} px: the slower-than-A0 mark: rings on ${JSON.stringify(r.slower[0])}, wanted ${JSON.stringify(slower.map((x) => x.id))} with its text`);
   check(r.hollow[0] >= 1 && r.hollow[1] >= 3 && !r.strayHollow.length, `${w} px: hollow points ${r.hollow}, joined by a trend line: ${r.strayHollow}`);
-  check(r.cost[0] === 2 && r.cost[1] === 2 && /v1: ~120 min and 25–33% of a window per decision/.test(r.cost[2]) && /doc as written: 75 min, 13\.7%/.test(r.cost[2]), `${w} px: v1's band or the doc-as-written point missing on the cost panel`);
+  check(r.cost[0] === 1 && r.cost[1] === 1 && /List \$ per decision/.test(r.cost[2]) && /Minutes per decision/.test(r.cost[2]) && /v1: ~120 min per decision/.test(r.cost[2]) && /doc as written: 75 min/.test(r.cost[2]), `${w} px: the cost panel's per-decision charts, v1's band or the doc-as-written point (${r.cost[0]} bands, ${r.cost[1]} points)`);
+  check(!/window per decision|estimated from list/.test(r.cost[2]), `${w} px: the cost panel still shows a five-hour-window share or a list-$ weekly estimate`);
   check(/running/.test(r.status) && /\d+ GB free/.test(r.status) && /~\d+ days left|days left: plenty/.test(r.status) && /owner list: 2 open/.test(r.status) && /token 2/.test(r.status), `${w} px: status strip reads "${r.status.replace(/\s+/g, " ").trim()}"`);
-  check(/chained, not additive/.test(r.qTitle), `${w} px: Q isn't labelled "chained, not additive"`);
+  check(/against A0/.test(r.qualityTitle) && !/anchor/.test(r.qualityTitle), `${w} px: the quality title reads "${r.qualityTitle}", not against A0`);
   check(r.decisions === rows("decisions.jsonl").length, `${w} px: ${r.decisions} decision rows`);
 };
 const got = {};

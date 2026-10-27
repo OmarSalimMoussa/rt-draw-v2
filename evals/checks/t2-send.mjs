@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createServer } from "vite";
-import { modelReply, openChrome } from "./cdp.mjs";
+import { JEV_MODELS, jevReply, modelReply, openChrome } from "./cdp.mjs";
 import { ROOT, check, fail, finish, tempHome } from "./lib.mjs";
 
 const home = tempHome();
@@ -81,6 +81,9 @@ const c = await openChrome({
   stubs: {
     "/api/model": ({ body }) => {
       const r = JSON.parse(body);
+      // Jev's yes/no calls (the resolver by default since 6c7f8e3): the shop name is the brand. They're the resolver, which
+      // the playground before T2 asked Claude, so neither is compared below.
+      if (r.user && JEV_MODELS.includes(r.model)) return jevReply(r, { brand: 0.97 });
       asked.push(r.user ? r.from : "warm");
       return r.user ? (REPLIES[r.from] ?? fail(`an unexpected model call from ${r.from}`)) : WARMED;
     },
@@ -124,14 +127,15 @@ async function sendOn(path, { typed = "make the shop name bigger", spoken = fals
 
 asked = [];
 const old = await sendOn(OLD);
-const oldCalls = asked.sort().join(" ");
+const unresolved = (xs) => xs.filter((a) => !a.startsWith("draw-refs")).sort().join(" ");
+const oldCalls = unresolved(asked);
 asked = [];
 const now = await sendOn("/playgrounds/draw/");
 check(now.dom === old.dom, "the playground's DOM before any send differs from before T2");
 check(now.log === old.log && /✗ remove\(no-such-shape\)/.test(now.log) && /✓ camera\(/.test(now.log), `the op log differs:\n${old.log}\n---\n${now.log}`);
 check(isDeepStrictEqual(now.scene, old.scene), "the final scene differs from the playground's before T2");
 check(now.scene.shapes.some((s) => s.id === "sale-badge" && s.picture?.done), "the new pictured shape didn't get its picture");
-check(asked.sort().join(" ") === oldCalls && asked.filter((a) => a === "picture").length === 17, `model calls differ: before T2 ${oldCalls}, now ${asked.join(" ")}`);
+check(unresolved(asked) === oldCalls && asked.filter((a) => a === "picture").length === 17, `model calls differ: before T2 ${oldCalls}, now ${asked.join(" ")}`);
 check(!recorded.length, "a playground without ?record=1 posted to /api/eval/record");
 
 // ---- ?record=1: one record per send; input as typed text, then as the timed words of a spoken send.

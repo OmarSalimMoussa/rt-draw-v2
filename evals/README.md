@@ -7,7 +7,9 @@
 
 In 22 hours of testing itself, rt-draw got about twice as fast. The time to first shape dropped from 5.8
 to 2.4 seconds, and time to finished sketch from 7.1 to 3.9 seconds. A program tried 112 changes, timed and
-judged each one against the best version so far, and kept the winners.
+judged each one against the best version so far, and kept the winners. (This run timed the first shape and the
+finished sketch; the loop now decides on time to first drawing and the engine's render time alone, as `LOOP-V2.md`
+says.)
 
 ## TLDR
 
@@ -29,7 +31,7 @@ judged each one against the best version so far, and kept the winners.
 3. **Test it fairly.** A/B test the changes against the golden version. We test at the same time to make sure they experience the same load on the maching.
    A stopwatch times both. A blind judge looks at both drawings side by side.
 4. **Decide.** Clearly faster or better, and nothing worse? Keep it. No clear win? Throw it away and remember not to
-   try it again. Costs more money or changes the look? Escalate.
+   try it again. Changes the look or the picture model? Escalate.
 5. **Check the big picture.** After every couple of kept changes, the best version is compared with the original on a
    fixed set of 62 golden test cases. That's the chart above.
 
@@ -73,7 +75,8 @@ Most ideas don't work. A few it rejected:
 - **Changes too rare to measure.** A change that affects fewer than 32 of the recorded requests can't be judged fairly,
   so it's reverted and listed for a person.
 - **13 void decisions.** The measurement itself was unfair, for example when one side started on cold processes 14% of
-  the time and the other never did. A void is never a verdict on the change; the loop re-runs or drops it.
+  the time and the other never did. A void is never a verdict on the change. The loop re-ran voids then, and every re-run
+  voided again; now a void goes to a person, and every case is warmed up before it's timed.
 
 ## Did quality hold?
 
@@ -125,16 +128,17 @@ flowchart TD
     LAB["A person labels ~90 pairs"] --> CAL["Judge calibrated"]
   end
   subgraph rounds["Each round: 64 in 22 hours"]
-    AN["Analyst and critic read digests of where the champion fails or is slow"] --> CARDS["Up to 3 cards"]
+    AN["Analyst and critic read digests of where the champion fails or is slow"] --> CARDS["Up to 6 cards (3 in this run)"]
     PQ["A person's queued cards: 23 of 112"] --> CARDS
     CARDS --> ENG["Engineer agent edits src/core in its own worktree"]
     ENG --> G0["G0 free gates: allowed files, no new magic numbers, typecheck"]
-    G0 --> G1["G1 diffscan at 0 calls: which banked cases change?"]
+    G0 --> G1["G1 diffscan at 0 Claude calls: which banked cases change?"]
     G1 --> AB["A/B on affected cases: same moment, live calls, timed and judged in looks of 16 to 80"]
-    AB --> V{"Verdict"}
-    V -->|"faster or better, nothing worse"| KEEP["Keep: commit to loop/champion"]
+    AB --> G3["G3 on held-out cases: may only veto"]
+    G3 --> V{"Verdict"}
+    V -->|"better or faster, never slower"| KEEP["Keep: commit to loop/champion"]
     V -->|"no clear win"| REV["Revert: patch saved to tried/"]
-    V -->|"costs more, the look, a model switch"| OWN["Owner list"]
+    V -->|"the look, a patch"| OWN["Owner list"]
     V -->|"unfair measurement"| VOID["Void"]
   end
   setup --> rounds
@@ -159,41 +163,57 @@ decision pays for a driver. Cases are split three ways: **tuning** (the only one
 
 ### Proposing a change
 
-Each round, the **analyst** (one call) reads digests of at most 40k tokens built by frozen code from the bank and the
-runs (`optimizer/digest.ts`): where the champion itself fails first, then slow traces. The **critic** (a read-only
-Agent SDK session) turns that into up to three **cards**, each one change with its goal (latency, fidelity or craft),
-what it predicts and its risk. An **engineer** (an Agent SDK session) implements a card in its own git worktree. A
-candidate may only change `src/core/`, minus speech; every new number in it must become a named knob in `tuning.ts`.
-A person's cards go through the same queue: the seed cards (`optimizer/seed-cards.json`) start the first rounds, and
-`--seed-cards` adds more to a running loop.
+Each round, the **analyst** reads digests of at most 40k tokens built by frozen code from the bank and the runs
+(`optimizer/digest.ts`): where the champion itself fails first, then slow traces. It brainstorms hypotheses, one idea
+each, and may read the champion's code and research on the web. The **critic** turns those into up to six **cards**,
+each one change with its goal (latency, fidelity or craft) and its risk. Both are read-only Agent SDK sessions. Any
+model may be switched, or a send routed to one of several by how hard it is; each is measured like any other change. A
+sweep (one knob at several values, stopping at the first keep) and a combination of near wins (reverted changes that
+leaned the right way) are one card each (`LOOP-V2.md`, D). An **engineer** (an Agent SDK session that may also read
+docs on the web) implements a card in its own git worktree. A candidate may only change `src/core/`, minus speech;
+every new number in it must become a named knob in `tuning.ts`. A person's cards go through the same queue: the seed
+cards (`optimizer/seed-cards.json`) start the first rounds, and `--seed-cards` adds more to a running loop.
 
 ### The funnel: free first, paid last
 
 1. **G0, free gates** (`optimizer/gates.ts`, 0 calls): allowed paths, the magic-number lint, no new network or speech,
    `tsc` in the candidate's tree, and every banked scene through the candidate's `Scene.fromJSON` when `scene.ts`
    changed. A diff in the measuring side or the editor's look goes to the owner list, never back to an engineer.
-2. **G1, the diffscan** (`loop/diffscan.ts`, 0 calls): both versions run every banked case with the bank's recorded
-   replies served instantly. A case is affected when any request, the scene after or the rendered stage differs; only
+2. **G1, the diffscan** (`loop/diffscan.ts`, 0 Claude calls): both versions run every banked case with the bank's recorded
+   replies served instantly. A Jev question the bank never recorded (a router newer than the bank) is asked live, both
+   versions sharing the answer: ~0.1 s and next to free, and without it a change to how the answer is used read as N.
+   A case is affected when any request, the scene after or the rendered stage differs; only
    affected cases are ever paid for. The scan also classifies the change: N (no effect), S (speed only, from a timed
    replay), Q (a request differs), R (a render differs) or D (dialogue: state only a later send reads).
 3. **G2, the A/B** (`loop/ab.ts`): both versions start from the same fork point on freshly reloaded pages and get the
-   case at the same moment, in a seeded, alternating order, with live model calls. Every case is timed (first change
-   and done) and, for quality cards, judged.
-4. **G3 and G4**: a keep must also hold on the affected H-gate cases, and a dialogue change on continuation sends.
+   case at the same moment, in a seeded, alternating order, with live model calls. Every case is timed (time to first
+   drawing, and the engine's render time; first change and done are reported) and, for quality cards, judged. First
+   drawing counts only visible ink: a shape already on the board once it visibly changed, a shape with a picture once
+   an element of its final picture or its final words show. Render times both engines on both arms' boards, in one view, each
+   frame on content no earlier run painted, keeping of each board only what both engines load and apply alike.
+4. **G3 and G4**: every keep, whatever its class, must also hold on the affected H-gate cases, on fidelity and on both
+   deciding latencies, and a dialogue change on continuation sends.
 
 ### Deciding
 
 All of it is in `loop/verdict.ts`, with frozen numbers in `loop/config.ts`. Statistics treat the driver session as the
-unit, since sends from one session are alike (`loop/stats.ts`: clustered standard errors and session bootstraps).
+unit, since sends from one session are alike (`loop/stats.ts`: clustered standard errors, and for latency a test
+that swaps the arms of whole sessions, exact at any number of sessions; session bootstraps are reported only).
 
 - **Quality cards (Rule F).** The judge's verdicts are checked in looks at 16, 32, 48 and 80 affected cases. Keep when
   the clustered Z reaches 2.3, 1.8 or 1.4 at looks 32, 48 or 80; revert as soon as it falls under -0.2, 0.3, 0.7 or 1.4.
   A clear result stops early, so a dud costs 16 cases, not 80.
-- **Latency cards.** Keep when the 90% upper bound of the median paired ratio is under 1.0, or a slow-send tail (p90,
-  p95) is surely at least 10% faster, and fidelity holds: Z of at least 0 at look 32, -0.5 at 48, -1.0 at 80. A
+- **Latency cards.** Keep when the median paired ratio (time to first drawing, or render) is surely under 1.0 (the
+  swap test's p under 0.10), or a slow-send tail (p90, p95) is surely under 0.95 and at least 10% faster, the other
+  latency isn't surely slower, and
+  fidelity holds: Z of at least 0 at look 32, -0.5 at 48, -1.0 at 80. A
   fidelity Z of -1.25 or worse ends it: the speed costs fidelity.
-- **Vetoes.** Surely slower on any measure, losing on held-out cases, or more empty or failed pictures. A cost over
-  ×1.2 per request, alone or added up since the original, sends the change to the owner list instead.
+- **Vetoes.** Surely slower at all on time to first drawing or render, at the median or a tail: one swap test over
+  all of them, the A/B's cases and the held-out ones together, family-wise p under 0.05; losing on held-out cases; more empty sends or failed pictures; a
+  render() that leaves work for after it returns. A case only one arm failed is that arm's loss (not an empty send).
+  Cost is reported, never a veto (`LOOP-V2.md`).
+- **Sweeps and combos.** A sweep's values, or a combo's near-wins, share one card's chance of a false keep: each needs
+  a higher Z, or a smaller p.
 - **Void.** A case that trips an invariant (a timing stall, unequal cold starts, an arm dispatched first too often)
   is never a product result, and too many voids void the decision.
 
@@ -201,8 +221,9 @@ unit, since sends from one session are alike (`loop/stats.ts`: clustered standar
 
 After every second keep, `loop/checkpoint.ts` runs the champion against the frozen original (A0) on benchmark B1, live
 and unshared, judged for fidelity and craft on every case. That gives the champion's share with a 90% bootstrap, the
-latency ratios, an overfitting gap (tuning against held out), health numbers and a trust level. Changing the judge, the
-benchmark or the measuring code starts a new **era**, bridged so the numbers carry across; era 2 began at hour 0.
+latency ratios in the same run, an overfitting gap (tuning against held out), health numbers and a trust level; a
+champion surely slower than A0 goes on the owner list. Changing the judge or the benchmark starts a new **era**, charted
+apart: nothing bridges two eras. Era 2 began at hour 0.
 
 ### The judge
 

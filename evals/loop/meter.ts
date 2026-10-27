@@ -22,7 +22,7 @@ export function listUsd(model: string, t: Tokens): number {
 }
 
 /** §3.4's fields in order: every line has all of them (null when unknown), so a reader never guesses. */
-export const CALL_FIELDS = ["at", "run", "case", "arm", "slot", "role", "model", "servedModel", "sdk", "reqHash", "shared", "mode", "inTokens", "cacheRead", "cacheWrite5m", "cacheWrite1h", "outTokens", "thinkingTokens", "stopReason", "ms", "firstMs", "waitMs", "readyAtTake", "retries", "apiError", "listUsd", "costUsd", "token", "fiveHour", "sevenDay", "resetsAt"] as const;
+export const CALL_FIELDS = ["at", "run", "case", "arm", "slot", "role", "page", "model", "servedModel", "sdk", "reqHash", "shared", "mode", "inTokens", "cacheRead", "cacheWrite5m", "cacheWrite1h", "outTokens", "thinkingTokens", "stopReason", "ms", "firstMs", "waitMs", "readyAtTake", "retries", "apiError", "dropped", "listUsd", "costUsd", "token", "fiveHour", "sevenDay", "resetsAt"] as const;
 
 /** A call line, plus how a scan served it (an exact hit, the case's stand-in, or nothing). */
 export type MeterCall = CallLog & { scan?: "hit" | "standin" | "miss" };

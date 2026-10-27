@@ -79,6 +79,7 @@ export const KNOBS: Knob[] = [
   // Ops: what the model must write.
   K("ops.minDescriptionWords", 6, 1, 30, 1, "an edit's description shorter than this keeps the one the shape had (a new shape keeps it anyway)"),
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
+  B("ops.waitForShape", 1, "ops wait for their shape", "on: an op naming a shape a later line makes waits for that line, and fails only if the reply ends without it; off: it fails at once"),
 
   // Speech: turning the mic into timed words (ElevenLabs Scribe).
   patch("scribe", K("speech.vadSilenceMs", 600, 300, 3000, 100, "silence that ends an utterance", "ms")),
@@ -152,7 +153,7 @@ export const KNOBS: Knob[] = [
   K("draw.mapWords", 40, 0, 60, 1, "and this many words of each shape's description"),
   B("draw.mapBoxes", 1, "boxes in the site map", "on: the drawing model's site map gives each shape's box in board pixels, so it can copy, align and move what no picture shows"),
   K("draw.mapMaxShapes", 0, 0, 500, 10, "the id map (on a board, the site map) lists at most this many shapes, in map order, and counts the rest (0: every shape)"),
-  P("draw"),
+  P("draw", 1),
   B("draw.noThink", 0, "no thinking", "on: ask the API not to think (thinking delays the first op); off: the model decides"),
   B("draw.thinkRouter", 0, "Jev decides thinking", "on: Jev decides per send whether the drawing model may think (one call of about 0.1 s, alongside the resolver): a small clear edit goes without thinking; off: draw.noThink decides"),
   K("draw.thinkYes", 0.5, 0.05, 0.95, 0.05, "with draw.thinkRouter: the drawing model may think when Jev's probability that the send needs it is at or above this"),
@@ -167,16 +168,19 @@ export const KNOBS: Knob[] = [
 
   // Picture: a doodle inside a shape.
   K("picture.model", 1, 0, 2, 1, "model that draws pictures (0 haiku, 1 sonnet, 2 opus)"),
-  K("picture.maxPaths", 12, 4, 80, 1, "a doodle may use at most this many paths"),
-  K("picture.colors", 4, 1, 10, 1, "and at most this many colors"),
+  K("picture.maxPaths", 0, 0, 80, 1, "a picture may use at most this many elements (0: as many as it needs)"),
+  K("picture.colors", 0, 0, 10, 1, "and at most this many colors (0: as many as it needs)"),
   K("picture.roughness", 1.4, 0, 3, 0.1, "wobble applied to the doodle's paths"),
   K("picture.parallel", 3, 1, 8, 1, "pictures drawn at the same time after a send"),
   K("picture.fill", 0.9, 0.5, 1, 0.05, "a picture fills this share of its shape"),
   K("picture.timeoutMs", 120000, 5000, 300000, 5000, "a picture call still going after this long is stopped and counts as failed (its shape stays a placeholder)", "ms"),
   K("picture.copies", 1, 1, 3, 1, "copies of each picture call sent at once: the first to stream is kept, the others are dropped (each copy pays its input)"),
   K("picture.copyAfterMs", 0, 0, 3000, 100, "with picture.copies above 1: a copy after the first goes out only when no text has come this long (0: all at once)", "ms"),
-  P("picture", 2),
-  K("picture.strokeWidth", 3, 1, 6, 0.5, "with the short-stroke picture prompt: the outline width every element has unless it says its own stroke-width", "px"),
+  P("picture", 3),
+  K("picture.context", 2, 0, 2, 1, "what the picture model sees besides its subject: 0 nothing, 1 what they said and the colors of the board's shapes, 2 also their sketches inside the shape's box"),
+  K("picture.contextColors", 8, 1, 20, 1, "with picture.context: the board's most-used shape colors it lists"),
+  K("picture.contextPoints", 300, 20, 2000, 10, "with picture.context 2: the sketches in the box are given in at most about this many points in all"),
+  K("picture.strokeWidth", 3, 1, 6, 0.5, "with the short-stroke or matched picture prompt: the outline width every element has unless it says its own stroke-width", "px"),
   B("picture.noThink", 0, "no thinking", "on: ask the API not to think; off: the model decides"),
 
   // Board: what a model is shown of an infinite board.
@@ -225,6 +229,7 @@ export const KNOBS: Knob[] = [
   K("render.lineHeight", 1.25, 1, 2, 0.05, "line height as a multiple of text size"),
   K("render.captionMaxShare", 0.4, 0.1, 0.8, 0.05, "words on a shape with a picture go under it, as a caption at most this share of its height"),
   K("render.minTextScale", 0.4, 0.1, 1, 0.05, "text too big for its box shrinks to fit, down to this share of its size (and never below 8px)"),
+  B("render.pictureBox", 1, "bare picture boxes", "on: a shape with a picture paints no outline or fill unless it's given one, and its picture fills it; off: every shape has its outline"),
 
   // One switch per patched model: 0 (default) uses the model as it comes, 1 applies our patches on it.
   B("patches.scribe", 0, "scribe patches", "on: apply our patches (⚙) on Scribe's output; off: Scribe as it comes"),

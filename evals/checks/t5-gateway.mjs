@@ -174,9 +174,12 @@ const wPic = await (await fetch(`${gw.url}/api/model`, { method: "POST", headers
 await endCase("warm1", "bank-c1");
 const wKeys = Object.entries((await gatewayStatus()).pools).filter(([k]) => k.startsWith("A|6|"));
 check(upstream() === n6 && wDraw.done?.scan === "standin" && wPic.warming === 2, `a warm scan: ${upstream() - n6} upstream, ${wDraw.done?.scan}, warming ${wPic.warming}`);
-check(wKeys.map(([, n]) => n).sort().join() === "1,2", `a warm scan's pools for A slot 6: ${JSON.stringify(wKeys)} (want one draw process, two picture)`);
+// A drawing call's thinking can be decided live (draw.thinkRouter): its thinking-off variant is warmed too.
+check(wKeys.map(([, n]) => n).sort().join() === "1,1,2" && wKeys.some(([k]) => k.includes(":off:")), `a warm scan's pools for A slot 6: ${JSON.stringify(wKeys)} (want a draw process thinking and one not, two picture)`);
 const wLive = await product({ run: "w2", case: "c9", arm: "A", slot: 6 }, { model: "sonnet", system: DRAW, user: `${tag("w2")} the timed send`, from: "draw" });
 check(wLive.done?.warm === true && wLive.done?.readyAtTake === true, `the timed send after a warm scan didn't take a started process: warm ${wLive.done?.warm}, readyAtTake ${wLive.done?.readyAtTake}`);
+const wOff = await product({ run: "w2", case: "c9", arm: "A", slot: 6 }, { model: "sonnet", system: DRAW, user: `${tag("w2")} the timed send, no thinking`, from: "draw", thinking: "off" });
+check(wOff.done?.warm === true, `a no-think timed send after a warm scan didn't take a started process: warm ${wOff.done?.warm}`);
 await endCase("w2", "c9");
 check((await setMode("warm2", "live", { warm: true })).error === "only a scan warms", "a warm live run was accepted");
 
@@ -204,7 +207,42 @@ const t8 = performance.now();
 const heldCopy = await fetch(`${gw.url}/api/model`, { method: "POST", headers: { "content-type": "application/json", "x-rt-run": "cp2", "x-rt-case": "bank-c1", "x-rt-arm": "B", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: U1, from: "draw", copy: 2 }), signal: drop.signal }).then((r) => r.text(), (e) => e.name);
 check(heldCopy === "AbortError" && performance.now() - t8 >= 290 && upstream() === n8, `a scan's copy: ${heldCopy} after ${Math.round(performance.now() - t8)} ms, ${upstream() - n8} upstream (want held until dropped, 0)`);
 
-// ---- Rotation end to end: off a slot at five-hour 0.90 and on a 429, at the next case boundary.
+// A live call its page drops before it's sent (a losing copy, a speculation that missed) is the product's choice: metered
+// as dropped, never as an API error, which ab.ts would read as a transport failure and the arm's loss.
+await setMode("dr1", "live");
+api.set({ mode: "slow", slowMs: 400, chunkMs: 400 });
+const drop2 = new AbortController();
+const n9 = upstream();
+const dropped = fetch(`${gw.url}/api/model`, { method: "POST", signal: drop2.signal, headers: { "content-type": "application/json", "x-rt-run": "dr1", "x-rt-case": "d1", "x-rt-arm": "B", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: `${tag("dr1")} a copy that loses`, from: "draw", warm: 0 }) }).then((r) => r.text(), (e) => e.name);
+await sleep(150);
+drop2.abort();
+await dropped;
+const dropLineOf = () => readFileSync(p.calls, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.run === "dr1");
+for (let k = 0; k < 100 && !dropLineOf(); k++) await sleep(100);
+api.set({ mode: "ok" });
+const dropLine = dropLineOf();
+// It never reached the API: the request count below allows for it.
+const neverSent = upstream() === n9 ? 1 : 0;
+// Dropped mid-stream (the query ends cleanly, cut short): metered dropped, never cached or followed, so the other arm's
+// identical request makes its own call and banks the whole reply.
+await setMode("dr2", "live");
+api.set({ mode: "slow", slowMs: 200, chunkMs: 200 });
+const drop3 = new AbortController();
+const cut = fetch(`${gw.url}/api/model`, { method: "POST", signal: drop3.signal, headers: { "content-type": "application/json", "x-rt-run": "dr2", "x-rt-case": "d2", "x-rt-arm": "A", "x-rt-slot": "0" }, body: JSON.stringify({ model: "sonnet", system: DRAW, user: `${tag("dr2")} cut short`, from: "draw", warm: 0 }) }).then((r) => r.text()).catch((e) => e.name);
+await sleep(700);
+drop3.abort();
+await cut;
+await sleep(500);
+const whole = await product({ run: "dr2", case: "d2", arm: "B", slot: 0 }, { model: "sonnet", system: DRAW, user: `${tag("dr2")} cut short`, from: "draw", warm: 0 });
+api.set({ mode: "ok" });
+await sleep(200);
+const dr2 = readFileSync(p.calls, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.run === "dr2");
+const bankedDr2 = JSON.parse(readFileSync(p.reply(dr2[0]?.reqHash ?? "none"), "utf8"));
+check(dr2.find((l) => l.arm === "A")?.dropped === true && !dr2.find((l) => l.arm === "A")?.apiError && whole.done?.shared === "-" && whole.text === LONG && bankedDr2.text === LONG,
+  `a call cut short mid-stream: A ${JSON.stringify(dr2.find((l) => l.arm === "A") && { dropped: dr2.find((l) => l.arm === "A").dropped, apiError: dr2.find((l) => l.arm === "A").apiError })}, B ${whole.done?.shared} ${JSON.stringify(whole.text.slice(0, 30))}, banked ${JSON.stringify(bankedDr2.text.slice(0, 30))} (want dropped; B its own call; the whole reply banked)`);
+check(dropLine?.dropped === true && !dropLine.apiError, `a call its page dropped was metered as ${JSON.stringify(dropLine && { dropped: dropLine.dropped, apiError: dropLine.apiError, ms: dropLine.ms, outTokens: dropLine.outTokens, stopReason: dropLine.stopReason, mode: dropLine.mode })} (want dropped, no error)`);
+
+// ---- Rotation end to end: off a slot past five-hour LOOP.fiveHourPauseAt (0.90) and on a 429, at the next case boundary.
 api.set({ util5h: 0.95 });
 await product({ run: "rot", case: "rot1", arm: "A", slot: 0 }, { model: "haiku", system: "rot", user: tag("rot-1"), warm: 0 });
 api.set({ util5h: 0.42, mode: "limit" });
@@ -214,44 +252,48 @@ await product({ run: "rot", case: "rot3", arm: "A", slot: 0 }, { model: "haiku",
 const st1 = await gatewayStatus();
 const meterLines = () => readFileSync(p.calls, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const tokenOfCase = (c) => meterLines().find((l) => l.case === c)?.token;
+// Each line says whose call it was: an arm page's (the product's) or an eval role's.
+check(meterLines().filter((l) => l.case === "rot1").every((l) => l.page === true) && meterLines().some((l) => l.role === "judge" && l.page === false), "meter lines don't mark a page's calls apart from eval roles'");
 check(limited.done?.error && tokenOfCase("rot1") === 1 && tokenOfCase("rot2") === 2 && tokenOfCase("rot3") === 3, `rotation: tokens per case ${["rot1", "rot2", "rot3"].map(tokenOfCase)} (want 1, 2, 3; the 429 ${limited.done?.error ? "failed" : "didn't fail"})`);
 check(/five-hour/.test(st1.slots[0].why) && /rate limited/.test(st1.slots[1].why) && !st1.slots[2].why && st1.slots[2].current, `slot status: ${JSON.stringify(st1.slots.map((s) => [s.slot, s.why, s.current]))}`);
 
-// ---- Slots in-process: the estimate, the weekly allowance, W_k on allowed_warning, one account, pacing.
+// ---- Slots in-process: the server's readings alone, the weekly allowance, allowed_warning, one account, pacing.
 let now = Date.UTC(2026, 9, 16, 3);
 const s = new Slots([1, 2], undefined, () => now);
 s.record(1, { usd: 10, rateLimit: { status: "allowed" } });
 s.record(1, { usd: 8, rateLimit: { status: "allowed_warning" } });
-check(s.status()[0].windowUsd === 20 && s.status()[0].calibrated, `W_k after an allowed_warning at $18: ${s.status()[0].windowUsd} (want 20)`);
 check(s.boundary() === 2, "allowed_warning didn't move work to slot 2");
-const sw = new Slots([1], undefined, () => now);
-sw.record(1, { usd: 0.0001, rateLimit: { status: "allowed_warning", fiveHour: 0.09, sevenDay: 0.94 } });
-check(sw.status()[0].windowUsd === 170 && !sw.status()[0].calibrated, `the week's warning set the five-hour window to $${sw.status()[0].windowUsd}`);
+// $ alone never pauses: only the server's reading does (every call on a slot brings one).
 const s2 = new Slots([1, 2], undefined, () => now);
-s2.record(1, { usd: 150 });
-check(!s2.why(1), "slot 1 is off at $150 of $170");
-s2.record(1, { usd: 3.01 });
-check(/five-hour/.test(s2.why(1) ?? "") && s2.boundary() === 2, `the list-$ estimate at 0.90 doesn't rotate: ${s2.why(1)}`);
+s2.record(1, { usd: 500 });
+check(!s2.why(1) && s2.status()[0].usdThisWindow === 500, `$500 with no reading paused slot 1: ${s2.why(1)}`);
+// The token is shared with testers on prod: new work stops at 0.90 of the five-hour window (LOOP.fiveHourPauseAt).
+const s2r = new Slots([1, 2], undefined, () => now);
+s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.89 } });
+const under = s2r.why(1);
+s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.91 } });
+check(!under && /five-hour/.test(s2r.why(1) ?? ""), `the server's five-hour reading doesn't pause at 0.90: ${under} / ${s2r.why(1)}`);
 const s3 = new Slots([1, 2, 3], undefined, () => now);
-s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.41 } });
+// The loop's week stops at half the account's (LOOP.weekSevenDayMax 0.50): 0.49 runs, 0.51 parks.
+const s3w = new Slots([1], undefined, () => now);
+s3w.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.49 } });
+check(!s3w.why(1), `a week at 0.49 is parked: ${s3w.why(1)}`);
+s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.51 } });
 for (let h = 0; h < 6; h++) {
-  now += 3600_000 * 5.5; // across windows: only the week adds up
-  s3.record(2, { usd: 100 });
+  now += 3600_000 * 5.5; // across windows: a week's reading stays until the next
+  s3.record(2, { usd: 100, ...(h ? {} : { rateLimit: { status: "allowed", sevenDay: 0.6 } }) });
 }
 check(s3.why(1) === "weekly allowance" && s3.why(2) === "weekly allowance" && s3.boundary() === 3, `the weekly allowance: ${s3.why(1)} / ${s3.why(2)}`);
 const reset = Math.floor(now / 1000) + 1800;
 s3.record(3, { usd: 0, rateLimit: { status: "allowed", resetsAt: reset } });
 s3.record(2, { usd: 0, rateLimit: { status: "allowed", resetsAt: reset } });
 check(JSON.stringify(s3.sameAccount()) === "[2,3]", `equal resetsAt isn't one account: ${JSON.stringify(s3.sameAccount())}`);
-check(JSON.stringify(s3.stale()) === "[1,2]", `slots parked on a 33-hour-old reading (1) and on no reading (2) aren't due a re-read: ${JSON.stringify(s3.stale())}`);
+check(JSON.stringify(s3.stale()) === "[1,2]", `slots parked on a 33-hour-old reading (1) and a 27-hour-old one (2) aren't due a re-read: ${JSON.stringify(s3.stale())}`);
 s3.record(1, { usd: 0, rateLimit: { status: "allowed", sevenDay: 0.2 } });
 check(JSON.stringify(s3.stale()) === "[2]" && !s3.why(1) && s3.status()[0].sevenDayAt === now, `a fresh reading under the stop didn't bring slot 1 back: ${JSON.stringify(s3.stale())}, ${s3.why(1)}`);
-const s4 = new Slots([1], undefined, () => now);
-s4.record(1, { usd: 0.5 * 170 });
-check(s4.pace(0.5).ok === false && s4.pace(1.2).ok === true, "the night cap doesn't stop at 0.5 windows");
 const home4 = mkdtempSync(join(tmpdir(), "rt-t5-same-"));
 mkdirSync(join(home4, "meter"));
-writeFileSync(join(home4, "meter", "slots.json"), JSON.stringify([1, 2].map((slot) => ({ slot, resetsAt: Math.floor(Date.now() / 1000) + 3000, usdWindow: 0, W: 170, calibrated: false, limited: false, hours: {} }))));
+writeFileSync(join(home4, "meter", "slots.json"), JSON.stringify([1, 2].map((slot) => ({ slot, resetsAt: Math.floor(Date.now() / 1000) + 3000, usdWindow: 0, limited: false, hours: {} }))));
 const refusedSame = await spawnGateway({ home: home4, tokens: tokensFile, mockApi: api.url }).then((g) => (g.close(), "started"), (e) => e.message);
 check(/same resetsAt/.test(refusedSame), `a gateway whose slots 1 and 2 share a resetsAt: ${refusedSame}`);
 
@@ -259,9 +301,9 @@ check(/same resetsAt/.test(refusedSame), `a gateway whose slots 1 and 2 share a 
 const home2 = mkdtempSync(join(tmpdir(), "rt-t5-cap-"));
 const capped = await spawnGateway({ home: home2, port: 5212, cap: 3, tokens: tokensFile, mockApi: api.url });
 const capCalls = [];
-for (let i = 0; i < 4; i++) capCalls.push(await ask({ role: "judge", model: "haiku", system: "cap", turns: tag(`cap-${i}`), run: "cap" }, capped.url).then((r) => r.text, (e) => `ERR ${e.message}`));
+for (let i = 0; i < 4; i++) capCalls.push(await ask({ role: "judge", model: "haiku", system: "cap", turns: tag(`cap-${i}`), run: "cap" }, capped.url).then((r) => r.text, (e) => `ERR ${e.constructor.name} ${e.message}`));
 const capStatus = await gatewayStatus(capped.url);
-check(capCalls.slice(0, 3).every((t) => t === "ok") && /call cap 3 reached/.test(capCalls[3]) && capStatus.calls === 3 && capStatus.capReached, `--cap 3 with RT_EVAL_CALL_CAP=1 in the env: ${capCalls}`);
+check(capCalls.slice(0, 3).every((t) => t === "ok") && /CapReached call cap 3 reached/.test(capCalls[3]) && capStatus.calls === 3 && capStatus.capReached, `--cap 3 with RT_EVAL_CALL_CAP=1 in the env: ${capCalls}`);
 
 // ---- The dev token (O3): only under a cap ≤ 60, read from the checkout's .env files into memory.
 const checkout = mkdtempSync(join(tmpdir(), "rt-t5-checkout-"));
@@ -327,7 +369,7 @@ const byRole = rollup(meterLines(), (l) => l.role);
 check(byRole.judge?.calls === 12 && byRole.judge.usd > 0 && byRole.judge.write1h === 0 && byRole.draw?.calls >= 3, `rollup by role: ${JSON.stringify(byRole.judge)}`);
 const live = meterLines().filter((l) => l.mode === "live" && l.shared !== "follower");
 check(live.length === statuses[0].calls, `gateway 1: ${live.length} live meter lines, ${statuses[0].calls} calls`);
-const gatewayCalls = statuses.reduce((a, x) => a + x.calls, 0);
+const gatewayCalls = statuses.reduce((a, x) => a + x.calls, 0) - neverSent;
 check(api.requests.length === gatewayCalls, `the fake API got ${api.requests.length} requests, the gateways made ${gatewayCalls} calls`);
 for (const g of gws) await g.close();
 await sleep(300);

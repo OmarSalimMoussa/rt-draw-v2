@@ -9,9 +9,7 @@
     "metric": "ttfc",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "resolver first text 2.9 s → ~1.1 s (a real pilot), so TTFC drops by ~1.5 s per send with a resolver call; fidelity held",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "harder references (two candidates, no names) resolved worse without thinking",
     "files": ["src/core/tuning.ts"]
@@ -26,9 +24,7 @@
     "metric": "ttfc",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "draw first text 4.2 s → ~1.4 s on the calls that thought, TTFC down with quality held (the parse replay and the fidelity judge decide)",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "the one real pilot opened its reply with prose: unparsed lines or worse layouts on complex asks",
     "files": ["src/core/tuning.ts"]
@@ -42,9 +38,7 @@
     "goal": "craft",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "about 20% less list $ per picture (read from the meter), doodles drawn as well or better (the craft judge decides)",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "instructions read differently from the system prompt: doodles change look",
     "files": ["src/core/tuning.ts"]
@@ -58,10 +52,8 @@
     "goal": "fidelity",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "loose loops around a shape select it more often: fewer wrong or missing targets on pointing asks",
     "targets": { "asks": ["move", "resize", "restyle", "retext", "remove"] },
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "an ink reader tuned on synthetic ink: it needs U1 (real sends) to be kept, else the owner list",
     "files": ["src/core/tuning.ts"]
@@ -76,9 +68,7 @@
     "metric": "ttfc",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "on the sends Jev is sure of, the resolver's ~3 s becomes ~0.1-0.3 s, so TTFC drops by ~2.5 s there; offline, Jev gave Haiku's set on 57% of 207 recorded calls (Haiku repeats itself on 77%) with 89% of per-shape answers the same, so fidelity holds if the unsure band catches the misses",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "Jev sure and wrong (plural phrases, a part named inside a page): the drawing model edits the wrong shape",
     "files": ["src/core/tuning.ts"]
@@ -93,9 +83,7 @@
     "metric": "ttfc",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "draw first text ~4.2 s to ~1.4 s on the small edits that thought before, while new layouts and sketches keep thinking: fidelity held where draw.noThink alone risks it",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "Jev routes a complex ask to no thinking: a worse layout or unparsed lines on that send",
     "files": ["src/core/tuning.ts"]
@@ -110,9 +98,7 @@
     "metric": "ttfc",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "seed-5 (e2-h3) was unsure on 14 of 16 sends at jevSure 0.3 and waited for Claude after Jev; at 0.15 Jev decides about 7 of 16 alone (its recorded answers), and racing means an unsure send waits for nothing extra: the resolver's ~1.1 s becomes ~0.1 s on those, so TTFC drops, fidelity held if Jev's sure answers are right",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "Jev sure and wrong on the sends it now decides alone (plural phrases, a part inside a page)",
     "files": ["src/core/tuning.ts"]
@@ -127,9 +113,7 @@
     "metric": "ttfc",
     "classGuess": "Q",
     "dialogue": false,
-    "predicts": "seed-6 (e3-h1) changed nothing: Jev's think scores on 50 sends ran 0.48-0.82, and only 2 fell under 0.5; at 0.65 about 20 of 50 go without thinking (the smaller asks), so TTFC drops on those where draw.noThink for all cost fidelity (e1-h2, Z -1.95)",
     "isPatch": false,
-    "raisesCost": false,
     "touchesFrozen": false,
     "risk": "Jev's score barely separates small edits from new layouts: some asks that needed thought go without it",
     "files": ["src/core/tuning.ts"]

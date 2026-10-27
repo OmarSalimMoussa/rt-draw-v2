@@ -6,6 +6,8 @@
 //                                      say what a visitor can click and where it goes
 //   text(id, "words", style...)        the text inside a shape
 //   drawing(id, "what it shows")       a picture inside a shape
+//   illustration(id, box, "what it shows")
+//                                      a picture as a shape of its own: no box drawn around it
 //   layer(id, front | back | above:other | below:other)
 //   move(id, box)                      a shape, or a group by the same offset
 //   group(id, [a, b, ...])
@@ -13,14 +15,15 @@
 //   camera(x y w h) | camera(id, ...)  moves the screen on a board (the caller does it, not the scene)
 // A box is pixels "x y w h" or grid cells "C2-J7" (columns A, B, ... rows 1, 2, ...).
 // Style args are key:value (fill:#fde, stroke:none, opacity:0.6, size:xl, color:white).
-import { type Box, KINDS, type Kind, Scene, type Shape, type Style, type TextStyle } from "./scene.ts";
+// An op naming a shape a later line makes waits for that line (ops.waitForShape).
+import { type Box, KINDS, type Kind, NoShape, Scene, type Shape, type Style, type TextStyle } from "./scene.ts";
 import { DEFAULTS, type Tuning } from "./tuning.ts";
 
 export type Arg = { key?: string; value: string; quoted: boolean; list?: string[] };
 export type Op = { name: string; args: Arg[]; line: string };
 export type Parsed = { ok: true; op: Op } | { ok: false; line: string; error: string } | { ok: "skip" };
 
-export const NAMES = ["shape", "text", "drawing", "layer", "move", "group", "remove", "camera"];
+export const NAMES = ["shape", "text", "drawing", "illustration", "layer", "move", "group", "remove", "camera"];
 export const DEFAULT_CELL = DEFAULTS["ops.cellPx"];
 
 /**
@@ -180,7 +183,7 @@ function setClick(s: Shape, c: { link?: string | null; button?: boolean }) {
 
 const need = (scene: Scene, id: string) => {
   const s = scene.get(id);
-  if (!s) throw new Error(`no shape "${id}"`);
+  if (!s) throw new NoShape(id);
   return s;
 };
 
@@ -192,6 +195,8 @@ const need = (scene: Scene, id: string) => {
 function idOf(scene: Scene, op: Op, id: string) {
   if (scene.get(id) || scene.groups.has(id)) return id;
   if (op.name === "shape" && op.args.some((a) => !a.key && !a.quoted && KINDS.includes(a.value as Kind) && a.value !== "frame")) return id;
+  // An illustration is never a page: a new one named like a page ("cart" on the Cart page) is a new shape.
+  if (op.name === "illustration") return id;
   const name = id.toLowerCase();
   return scene.stacked().find((s) => s.kind === "frame" && s.text?.words.trim().toLowerCase() === name)?.id ?? id;
 }
@@ -247,6 +252,26 @@ export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
       styleFrom(op.args, s.style);
       return;
     }
+    case "illustration": {
+      // One line for a picture that is its own shape: what it shows is both its description and its picture, and
+      // its box is never drawn (no stroke, no fill), whatever render.pictureBox says. On an existing shape it becomes
+      // one: a styled card turned illustration loses its box. A kind written out of shape() habit is ignored.
+      const descArg = pos.slice(1).find((a) => a.quoted && !looksLikeBox(a.value));
+      const boxArg = pos.slice(1).find((a) => a !== descArg && looksLikeBox(a.value));
+      if (!descArg?.value.trim()) throw new Error(`illustration "${id}" needs a "description" of what it shows`);
+      const existing = scene.get(id);
+      if (existing?.kind === "frame") throw new Error(`"${id}" is a page: an illustration goes on it, under its own id`);
+      const box = boxArg ? parseBox(boxArg.value, cell) : existing?.box;
+      if (!box) throw new Error(`new illustration "${id}" needs a box`);
+      const what = descArg.value.trim();
+      if (existing) {
+        Object.assign(existing, { kind: "rect", box, drawing: what, ...(isShort(what, t) ? {} : { description: what }) });
+        existing.style.stroke = "transparent";
+        delete existing.style.fill;
+      } else scene.add({ id, kind: "rect", box, description: what, drawing: what, style: { stroke: "transparent" } });
+      styleFrom(op.args, scene.get(id)!.style);
+      return;
+    }
     case "layer": {
       need(scene, id);
       const where = op.args[1];
@@ -275,20 +300,64 @@ export function applyOp(scene: Scene, op: Op, t: Tuning = DEFAULTS) {
   }
 }
 
+/**
+ * Op lines naming a shape the reply hasn't made yet (ops.waitForShape). The model writes a text() or layer() before
+ * the shape() it's about; dropped, that change was lost. Each waits for its shape and lands right after the line that
+ * makes it; what still waits when the reply ends fails then. A remove() never waits: it would delete the shape when
+ * it came.
+ */
+export class Waiting {
+  private held: { op: Op; id: string }[] = [];
+  private on: boolean;
+  constructor(on: boolean) {
+    this.on = on;
+  }
+
+  /** Applies the op, or holds it. Returns every op that landed or failed now, in order: this one, then those it freed. */
+  apply(scene: Scene, op: Op, t: Tuning): { op: Op; error?: string }[] {
+    const out: { op: Op; error?: string }[] = [];
+    // A held move() may wait for a group, not a shape.
+    const made = (id: string) => !!scene.get(id) || scene.groups.has(id);
+    const run = (o: Op) => {
+      try {
+        applyOp(scene, o, t);
+        out.push({ op: o });
+        return true;
+      } catch (e) {
+        if (this.on && e instanceof NoShape && o.name !== "remove" && !made(e.id)) this.held.push({ op: o, id: e.id });
+        else out.push({ op: o, error: (e as Error).message });
+        return false;
+      }
+    };
+    // A freed op may make a shape another one waits for.
+    const queue = [op];
+    while (queue.length) {
+      if (!run(queue.shift()!)) continue;
+      const ready = this.held.filter((h) => made(h.id));
+      this.held = this.held.filter((h) => !ready.includes(h));
+      queue.push(...ready.map((h) => h.op));
+    }
+    return out;
+  }
+
+  /** The reply ended: what still waits fails. */
+  end(): { op: Op; error: string }[] {
+    const out = this.held.map((h) => ({ op: h.op, error: `no shape "${h.id}"` }));
+    this.held = [];
+    return out;
+  }
+}
+
 /** Runs a whole script; returns the scene and any lines that failed. */
 export function runScript(script: string, scene = new Scene(), t: Tuning = DEFAULTS) {
   const errors: { line: string; error: string }[] = [];
   const s = new OpStream();
+  const waiting = new Waiting(!!t["ops.waitForShape"]);
   for (const p of [...s.push(script), ...s.end()]) {
     if (p.ok === "skip") continue;
     if (!p.ok) errors.push({ line: p.line, error: p.error });
-    else {
-      try {
-        applyOp(scene, p.op, t);
-      } catch (e) {
-        errors.push({ line: p.op.line, error: (e as Error).message });
-      }
-    }
+    else for (const a of waiting.apply(scene, p.op, t)) if (a.error) errors.push({ line: a.op.line, error: a.error });
   }
+  for (const a of waiting.end()) errors.push({ line: a.op.line, error: a.error });
   return { scene, errors };
 }

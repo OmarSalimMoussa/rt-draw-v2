@@ -23,7 +23,7 @@ import { type Step, isView, synthesize } from "../core/synth.ts";
 import { loadFixture, savedIn } from "../fixtures/fixtures.ts";
 import { draw, expectationFor, missCheck } from "../judge/judge.ts";
 import { type Page, paintedCapture } from "./chrome.ts";
-import { ask, endCase, gatewayStatus } from "./client.ts";
+import { CapReached, ask, endCase, gatewayStatus } from "./client.ts";
 import { DRIVE_VIEW, LOOP, configId, sha256 } from "./config.ts";
 import { suspendGap } from "./load.ts";
 import type { MeterCall } from "./meter.ts";
@@ -75,10 +75,9 @@ const BLANK = "a blank capture (twice)";
 const pad = (n: number) => String(n).padStart(2, "0");
 export const caseIdOf = (bank: string, session: number, send: number) => `c-${bank}-s${pad(session)}-${send}`;
 
-class Capped extends Error {}
 /** The gateway's call cap stops the whole step (run.ts --cap), never just one case. */
 async function stopIfCapped(err?: unknown) {
-  if (/call cap/.test(String(err)) || (await gatewayStatus().catch(() => ({}))).capReached) throw new Capped("the call cap is reached");
+  if (err instanceof CapReached || (await gatewayStatus().catch(() => ({}))).capReached) throw new CapReached("the call cap is reached");
 }
 
 /** A page reloaded and holding `scene` (the product keeps every call and span in memory: one load per case). */
@@ -239,7 +238,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
     if (!existsSync(paths().resume(s.target!))) put(paths().resume(s.target!), fill.scene);
     saved = true;
   };
-  let capped: Capped | undefined;
+  let capped: CapReached | undefined;
 
   try {
     for (let n = from; n <= Math.min(to, from - 1 + (o.maxSends ?? Infinity)); n++) {
@@ -465,7 +464,7 @@ async function play(ctx: DriveCtx, s: Scenario, pages: Pages, o: DriveOpts, st: 
             "champion-after.jpg": champ.after, "champion.json": { opsFailed: champ.outcome.ops.filter((x) => !x.ok).length, picsFailed: champ.outcome.pics?.failed.length ?? 0, empty: diff.empty },
             "replies.json": champ.replies, "readings.json": readingsOf(start, input, champ.replies),
           });
-          banked.push({ id, rated: false, judged: judgeOnce(run, id, diff.changes).then((r) => (r === "capped" ? ((capped ??= new Capped("the call cap is reached")), false) : r)) });
+          banked.push({ id, rated: false, judged: judgeOnce(run, id, diff.changes).then((r) => (r === "capped" ? ((capped ??= new CapReached("the call cap is reached")), false) : r)) });
           out.banked.push(id);
           if (on === "A") st.rate = id;
         }
@@ -533,7 +532,8 @@ function armFiles(x: Sent, loopP99: number): ArmFiles {
   return {
     "result.json": { ops: o.ops, reply: o.reply, ...(o.error ? { error: o.error } : {}), ...(o.pics ? { pics: o.pics } : {}), stopReasons: x.calls.flatMap((c) => (c.stopReason ? [c.stopReason] : [])),
       calls: x.calls.map((c) => ({ role: c.role, reqHash: c.reqHash, shared: c.shared, mode: c.mode, ms: c.ms, firstMs: c.firstMs, waitMs: c.waitMs, readyAtTake: c.readyAtTake, thinkingTokens: c.thinkingTokens })) },
-    "timing.json": { enterAt: o.timing.enterAt, ttfcMs: o.timing.ttfcMs, ttdMs: o.timing.ttdMs, ttloMs: o.timing.ttloMs, firstTextMs: first && Math.round(first.atMs - o.timing.enterAt),
+    "timing.json": { enterAt: o.timing.enterAt, ttfcMs: o.timing.ttfcMs, ttdMs: o.timing.ttdMs, ttloMs: o.timing.ttloMs,
+      ttfdMs: o.timing.ttfdMs, renderP50Ms: o.timing.renderP50Ms, renderP90Ms: o.timing.renderP90Ms, renderMaxMs: o.timing.renderMaxMs, firstTextMs: first && Math.round(first.atMs - o.timing.enterAt),
       resolverMs: resolver && Math.round(resolver.endMs - resolver.startMs), picturesMs: o.pics?.ms, renders: o.timing.renders, longTasksMs: o.timing.longTasksMs,
       // The page's clock: Enter plus the time node waited for the send to quiesce.
       quiescedAt: Math.round(o.timing.enterAt + x.at[1] - x.at[0]), heapMb: o.timing.heapMb, gatewayLoopP99Ms: loopP99 },
@@ -575,4 +575,3 @@ export async function eachSlot(slots: number, next: (slot: number) => (() => Pro
 export function harnessEvent(run: string, e: HarnessEvent) {
   appendLine(runFile(run, "events.jsonl"), { at: new Date().toISOString(), ...e });
 }
-export { Capped };

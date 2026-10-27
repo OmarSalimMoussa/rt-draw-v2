@@ -12,7 +12,7 @@ export function remetric(runId: string): { rows: number; changed: boolean } {
   const before = existsSync(file) ? readFileSync(file, "utf8") : "";
   const calls = meterOf(runId);
   const rows = readRows(runId).map((r) =>
-    rowOf(runId, { case: r.case, cluster: r.cluster, affected: r.affected, class: r.class, overuse: r.overuse, ask: r.ask, beat: r.beat, firstArm: r.firstArm, void: r.void }, calls),
+    rowOf(runId, { case: r.case, cluster: r.cluster, affected: r.affected, class: r.class, overuse: r.overuse, ask: r.ask, beat: r.beat, firstArm: r.firstArm, void: r.void, lost: r.lost }, calls),
   );
   const text = rows.map((r) => `${JSON.stringify(r)}\n`).join("");
   put(file, text);

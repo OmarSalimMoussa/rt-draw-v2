@@ -78,6 +78,14 @@ check(m.model === "jev-1.13.0" && m.role === "draw-refs-jev" && m.inTokens > 0 &
 await setMode("r2", "replay", {}, gw.url);
 const again = await product({ run: "r2", case: "c1", arm: "A", slot: 0 }, JEV);
 check(again.text === live.text && again.done?.mode === "replay" && jevReqs().length === 1, `a replayed Jev call: mode ${again.done?.mode}, ${jevReqs().length} requests`);
+// A scan asks a Jev question the bank never recorded live (a change to how its answer is used must show), both arms
+// sharing one answer; a recorded one is a hit, not asked again.
+await setMode("s1", "scan", {}, gw.url);
+const unseen = { ...JEV, user: JEV.user.replace("t22", "t22 scan") };
+const n1 = jevReqs().length;
+const [sa, sb] = await Promise.all(["A", "B"].map((arm) => product({ run: "s1", case: "c1", arm, slot: 0 }, unseen)));
+const sh = await product({ run: "s1", case: "c2", arm: "A", slot: 0 }, JEV);
+check(jevReqs().length === n1 + 1 && sa.text === sb.text && JSON.parse(sa.text || "{}").a?.noul === 0.9 && sh.text === live.text && sh.done?.mode === "scan", `a scan's Jev questions: ${jevReqs().length - n1} asked, ${sa.text} / ${sb.text}, the recorded one ${sh.done?.mode}`);
 // Warming a Jev model starts nothing.
 const warm = await product({ run: "r1", case: "c1", arm: "A", slot: 0 }, { model: "jev-1.13.0", system: "", warm: 2 });
 check(warm.done?.warming === 0 && !Object.keys((await gatewayStatus(gw.url)).pools).length, `warming Jev: ${JSON.stringify(warm.done)}`);
@@ -114,8 +122,11 @@ async function resolved(knobs, jev) {
   return { r, c0, jev: jevReqs().slice(j0), claude: claudeReqs().length - c0 };
 }
 
-const def = await resolved({}, {});
-check(def.r.via === "model" && !def.jev.length && def.claude === 1 && def.r.ids.join() === B, `the default resolver: via ${def.r.via}, ${def.jev.length} Jev calls, ${def.claude} Claude, ids ${def.r.ids}`);
+// Claude's resolver (resolve.engine 0, the default until 4420f45 made Jev alone the default, kept as e23-h1).
+const claude = await resolved({ "resolve.engine": 0, "resolve.jevHints": 0 }, {});
+check(claude.r.via === "model" && !claude.jev.length && claude.claude === 1 && claude.r.ids.join() === B, `Claude's resolver: via ${claude.r.via}, ${claude.jev.length} Jev calls, ${claude.claude} Claude, ids ${claude.r.ids}`);
+const def = await resolved({}, { [A]: 0.9 });
+check(def.r.via === "jev" && def.jev.length === 1 && def.claude === 0 && def.r.ids.join() === A, `the default resolver (Jev alone): via ${def.r.via}, ${def.jev.length} Jev calls, ${def.claude} Claude, ids ${def.r.ids}`);
 
 const one = await resolved({ "resolve.engine": 1 }, { [A]: 0.9 });
 const q = one.jev[0];
@@ -154,16 +165,21 @@ const deep = await buildPrompt(scene, [], typed, off);
 check(deep.thinking === undefined && deep.features.thinkP === 0.8, `the think router on a big ask: ${deep.thinking}, p ${deep.features.thinkP}`);
 const j1 = jevReqs().length;
 const plain = await buildPrompt(scene, [], typed, tune({ "draw.sendScreenshot": 0, "draw.sendRefs": 0 }));
-check(plain.thinking === undefined && plain.features.thinkP === undefined && jevReqs().length === j1, "the default asked Jev about thinking");
+// The default asks Jev one thing beside the resolver, the add hint (draw.addHint, 4f0de87), never whether to think.
+const asked = jevReqs().slice(j1).map((r) => r.questions.join());
+check(plain.thinking === undefined && plain.features.thinkP === undefined && !asked.includes("think"), `the default asked Jev about thinking (${asked.join(" | ")})`);
 
 // ---- resolve.speculate: the drawing call starts on Jev's guess, its ops held until the resolver answers; the same
 // prompt lets them land (one drawing call), another drops that call and draws again on the answer.
-const spec = tune({ "resolve.speculate": 1, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
+// Speculation guesses only for Claude's resolver (resolve.engine 0): Jev alone has nothing to wait for. The fake resolver
+// answers a second late, as a live one does: answering at once (3 ms, before Jev's 90) drops a wrong guess's call
+// before its request goes out, so the call dropped in flight is never seen.
+const spec = tune({ "resolve.speculate": 1, "resolve.engine": 0, "resolve.jevHints": 0, "draw.addHint": 0, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
 const fresh = () => runScript(asPage(readFileSync(join(ROOT, "src/fixtures/clowns.ops.txt"), "utf8"), "page", "Home")).scene;
 const said = "make the clown with the balloon bigger";
 const draws = () => api.requests.filter((r) => r.role === "draw").length;
 async function speculated(jev) {
-  api.set({ jev });
+  api.set({ jev, roleMs: { resolver: 1000 } });
   run = `p${++k}`;
   const sc = fresh(), d0 = draws(), j0 = jevReqs().length, ops = [];
   const { prompt, result } = await send(sc, { strokes: [], words: said }, spec, { onOp: (r) => ops.push(r) });
@@ -178,6 +194,7 @@ check(miss.prompt.features.spec === "miss" && miss.draws === 2 && miss.ops.lengt
   `a wrong guess: spec ${miss.prompt.features.spec}, ${miss.draws} drawing calls, ${miss.ops.length} ops applied`);
 const none = await speculated({});
 check(none.prompt.features.spec === "miss" && none.draws === 2, `a guess of nothing against the answer ${B}: spec ${none.prompt.features.spec}, ${none.draws} drawing calls`);
+api.set({ roleMs: {} });
 // The gate itself: ops wait for it; a shut gate applies none.
 for (const open of [true, false]) {
   const sc = fresh(), at = [];

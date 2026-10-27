@@ -2,7 +2,7 @@
 // spec §3.1. Never inside a repo or ~/projects: run files in a work tree get swept
 // into commits, and a v1 harness once wiped real telemetry next to the code.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -30,6 +30,14 @@ function insideWorkTree(dir: string): boolean {
   }
 }
 
+/**
+ * A run on testers' real sends (R1 beside keeps and checkpoints, its baseline, triage, gold): its files, and the
+ * gateway's records of its calls and images, stay under real/ (LOOP-V2.md A5): never runs/ or cache/, which the pages
+ * server shows and `rte export` copies to another machine. Every such run's name starts "real-" (its warm-up's too:
+ * `<run>~warm`), and no other run's does.
+ */
+export const isRealRun = (id: string) => id.startsWith("real-");
+
 /** Every path of §3.1 (the home checked as in evalHome). Folders the loop fills by id are functions of the id. */
 export function paths(home?: string) {
   const root = evalHome(home);
@@ -49,9 +57,12 @@ export function paths(home?: string) {
     bankArchive: at("bank", "archive"),
     /** A first-timer's half-built page, or a held-out site start. */
     resume: (target: string) => at("bank", "resume", `${target}.json`),
-    run: (id: string) => at("runs", id),
-    reply: (sha: string) => at("cache", "replies", `${sha}.json`),
-    blob: (sha: string) => at("cache", "blobs", `${sha}.jpg`),
+    run: (id: string) => (isRealRun(id) ? at("real", "runs", id) : at("runs", id)),
+    /** A reply and an image in the cache; a real run's under real/cache. */
+    reply: (sha: string, real = false) => (real ? at("real", "cache", "replies", `${sha}.json`) : at("cache", "replies", `${sha}.json`)),
+    blob: (sha: string, real = false) => (real ? at("real", "cache", "blobs", `${sha}.jpg`) : at("cache", "blobs", `${sha}.jpg`)),
+    /** Testers' data and everything made from it (evals/real/README.md). */
+    real: at("real"),
     /** The champion-miss digest for a champion sha. */
     digest: (championSha: string) => at("digests", `${championSha}.md`),
     calls: at("meter", "calls.jsonl"),
@@ -71,3 +82,9 @@ export function paths(home?: string) {
 }
 
 export type Paths = ReturnType<typeof paths>;
+
+/** The owner's checkout: the one `rte init --from` cloned (init.json), else the current folder. */
+export function ownerCheckout(): string {
+  const f = join(evalHome(), "init.json");
+  return (existsSync(f) && (JSON.parse(readFileSync(f, "utf8")) as { from?: string }).from) || process.cwd();
+}

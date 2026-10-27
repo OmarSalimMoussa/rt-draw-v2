@@ -14,7 +14,7 @@ import { type Mark, type Reading, groupStrokes, readMark } from "./marks.ts";
 import { type Ref, type Resolution, guessRefs, resolve } from "./resolve.ts";
 import { type ModelStats, callModel, jevOf, modelOf } from "./model.ts";
 import { decide } from "./decide.ts";
-import { OpStream, type Parsed, applyOp } from "./ops.ts";
+import { OpStream, type Parsed, Waiting } from "./ops.ts";
 import type { Scene, Shape } from "./scene.ts";
 import { type Shot, takeShot } from "./shot.ts";
 import { type TraceContext, mark, span, spanSync, timed } from "./trace.ts";
@@ -34,6 +34,8 @@ export type Prompt = {
   transcript: string;
   /** The resolver's answers, when they were sent. */
   refs?: Resolution;
+  /** The strokes of the marks read as sketches (not pointing), on the board as it was: what a picture may follow (picture.context). */
+  sketches?: Stroke[];
   /** "off" when Jev decided this send needs no thinking (draw.thinkRouter); unset: draw.noThink decides. */
   thinking?: "off";
   features: { /** resolve.speculate: "hit" (the guess's drawing landed), "miss" (dropped, drawn again), "no guess" */ spec?: string; thinkP?: number; marksSent: number; refs: string; resolveMs: number; chars: number; imageTokens: number; shapes: number; marks: number; idMap: number; ops: number; screenshot: number; grid: number; board: number; pictures: number; views: string; earlyShots: number; unusedShots: number; shotsMs: number; mapChars: number };
@@ -202,6 +204,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
         camera,
         transcript,
         refs,
+        sketches: marks.filter((_, i) => readings[i].kind === "sketch").flatMap((m) => m.strokes),
         thinking: thinkP !== undefined && thinkP < t["draw.thinkYes"] ? "off" : undefined,
         features: {
           thinkP,
@@ -259,31 +262,46 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
     else dropped = true;
   });
   const shut = async () => !!gate && !(await gate);
+  // Op lines naming a shape a later line makes wait for it (ops.waitForShape).
+  const waiting = new Waiting(!!t["ops.waitForShape"]);
+  const emit = (r: OpResult) => {
+    ops.push(r);
+    // A camera move changes the screen, not the scene, so it's never the first op (F1).
+    if (r.ok && !r.camera) firstOpMs ??= r.ms;
+    if (r.ok && !r.camera && ops.filter((o) => o.ok && !o.camera).length === 1) mark(ctx, "first op applied");
+    // The page's redraw after each op is part of the op's time on screen.
+    spanSync(`op ${ops.length}: ${r.line.slice(0, 48)}`, ctx, () => onOp(r), { ok: r.ok, line: r.line });
+  };
   const handle = (parsed: Parsed[]) => {
     if (dropped) return;
     if (held) return void held.push(...parsed);
     for (const p of parsed) {
       if (p.ok === "skip") continue;
       const ms = Math.round(performance.now() - t0);
-      let r: OpResult;
-      if (!p.ok) r = { line: p.line, ok: false, error: p.error, ms };
-      else {
-        try {
-          // camera(...) moves the screen, not the scene: on a board, the caller glides there.
-          const camera = p.op.name === "camera" && prompt.camera ? parseCamera(p.op.line, scene, t).view : undefined;
-          if (!camera) applyOp(scene, p.op, opT);
-          // A camera move changes the screen, not the scene, so it's never the first op (F1).
-          if (!camera) firstOpMs ??= ms;
-          r = { line: p.op.line, ok: true, ms, camera };
-        } catch (e) {
-          r = { line: p.op.line, ok: false, error: e instanceof Error ? e.message : String(e), ms };
-        }
+      if (!p.ok) {
+        emit({ line: p.line, ok: false, error: p.error, ms });
+        continue;
       }
-      ops.push(r);
-      if (r.ok && !r.camera && ops.filter((o) => o.ok && !o.camera).length === 1) mark(ctx, "first op applied");
-      // The page's redraw after each op is part of the op's time on screen.
-      spanSync(`op ${ops.length}: ${r.line.slice(0, 48)}`, ctx, () => onOp(r), { ok: r.ok, line: r.line });
+      try {
+        // camera(...) moves the screen, not the scene: on a board, the caller glides there.
+        const camera = p.op.name === "camera" && prompt.camera ? parseCamera(p.op.line, scene, t).view : undefined;
+        if (camera) {
+          emit({ line: p.op.line, ok: true, ms, camera });
+          continue;
+        }
+      } catch (e) {
+        emit({ line: p.op.line, ok: false, error: e instanceof Error ? e.message : String(e), ms });
+        continue;
+      }
+      for (const a of waiting.apply(scene, p.op, opT)) emit({ line: a.op.line, ok: !a.error, error: a.error, ms });
     }
+  };
+  /** The reply's last line, then what still waits for a shape that never came. */
+  const finish = () => {
+    handle(stream.end());
+    if (dropped) return;
+    const ms = Math.round(performance.now() - t0);
+    for (const a of waiting.end()) emit({ line: a.op.line, ok: false, error: a.error, ms });
   };
   try {
     const thinking = prompt.thinking ? { thinking: prompt.thinking } : thinkingOf("draw", t);
@@ -294,11 +312,11 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
       onText?.(soFar);
     }, signal, ctx);
     if (await shut()) return { ops, firstOpMs, ms: Math.round(performance.now() - t0), stats, reply: text, error: "dropped: the resolver's answer gave another prompt" };
-    handle(stream.end());
+    finish();
     return { ops, firstOpMs, ms: Math.round(performance.now() - t0), stats, reply: text };
   } catch (e) {
     if (await shut()) return { ops, firstOpMs, ms: Math.round(performance.now() - t0), reply: "", error: "dropped: the resolver's answer gave another prompt" };
-    handle(stream.end());
+    finish();
     return { ops, firstOpMs, ms: Math.round(performance.now() - t0), reply: "", error: e instanceof Error ? e.message : String(e) };
   }
 }

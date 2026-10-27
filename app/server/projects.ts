@@ -12,6 +12,7 @@
 //   POST /api/project/rename { id, name }
 //   POST /api/project/delete { id }
 //   POST /api/projects/reset            (dev only) deletes all of this browser's projects
+//   POST /api/sends          { id, project, before, … }  -> { ok } appends one send to the send log (capture.ts)
 import { randomBytes } from "node:crypto";
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -57,6 +58,8 @@ function serial<T>(owner: string, job: () => Promise<T>): Promise<T> {
 }
 
 const dir = (owner: string) => join(data(), owner);
+/** The send log: <RT_DATA_DIR>/app/sends/<owner>/<project>.ndjson, one send per line. */
+const sendsDir = (owner: string) => join(data(), "..", "sends", owner);
 const file = (owner: string, id: string) => join(dir(owner), `${id}.ndjson`);
 
 export async function readIndex(owner: string): Promise<Meta[]> {
@@ -134,6 +137,23 @@ export function registerProjects(router: Router, ownerFor: OwnerOf = ownerOf) {
     const id = new URL(req.url ?? "", "http://x").searchParams.get("id") ?? "";
     if (!PROJECT.test(id) || !(await readIndex(owner)).some((m) => m.id === id)) return json(res, 404, { error: "no such project" });
     json(res, 200, { versions: (await readVersions(owner, id)).slice(-VERSIONS_SENT) });
+  });
+
+  // The send log (app/src/board/capture.ts): a project's first send may come before its first save, so the project
+  // isn't looked up, only its id checked.
+  router.use("/api/sends", async (req, res) => {
+    if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+    const owner = whose(req, res);
+    if (!owner) return;
+    const rec = await body<{ id?: unknown; project?: unknown; before?: unknown }>(req, res);
+    if (!rec) return;
+    if (typeof rec.project !== "string" || !PROJECT.test(rec.project) || typeof rec.id !== "string" || typeof rec.before !== "object") return json(res, 400, { error: "bad send" });
+    const project = rec.project;
+    await serial(owner, async () => {
+      await mkdir(sendsDir(owner), { recursive: true });
+      await appendFile(join(sendsDir(owner), `${project}.ndjson`), `${JSON.stringify(rec)}\n`);
+    });
+    json(res, 200, { ok: true });
   });
 
   router.use("/api/project/save", async (req, res) => {

@@ -5,14 +5,15 @@
 // ties. The class is the scan's (the card's declared one is only logged): an after-scene that differs
 // where nothing renders (state only the next send reads) or a request that differs on a dialogue card
 // → D; a request that differs → Q; a scene or render that differs → R; else timed replay on
-// LOOP.nTimedCases cases tells N (TTFC and TTD within ±LOOP.nTimingBand) from S. A stand-in can hide an
+// LOOP.nTimedCases cases tells N (TTFD and render within ±LOOP.nTimingBand) from S, and a case that ends differently
+// on the recorded clock makes it Q. A stand-in can hide an
 // effect that only a different upstream reply would show: that risk is accepted (§1.2).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { caseFile } from "../judge/packet.ts";
 import { type ForkFile, type Rig, type RunSpec, runAB } from "./ab.ts";
 import { LOOP } from "./config.ts";
-import { pairedRatio, tailsOf } from "./latency.ts";
+import { gatedStats, pairedRatio, shiftTest, tailsOf } from "./latency.ts";
 import { caseDir, put, runFile } from "./record.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import type { CaseInfo, DecisionClass, Ratio, RecordedReply, SceneJSON, SetId } from "./types.ts";
@@ -32,7 +33,8 @@ export type ScanResult = {
   affected: Partial<Record<SetId, string[]>>;
   /** Identical request hashes over the affected cases: RunSpec.cached for G2 and G3. */
   cached: string[];
-  timed?: { run: string; ttfc?: Ratio; ttd?: Ratio; /** "ttfc p90" … "ttd p95" */ tails?: Record<string, Ratio> };
+  /** ttfd and render decide the class; ttfc and ttd are reported. tails: "ttfd p90" … "render p95". */
+  timed?: { run: string; ttfc?: Ratio; ttd?: Ratio; ttfd?: Ratio; render?: Ratio; tails?: Record<string, Ratio> };
 };
 
 const json = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
@@ -57,6 +59,10 @@ export function compareCase(run: string, id: string): Omit<CaseScan, "set"> {
   const inB = new Set([...b.values()].flat());
   return { case: id, affected: requests.length > 0 || scene || svg, requests, scene, svg, identical: [...new Set([...a.values()].flat().filter((h) => inB.has(h)))] };
 }
+
+/** Every case of a replay on the recorded clock ended the same in both arms (scene and stage); one arm failing isn't. */
+export const sameOnTheClock = (run: string, rows: { case: string; void?: string; lost?: unknown }[]) =>
+  rows.every((r) => !!r.void || (!r.lost && json<ForkFile>(join(caseDir(run, r.case), "fork.json")).identicalAfter));
 
 const caseClass = (c: Omit<CaseScan, "set">): DecisionClass => (!c.affected ? "N" : c.scene && !c.svg ? "D" : c.requests.length ? "Q" : "R");
 
@@ -88,10 +94,20 @@ export async function scan(rig: Rig, o: Pick<RunSpec, "run" | "arms" | "seed" | 
     const ids = entryOrder(tuning.map((c) => c.case), (id) => json<CaseInfo>(caseFile(id, "case.json", o.run)).originSession, seedOf(o.seed)).slice(0, LOOP.nTimedCases);
     const run = `${o.run}-timed`;
     const t = await runAB(rig, { ...o, run, kind: "scan", mode: "replay", share: true, cases: ids, cls: "N", classify: () => ({ affected: false, class: "N" }) });
-    timed = { run, ttfc: pairedRatio(t.rows, "ttfc"), ttd: pairedRatio(t.rows, "ttd"), tails: tailsOf(t.rows) };
-    // The slow sends too: a schedule change on a few sends (the picture-heavy ones) moves a tail, not the median.
-    const flat = (r?: Ratio) => !r || Math.abs(r.est - 1) <= LOOP.nTimingBand;
-    cls = [timed.ttfc, timed.ttd, ...Object.values(timed.tails!)].every(flat) ? "N" : "S";
+    timed = { run, ttfc: pairedRatio(t.rows, "ttfc"), ttd: pairedRatio(t.rows, "ttd"), ttfd: pairedRatio(t.rows, "ttfd"), render: pairedRatio(t.rows, "render"), tails: tailsOf(t.rows) };
+    // The slow sends too: a schedule change on a few sends (the picture-heavy ones) moves a tail, not the median. Only the
+    // deciding latencies make it S, read as the veto reads them (a tail once it holds LOOP.latTailMinSends sends): a change
+    // that moves time to done alone has nothing a latency card could keep. Flat: both medians within the band (one noisy
+    // case can't move a median), and the tails within it or none surely moved (the veto's one swap test, two-sided at
+    // LOOP.latVeto.p): one slow send can move a tail alone. A swap test alone can't read a few sessions as moved (4 give
+    // 1/16 at best), so a schedule change that halves every first drawing would read flat on them.
+    const stats = Object.entries(gatedStats(t.rows)), band = (r: Ratio) => Math.abs(r.est - 1) <= LOOP.nTimingBand;
+    const shift = shiftTest(t.rows);
+    const flat = stats.every(([k, r]) => k.includes(" ") || band(r))
+      && (stats.every(([, r]) => band(r)) || !shift || Math.min(shift.slower, shift.faster) >= LOOP.latVeto.p / 2);
+    // On the recorded clock the arms must still draw the same: a change that only moves time, else what it draws moved
+    // with the timing ("keep the guess when the resolver is late") and only the judged path may keep it.
+    cls = !sameOnTheClock(run, t.rows) ? "Q" : flat ? "N" : "S";
   }
   const affected: ScanResult["affected"] = {};
   for (const c of cases.filter((x) => x.affected)) (affected[c.set] ??= []).push(c.case);

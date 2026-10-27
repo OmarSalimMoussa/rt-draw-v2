@@ -1,6 +1,6 @@
 // The loop's record (spec §3.5, §5.3, §8.5; F17): branch eval/history of the loop's own clone, an orphan
-// written only by the loop, checked out at $RT_EVAL_HOME/history. Rows are appended and the few whole
-// files (anchors, eras) rewritten in place: git keeps every version, so nothing here is voided. Every
+// written only by the loop, checked out at $RT_EVAL_HOME/history. Rows are appended and the one whole
+// file (anchors.json: A0) written once: git keeps every version, so nothing here is voided. Every
 // decision and checkpoint ends in one commit, pushed when the branch has a remote
 // (`git config branch.eval/history.remote <name>`), so the record outlives the machine. The owner's
 // checkout and master are never touched: on the laptop the clone's origin is his checkout, and nothing
@@ -14,14 +14,14 @@ import { readRows } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { runFile, voidPath } from "./record.ts";
 import { clusteredZ } from "./stats.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, Era, HealthRow, HypothesisCard, Lat, Marker, Ratio, Row, RunInfo, SmokeRow } from "./types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, HypothesisCard, Marker, Ratio, Row, RunInfo, SmokeRow } from "./types.ts";
 import type { Decision } from "./verdict.ts";
 
 export const BRANCH = "eval/history";
 /** runs/<id>.json's cap (§3.5): rows past it are dropped and counted. */
 const RUN_MAX_BYTES = 200_000;
 /** A missing ratio (no pairs) as no change. */
-export const ONE: Ratio = { est: 1, lo90: 1, hi90: 1, lo95: 1 };
+export const ONE: Ratio = { est: 1 };
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const json = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
@@ -85,9 +85,9 @@ export function commitHistory(message: string): string | undefined {
 // ---- The files of §5.3
 
 type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker; "smoke.jsonl": SmokeRow };
-/** anchors.json: each anchor once frozen (§5.2); `tuning` when the champion was a commit plus knobs. */
-export type Anchor = { id: string; sha: string; Q: number; latency?: Lat; tuning?: Record<string, number> };
-type Whole = { "anchors.json": Anchor[]; "eras.json": Era[] };
+/** anchors.json: A0, checkpoint 0's champion, which every checkpoint runs against (§5.2); `tuning` when it was a commit plus knobs. */
+export type Anchor = { id: string; sha: string; tuning?: Record<string, number> };
+type Whole = { "anchors.json": Anchor[] };
 
 export function historyAdd<K extends keyof Rows>(name: K, row: Rows[K]) {
   const f = at(name);
@@ -123,6 +123,11 @@ export function saveRun(run: string) {
 
 // ---- The ledger, tried patches and the owner list (§8.5)
 
+/** Bench R1's report (evals/real/shadow.ts) as one line, for the ledger and the log. */
+export const realLine = (x: NonNullable<DecisionRow["real"]>) =>
+  `R1 ${x.hash.slice(0, 12)} (shadow, ${x.cases} cases${x.void ? `, ${x.void} void` : ""}${x.lost ? `, ${x.lost} one arm failed` : ""}): checks ${(100 * x.checks[0]).toFixed(0)}% → ${(100 * x.checks[1]).toFixed(0)}%, cases passing all ${(100 * x.casesPassing[0]).toFixed(0)}% → ${(100 * x.casesPassing[1]).toFixed(0)}%` +
+  `${x.share !== undefined ? `, judge share ${x.share.toFixed(2)}${x.shareHold !== undefined ? ` (R-hold ${x.shareHold.toFixed(2)})` : ""}` : ""}${x.ttfd ? `, first drawing ×${x.ttfd.est.toFixed(2)}` : ""}${x.render ? `, render ×${x.render.est.toFixed(2)}` : ""}`;
+
 /** One ledger.md entry per decision: card, class, goal, verdict, looks, vetoes, $ and minutes, the run. */
 export function ledger(d: DecisionRow) {
   const f = at("ledger.md");
@@ -133,7 +138,8 @@ export function ledger(d: DecisionRow) {
     ...(d.card ? [`- ${d.card.change}`] : []),
     `- looks ${looks}; ${d.counts.wins} won, ${d.counts.losses} lost, ${d.counts.ties} tied, ${d.counts.exactTies} exact ties; trust ${d.trust}`,
     ...(d.kind === "card" ? [`- ${d.reasons.join("; ") || "no vetoes"}`] : [`- checkpoint ${d.checkpoint}`]),
-    `- TTFC ×${d.latency.ttfc.est.toFixed(2)}, TTD ×${d.latency.ttd.est.toFixed(2)}; $${d.cost.listUsd.toFixed(2)}, ${d.cost.calls} calls, ${d.minutes} min; [run](runs/${d.run}.json)`,
+    ...(d.real ? [`- ${realLine(d.real)}`] : []),
+    `- ${d.latency.ttfd ? `first drawing ×${d.latency.ttfd.est.toFixed(2)}, ` : ""}${d.latency.render ? `render ×${d.latency.render.est.toFixed(2)}, ` : ""}TTFC ×${d.latency.ttfc.est.toFixed(2)}, TTD ×${d.latency.ttd.est.toFixed(2)}; $ ×${d.cost.usdPerCaseRatio.toFixed(2)} per case, $${d.cost.listUsd.toFixed(2)}, ${d.cost.calls} calls, ${d.minutes} min; [run](runs/${d.run}.json)`,
   ];
   appendFileSync(f, `${existsSync(f) ? "" : "# Ledger\n\n"}${lines.join("\n")}\n\n`);
 }
@@ -179,20 +185,21 @@ export function decisionRow(o: {
     return r.length ? clusteredZ(r).z : undefined;
   };
   const info = existsSync(runFile(o.run, "run.json")) ? json<RunInfo>(runFile(o.run, "run.json")) : undefined;
-  // Over-use is read off the judged cases the card isn't for (§1.4 item 8).
+  // Over-use is read off the judged cases the card isn't for, and reported.
   const target = (r: Row) => !!(o.card.targets?.asks?.includes(r.ask) || (r.beat && o.card.targets?.beats?.includes(r.beat)));
   const rest = o.result.rows.filter((r) => !r.void && !target(r));
   const rate = (i: 0 | 1) => (rest.length ? rest.filter((r) => r.overuse[i]).length / rest.length : 0);
   return {
     id: o.id, kind: "card", epoch: o.epoch, card: o.card, candSha: o.candSha, baseSha: o.baseSha, class: d.class, goal: d.goal, verdict: d.verdict,
-    reasons: [...new Set([...d.reasons, ...d.vetoes])], trust: trustOf(d.verdict === "void", o.run), looks: d.looks,
+    reasons: [...new Set([...d.reasons, ...d.vetoes])], codes: d.codes, trust: trustOf(d.verdict === "void", o.run), looks: d.looks,
     counts: { wins: d.counts.wins, losses: d.counts.losses, ties: d.counts.ties, exactTies: o.affected.of - o.affected.tuning }, affected: o.affected,
     heldOutZ: z(o.result.heldout?.filter((r) => r.affected), "s"), craftZ: z(o.result.rows, "sCraft"), continuationZ: z(o.result.continuation, "s"),
     ...(o.card.overuseDetector ? { overuse: { detector: o.card.overuseDetector, a: rate(0), b: rate(1) } } : {}),
-    latency: { ttfc: d.latency.ttfc ?? ONE, ttd: d.latency.ttd ?? ONE, byThinking: d.latency.byThinking },
+    latency: { ttfc: d.latency.ttfc ?? ONE, ttd: d.latency.ttd ?? ONE, ...(d.latency.ttfd ? { ttfd: d.latency.ttfd } : {}), ...(d.latency.render ? { render: d.latency.render } : {}), byThinking: d.latency.byThinking, tails: d.latency.tails },
     work: d.work, emptyRise: d.emptyRise, failedPicRise: d.failedPicRise,
     cost: { usdPerCaseRatio: d.usdRatio, listUsd: info?.meter.listUsd ?? 0, calls: info?.meter.calls ?? 0 }, minutes: Math.round(info?.meter.minutes ?? 0),
     run: o.run, judgeId: o.judgeId, configId,
+    ...(d.real ? { real: d.real } : {}),
   };
 }
 

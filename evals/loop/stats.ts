@@ -1,10 +1,9 @@
 // The statistics every decision and checkpoint uses (spec §1.3–1.4, §5.2). Cases from one
-// driver session are alike (same person, same page, same run of luck), so every interval
-// treats the origin session as the unit: CR1 standard errors clustered by session, and a
-// bootstrap that draws whole sessions. Seeded, so a verdict recomputed from rows.jsonl is
+// driver session are alike (same person, same page, same run of luck), so every test treats
+// the origin session as the unit: CR1 standard errors clustered by session, and swap tests
+// that swap the arms of whole sessions. Seeded, so a verdict recomputed from rows.jsonl is
 // the same verdict.
 import { LOOP } from "./config.ts";
-import type { Ratio } from "./types.ts";
 
 /** A seeded uniform [0, 1) generator (mulberry32, as the spec's simulations use). */
 export function rng(seed: number) {
@@ -108,13 +107,13 @@ export function tInterval(xs: number[], clusters: string[], level: number) {
   return { est: mean, lo: mean - half, hi: mean + half, se, G };
 }
 
-// ---- The session bootstrap, for paired latency ratios
+// ---- Paired latency stats, and the session-swap test that decides on them
 
-/** The p quantile of sorted values, as the spec's simulations read it. */
-const quantile = (sorted: ArrayLike<number>, p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * sorted.length)))];
+/** Where the p quantile of n sorted values is read, as the spec's simulations read it. */
+export const quantileAt = (n: number, p: number) => Math.min(n - 1, Math.max(0, Math.floor(p * n)));
 
 /** The k-th smallest (from 0) of a[0..n), by quickselect. */
-function select(a: Float64Array, n: number, k: number): number {
+export function select(a: Float64Array, n: number, k: number): number {
   let lo = 0, hi = n - 1;
   while (lo < hi) {
     const pivot = a[(lo + hi) >> 1];
@@ -134,77 +133,89 @@ function select(a: Float64Array, n: number, k: number): number {
   return a[k];
 }
 
-// The 0.5 quantile by the same convention as `quantile` (the upper median for an even count): the
-// convention the latency veto's 4 / 23 / 61% was simulated with. In place, without sorting: the
-// bootstrap takes 2,000 medians per ratio.
-const median = (a: Float64Array, n: number) => select(a, n, n >> 1);
+// The 0.5 quantile by the same convention as quantileAt (the upper median for an even count): the convention the
+// latency rules were simulated with. In place, without sorting: the swap test takes up to 2,048 medians per stat.
+export const median = (a: Float64Array, n: number) => select(a, n, n >> 1);
+
+/** Up to this many sessions every pattern of swapped arms is taken (2^11 = 2,048), past it LOOP.bootstrap random ones. */
+const SWAP_EXACT_G = 11;
+
+/** One B/A stat on paired values: `stat` reads the two arms' buffers (it may reorder them), larger meaning B slower. */
+export type SwapStat = { a: number[]; b: number[]; clusters: string[]; stat: (a: Float64Array, b: Float64Array, n: number) => number };
 
 /**
- * Paired per-case log-ratios (log B/A) → the ratio's estimate (the median, robust to thinking's
- * two-humped latency) with one-sided bounds from LOOP.bootstrap draws of whole sessions.
+ * Stats tested together by swapping the arms of whole sessions, the same sessions in every stat: exact under "the arms
+ * are alike" at any number of sessions (LOOP-V2.md A3: at 32 cases from 8 sessions a session bootstrap's no-effect median
+ * read surely slower 13% of the time for a nominal 5%). Each stat is standardized by its spread over the swaps, so a
+ * noisy tail doesn't drown the median; `slower` is P that the largest standardized stat is as large by chance, `faster`
+ * that the smallest is as small: one p for the family however many stats it holds, where a test per stat would take a
+ * no-effect change by chance once per stat. `worst` and `best` index the stats that were largest and smallest. With few
+ * sessions p can't be small: 4 sessions give 1/16 at best.
  */
-export function logRatio(logs: number[], clusters: string[], seed: number): Ratio {
-  const by = new Map<string, number[]>();
-  logs.forEach((x, i) => (by.get(clusters[i]) ?? by.set(clusters[i], []).get(clusters[i])!).push(x));
-  const groups = [...by.values()];
-  const buf = new Float64Array(groups.length * Math.max(...groups.map((g) => g.length)));
+export function swapMax(stats: SwapStat[], seed: number): { slower: number; faster: number; worst: number; best: number } {
+  const sessions = [...new Set(stats.flatMap((x) => x.clusters))].sort();
+  const at = new Map(sessions.map((c, i) => [c, i]));
+  const prep = stats.map((x) => {
+    const by = new Map<number, number[]>();
+    x.clusters.forEach((c, i) => (by.get(at.get(c)!) ?? by.set(at.get(c)!, []).get(at.get(c)!)!).push(i));
+    return { ...x, groups: [...by], A: new Float64Array(x.a.length), B: new Float64Array(x.a.length) };
+  });
+  const run = (swapped: (g: number) => boolean) =>
+    prep.map((x) => {
+      let k = 0;
+      for (const [g, idx] of x.groups) {
+        const s = swapped(g);
+        for (const i of idx) (x.A[k] = s ? x.b[i] : x.a[i]), (x.B[k++] = s ? x.a[i] : x.b[i]);
+      }
+      return x.stat(x.A, x.B, k);
+    });
+  const exact = sessions.length <= SWAP_EXACT_G;
+  const draws = exact ? 2 ** sessions.length : LOOP.bootstrap;
   const r = rng(seed);
-  const meds = new Float64Array(LOOP.bootstrap);
-  for (let k = 0; k < LOOP.bootstrap; k++) {
-    let n = 0;
-    for (let g = 0; g < groups.length; g++) {
-      for (const x of groups[Math.floor(r() * groups.length)]) buf[n++] = x;
-    }
-    meds[k] = median(buf, n);
+  const obs = run(() => false);
+  const T = Array.from({ length: draws }, (_, d) => (exact ? run((g) => ((d >> g) & 1) === 1) : run(() => r() < 0.5)));
+  // A stat that every swap leaves where it was (one session, or no spread) can't say anything.
+  const scale = stats.map((_, k) => {
+    const xs = T.map((t) => t[k]);
+    const mean = xs.reduce((a, b) => a + b, 0) / draws;
+    const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / draws);
+    return sd > 1e-12 ? { mean, sd } : undefined;
+  });
+  const z = (t: number[]) => scale.flatMap((s, k) => (s ? [(t[k] - s.mean) / s.sd] : []));
+  const o = z(obs);
+  if (!o.length) return { slower: 1, faster: 1, worst: 0, best: 0 };
+  const hi = Math.max(...o), lo = Math.min(...o);
+  const live = scale.flatMap((s, k) => (s ? [k] : []));
+  let above = 0, below = 0;
+  for (const t of T) {
+    const zt = z(t);
+    if (Math.max(...zt) >= hi - 1e-9) above++;
+    if (Math.min(...zt) <= lo + 1e-9) below++;
   }
-  meds.sort();
-  const est = median(Float64Array.from(logs), logs.length);
-  return { est: Math.exp(est), lo90: Math.exp(quantile(meds, 0.1)), hi90: Math.exp(quantile(meds, 0.9)), lo95: Math.exp(quantile(meds, 0.05)) };
+  // Exact: the observed pattern is among the 2^G. Random: counted once more, as a randomization test's p must be.
+  const p = (n: number) => (exact ? n / draws : (n + 1) / (draws + 1));
+  return { slower: p(above), faster: p(below), worst: live[o.indexOf(hi)], best: live[o.indexOf(lo)] };
 }
 
-/**
- * A tail's B/A ratio: the p quantile of B's values over the p quantile of A's (the slowest sends' latency in each arm),
- * with bounds from LOOP.bootstrap draws of whole sessions. The median paired ratio can't see a change on fewer than
- * half the sends (the ones that think, the picture-heavy ones); a tail can.
- */
-export function quantileRatio(a: number[], b: number[], clusters: string[], p: number, seed: number): Ratio {
-  const by = new Map<string, number[]>();
-  clusters.forEach((c, i) => (by.get(c) ?? by.set(c, []).get(c)!).push(i));
-  const groups = [...by.values()];
-  const size = groups.length * Math.max(...groups.map((g) => g.length));
-  const [bufA, bufB] = [new Float64Array(size), new Float64Array(size)];
-  const at = (n: number) => Math.min(n - 1, Math.max(0, Math.floor(p * n)));
-  const r = rng(seed);
-  const logs = new Float64Array(LOOP.bootstrap);
-  for (let k = 0; k < LOOP.bootstrap; k++) {
-    let n = 0;
-    for (let g = 0; g < groups.length; g++) for (const i of groups[Math.floor(r() * groups.length)]) (bufA[n] = a[i]), (bufB[n++] = b[i]);
-    logs[k] = Math.log(select(bufB, n, at(n)) / select(bufA, n, at(n)));
-  }
-  logs.sort();
-  const est = Math.log(select(Float64Array.from(b), b.length, at(b.length)) / select(Float64Array.from(a), a.length, at(a.length)));
-  const e = (q: number) => Math.exp(quantile(logs, q));
-  return { est: Math.exp(est), lo90: e(0.1), hi90: e(0.9), lo95: e(0.05), hi95: e(0.95) };
+/** The median paired log-ratio log(B/A) as a SwapStat. */
+export function medianStat(a: number[], b: number[], clusters: string[]): SwapStat {
+  const logs = new Float64Array(a.length);
+  return { a, b, clusters, stat: (A, B, n) => {
+    for (let i = 0; i < n; i++) logs[i] = Math.log(B[i] / A[i]);
+    return median(logs, n);
+  } };
 }
 
-// ---- Chains of same-run ratios (latency and quality debt, §1.4)
-
-/** One run's paired estimate on the log scale: a log-ratio, or a share in log-odds. */
-export type Factor = { log: number; se: number; df: number };
-
-/** A product of same-run factors (coefficient ±1 each): logs add, and so do their variances. */
-export function chain(terms: [coef: number, f: Factor][]): Factor {
-  return {
-    log: terms.reduce((a, [c, f]) => a + c * f.log, 0),
-    se: Math.sqrt(terms.reduce((a, [c, f]) => a + c * c * f.se * f.se, 0)),
-    df: Math.min(...terms.map(([, f]) => f.df)),
-  };
+/** A tail's log-ratio as a SwapStat: both arms' p quantile, log(B/A). */
+export function quantileStat(a: number[], b: number[], clusters: string[], p: number): SwapStat {
+  const at = quantileAt(a.length, p);
+  return { a, b, clusters, stat: (A, B, n) => Math.log(select(B, n, at) / select(A, n, at)) };
 }
 
-/** A factor as a ratio with one-sided t bounds. */
-export function asRatio(f: Factor): Ratio {
-  const t90 = tQuantile(0.9, f.df), t95 = tQuantile(0.95, f.df);
-  return { est: Math.exp(f.log), lo90: Math.exp(f.log - t90 * f.se), hi90: Math.exp(f.log + t90 * f.se), lo95: Math.exp(f.log - t95 * f.se) };
+/** One stat's swap test against B = c·A: `slower` P that it's above c by chance, `faster` below. */
+export function swapP(s: SwapStat, c: number, seed: number) {
+  const t = swapMax([{ ...s, b: s.b.map((x) => x / c) }], seed);
+  return { slower: t.slower, faster: t.faster };
 }
 
 /**

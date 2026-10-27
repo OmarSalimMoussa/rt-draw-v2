@@ -102,6 +102,8 @@ check(!("CLAUDE_CODE_EXTRA_BODY" in plain) && !("CLAUDE_CODE_MAX_RETRIES" in pla
 const full = childEnv(FAKE, { configDir, mockApi, maxRetries: 2, thinking: "off", model: "claude-sonnet-5-5" });
 envOk(full, "childEnv with mockApi", { token: FAKE, mock: true, config: configDir });
 check(full.CLAUDE_CODE_MAX_RETRIES === "2" && JSON.parse(full.CLAUDE_CODE_EXTRA_BODY).thinking, "childEnv with maxRetries 2 / thinking off misses them");
+// Only the product keeps the 4096-token limit: an eval role (gold, triage, the judge) asks for the model's own maximum.
+check(childEnv(FAKE, { configDir, maxTokens: 128000 }).CLAUDE_CODE_MAX_OUTPUT_TOKENS === "128000", "childEnv ignores an eval role's maxTokens");
 check(!("CLAUDE_CODE_EXTRA_BODY" in childEnv(FAKE, { configDir, thinking: "auto", model: "claude-sonnet-5-5" })), "thinking auto adds an extra body");
 
 // ---- streamCall on the fake API: the request Claude Code sends, the stats, errors.
@@ -176,6 +178,17 @@ const later = pool2.take(kB, 0, start("pool B"));
 check(later.waiting && later.readyAtTake, `a spare that had finished starting: waiting ${later.waiting}, readyAtTake ${later.readyAtTake}`);
 later.proc.q.close();
 pool2.closeAll();
+// A spare the reaper would close before its take is replaced when the key is warmed again, so the take finds one.
+const pool3 = new Pool({ idleMs: 1000 });
+const kC = keyOf("claude-sonnet-5-5", "pool C");
+pool3.warm(kC, 1, start("pool C"));
+await sleep(600);
+pool3.warm(kC, 1, start("pool C"));
+await sleep(500);
+const due = pool3.take(kC, 0, start("pool C"));
+check(due.waiting, "a spare near its idle limit counted as warm, and its take started cold");
+due.proc.q.close();
+pool3.closeAll();
 
 // ---- The dev plugin through a Vite server on this check's port: NDJSON, warm default, keys, log, config dir.
 const root = mkdtempSync(join(tmpdir(), "rt-t1-root-"));

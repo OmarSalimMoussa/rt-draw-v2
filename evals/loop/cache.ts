@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { Paths } from "./paths.ts";
+import { type Paths, isRealRun } from "./paths.ts";
 import type { RecordedReply } from "./types.ts";
 
 /** What a request is, for its hash: images by blob hash. */
@@ -22,12 +22,12 @@ export type Reply = { reqHash: string; run: string; role: string; at: string; re
 const sha256 = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 export const reqHash = (r: Req) => sha256(JSON.stringify([r.model, r.system, r.user, r.images, r.effort, r.thinking]));
 
-/** Writes each data: URL's bytes once as cache/blobs/<sha256>.jpg; returns the hashes. */
-export function storeImages(p: Paths, urls: string[]): string[] {
+/** Writes each data: URL's bytes once as cache/blobs/<sha256>.jpg (a real run's under real/); returns the hashes. */
+export function storeImages(p: Paths, urls: string[], run = "-"): string[] {
   return urls.map((url) => {
     const bytes = Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
     const sha = sha256(bytes);
-    const file = p.blob(sha);
+    const file = p.blob(sha, isRealRun(run));
     if (!existsSync(file)) {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, bytes);
@@ -41,19 +41,19 @@ const nameOf = (hash: string, run: string, perRun: boolean) => (perRun ? sha256(
 export const replyName = (hash: string, run: string, perRun: boolean) => `${nameOf(hash, run, perRun)}.json`;
 
 export function readReply(p: Paths, hash: string, run: string, perRun: boolean): Reply | undefined {
-  const file = p.reply(nameOf(hash, run, perRun));
+  const file = p.reply(nameOf(hash, run, perRun), isRealRun(run));
   return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Reply) : undefined;
 }
 
-/** Stores a reply (the first one for its name stays: it's the one the bank recorded). Returns its file name. */
+/** Stores a reply (the first one for its name stays: it's the one the bank recorded). Returns its file name, a real run's whole path. */
 export function writeReply(p: Paths, r: Reply, perRun: boolean): string {
   const name = nameOf(r.reqHash, r.run, perRun);
-  const file = p.reply(name);
+  const file = p.reply(name, isRealRun(r.run));
   if (!existsSync(file)) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(r));
   }
-  return `${name}.json`;
+  return isRealRun(r.run) ? file : `${name}.json`;
 }
 
 const sleepUntil = (t: number) => new Promise((r) => setTimeout(r, Math.max(0, t - performance.now())));
@@ -68,14 +68,15 @@ export async function replay(chunks: Chunk[], doneMs: number, t0: number, onText
 }
 
 /** One real call's chunks as they arrive, for an arm that sent the same request. */
-export type Flight = { arm: string; chunks: Chunk[]; done?: { ms: number; stats?: Record<string, unknown>; error?: string; cacheFile?: string }; wake: (() => void)[]; followers: Set<string> };
+/** `stopped`: its page dropped it with nobody following, so nobody may follow it now (its reply would be cut short). */
+export type Flight = { arm: string; chunks: Chunk[]; done?: { ms: number; stats?: Record<string, unknown>; error?: string; cacheFile?: string }; wake: (() => void)[]; followers: Set<string>; stopped?: boolean };
 
 export class Flights {
   private m = new Map<string, Flight[]>();
 
   /** A flight the other arm leads for this request in this case that this arm hasn't followed yet. */
   follow(scope: string, hash: string, arm: string): Flight | undefined {
-    const f = this.m.get(`${scope}|${hash}`)?.find((x) => x.arm !== arm && !x.followers.has(arm));
+    const f = this.m.get(`${scope}|${hash}`)?.find((x) => x.arm !== arm && !x.followers.has(arm) && !x.stopped);
     f?.followers.add(arm);
     return f;
   }

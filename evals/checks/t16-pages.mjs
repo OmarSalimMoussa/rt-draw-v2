@@ -118,6 +118,17 @@ check(lineCount(labels) === 1, `one POST /api/eval/label wrote ${lineCount(label
 const l0 = JSON.parse(readFileSync(labels, "utf8").split("\n")[0]);
 check(l0.id === r0.id && l0.label === "B" && l0.side === "right" && l0.strength === "clear" && l0.question === "fidelity" && l0.ms === 1234 && l0.packet === "runs/calib1/cases/c0/judge/packet.json" && l0.at, `the label line is ${JSON.stringify(l0)}`);
 check((await postJson("/api/eval/label", { pair: "p0", question: "craft", side: "left", strength: "clear" })).status === 400 && lineCount(labels) === 1, "a label with the wrong question was written");
+// The illustrations round: a label set of its own (labels/illustrations/), the calibration's untouched; an unknown set is refused.
+put(join(home, "labels/illustrations/pairs.json"), JSON.stringify([{ id: "i0", run: "calib1", case: "c3", question: "fidelity", subset: "illustrations" }]));
+const ilLabels = join(home, "labels/illustrations/labels.jsonl");
+const ip = await (await get("/api/eval/pairs?set=illustrations")).json();
+check(ip.pairs?.length === 1 && ip.pairs[0].id === "i0" && ip.progress.clearGoal === 30 && ip.progress.craftGoal === 15 && ip.progress.labelled === 0, `GET /api/eval/pairs?set=illustrations gave ${JSON.stringify(ip).slice(0, 160)}`);
+const ir = await postJson("/api/eval/label", { pair: "i0", question: "fidelity", side: "left", strength: "clear", ms: 800, set: "illustrations" });
+check(ir.status === 200 && lineCount(ilLabels) === 1 && JSON.parse(readFileSync(ilLabels, "utf8")).label === "B" && lineCount(labels) === 1, `an illustrations label went to ${lineCount(ilLabels)} / ${lineCount(labels)} lines`);
+check((await postJson("/api/eval/label", { pair: "p0", question: "fidelity", side: "left", strength: "clear", set: "illustrations" })).status === 404, "a calibration pair was labelled in the illustrations set");
+await postJson("/api/eval/label", { undo: true, set: "illustrations" });
+check(lineCount(ilLabels) === 2 && lineCount(labels) === 1 && (await (await get("/api/eval/pairs?set=illustrations")).json()).pairs.length === 1, "undo in the illustrations set didn't stay in it");
+check((await get("/api/eval/pairs?set=../labels")).status === 404 && (await postJson("/api/eval/label", { pair: "p0", question: "fidelity", side: "left", set: "nope" })).status === 404 && lineCount(labels) === 1, "an unknown label set wasn't refused");
 
 // ---- /api/eval/record and /api/eval/human: the owner's sends under human/, meant written back.
 const sendBody = { input: "make the title bigger", strokes: [{ id: 1, points: [[120, 160, 0], [300, 170, 40], [520, 150, 80]], t0: 0, t1: 80 }], scene, view: { x: 0, y: -60, w: 1280, h: 800 }, at: 1760000000000 };

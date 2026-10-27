@@ -14,6 +14,8 @@ import { paths } from "./paths.ts";
 const READY_MS = 10_000;
 
 export type ArmServer = { url: string; close(): Promise<void> };
+/** The first arm server's port (rte --port); each further tree takes the next. */
+export const ARM_PORT = 5300;
 
 /** Serves `tree` at http://127.0.0.1:<port> with /api/model proxied to `gateway`; resolves once it listens. Logs go to logs/arm-<port>.log. */
 export async function serveArm(tree: string, port: number, gateway: string): Promise<ArmServer> {

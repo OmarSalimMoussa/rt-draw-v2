@@ -1,12 +1,10 @@
-// Checkpoints, the stable yardstick (spec §5.2, §5.3; N7, N10). The champion runs against the current
-// anchor on bench/B1 (+ bench/U1), both live and unshared, judged by fidelity and craft on every case,
-// and becomes one CheckpointRow: the champion's share with a 90% origin-session bootstrap, the chained
-// quality index Q, latency against the anchor and chained to A0, both debts through same-run chains
-// (latency.ts), the anchor ladder, the overfitting gap, health and trust. An era starts only when the
-// yardstick itself changes (the judgeId, a bench manifest, the measuring code) and is bridged, so Q and
-// the latency chain carry across with a drawn step; a harness re-pin or a served product model is only a
-// marker. Checkpoint 0 is A0 against A0: the unshared A/A (verdict.ts' aaPass) and the baseline. The
-// yardstick is frozen here too: freeze() writes bench/B1 with its manifest, verifyBench() re-hashes it.
+// Checkpoints, the stable yardstick (spec §5.2, §5.3; N7, N10). The champion runs against A0 (checkpoint 0's
+// champion, which never moves) on bench/B1 (+ bench/U1), both live and unshared, judged by fidelity and craft on
+// every case, and becomes one CheckpointRow: the champion's share with a 90% origin-session bootstrap, latency
+// against A0 in the same run (the owner hears when it's surely slower), the overfitting gap, health and trust. A
+// new judgeId or bench starts the next era, charted apart: nothing bridges two eras. A harness re-pin or a served
+// product model is only a marker. Checkpoint 0 is A0 against A0: the unshared A/A (verdict.ts' aaPass) and the
+// baseline. The yardstick is frozen here too: freeze() writes bench/B1 with its manifest, verifyBench() re-hashes it.
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -14,56 +12,51 @@ import { HitIndex } from "../../src/core/hittest.ts";
 import { groupStrokes, readMark } from "../../src/core/marks.ts";
 import { Scene } from "../../src/core/scene.ts";
 import { ASKS, ASK_WORDS, POINTING } from "../core/scenarios.ts";
-import { fidelityCall, judging, pick, variants } from "../judge/judge.ts";
-import { readPacket } from "../judge/packet.ts";
+import { judging, pick } from "../judge/judge.ts";
 import { type ArmSpec, INPUT_FILES, type Rig, benchCases, checkpointRun, harnessTag, product } from "./ab.ts";
 import { LOOP, configId } from "./config.ts";
 import { AMBER, type Anchor, ONE, commitHistory, historyAdd, historyRead, historyRows, historyWrite, ledger, openHistory, ownerItem, saveRun, trustOf } from "./history.ts";
-import { type CheckpointLinks, type Debts, chainSince, debtsAfter, linksOf, pairedRatio } from "./latency.ts";
+import { pairedRatio } from "./latency.ts";
 import { meterOf } from "./metrics.ts";
 import { paths } from "./paths.ts";
-import { appendLine, caseDir, runFile } from "./record.ts";
+import { caseDir, runFile } from "./record.ts";
 import { entryOrder, rng, seedOf } from "./stats.ts";
 import { treeOf } from "./trees.ts";
-import type { BenchManifest, CaseInfo, CaseInput, CheckpointRow, DecisionRow, Era, Judged, Lat, LoadSample, Marker, Meant, Row, RunInfo } from "./types.ts";
-import { aaPass } from "./verdict.ts";
+import type { BenchManifest, CaseInfo, CaseInput, CheckpointRow, DecisionRow, Judged, Lat, LoadSample, Marker, Meant, Row, RunInfo } from "./types.ts";
+import { aaPass, latencyVeto } from "./verdict.ts";
+import { realShadow } from "../real/shadow.ts";
 
 type Bench = "B1" | "U1";
 type BenchCase = ReturnType<typeof benchCases>[number];
 type Share = { n: number; share: number; lo90: number; hi90: number };
 type Pin = { sha: string; tuning?: Record<string, number>; tree?: string };
 
-/** checkpoints.jsonl's row: §5.3's, plus what the next checkpoint chains and compares against. */
+/** checkpoints.jsonl's row: §5.3's, plus what the next checkpoint compares against. */
 export type StoredCheckpoint = CheckpointRow & {
   run: string; seed: string; judgeId: string; championTuning?: Record<string, number>;
-  /** This run's chain links and the debts after it (latency.ts). */
-  links: CheckpointLinks; debts: Debts;
+  /** The bench hash it measured on (absent before 2026-10-26): a new one, like a new judgeId, starts an era. */
+  bench?: string;
   /** The harness tag and the served product models: a change is a marker, never an era. */
   harness: string; served: string[];
 };
 
-/** Runs a pair on the yardstick (A the anchor, B the champion) and returns its rows. */
+/** Runs a pair on the yardstick (A0 as A, the champion as B) and returns its rows. */
 export type Runner = (s: { run: string; anchor: Pin; champion: Pin; seed: string }) => Promise<Row[]>;
 
 const json = <T>(file: string): T => JSON.parse(readFileSync(file, "utf8"));
 const maybe = <T>(file: string): T | undefined => (existsSync(file) ? json<T>(file) : undefined);
 const sha256 = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
-/** Q's clip (§5.2, as latency.ts'): a share of 0 or 1 would make log-odds infinite. */
-const logit = (p: number) => {
-  const c = Math.min(0.95, Math.max(0.05, p));
-  return Math.log(c / (1 - c));
-};
 const rank = (xs: number[], p: number) => {
   const s = [...xs].sort((a, b) => a - b);
   return s.length ? s[Math.max(0, Math.ceil(p * s.length) - 1)] : 0;
 };
 
-/** (wins + ½ ties) / n over `score`d rows, with a 90% bootstrap over whole origin sessions. */
+/** (wins + ½ ties) / n over `score`d rows (a lost case is a void here), with a 90% bootstrap over whole origin sessions. */
 function shareOf(rows: Row[], score: (r: Row) => number | undefined, seed: string): Share | undefined {
   const by = new Map<string, number[]>();
   for (const r of rows) {
     const s = score(r);
-    if (!r.void && s !== undefined) (by.get(r.cluster) ?? by.set(r.cluster, []).get(r.cluster)!).push((s + 1) / 2);
+    if (!r.void && !r.lost && s !== undefined) (by.get(r.cluster) ?? by.set(r.cluster, []).get(r.cluster)!).push((s + 1) / 2);
   }
   const groups = [...by.values()];
   const n = groups.reduce((a, g) => a + g.length, 0);
@@ -78,21 +71,19 @@ function shareOf(rows: Row[], score: (r: Row) => number | undefined, seed: strin
   return { n, share: groups.flat().reduce((a, b) => a + b, 0) / n, lo90: rank(means, 0.05), hi90: rank(means, 0.95) };
 }
 
-/** One arm's TTFC and TTD at p50 and p75 (0 = A, 1 = B). */
+
+/** One arm's latencies at p50 and p75 (0 = A, 1 = B): TTFD and render once rows have them. */
 function latOf(rows: Row[], i: 0 | 1): Lat {
-  const ttfc = rows.flatMap((r) => (r.ttfc[i] ? [r.ttfc[i]!] : [])), ttd = rows.flatMap((r) => (r.ttd[i] ? [r.ttd[i]] : []));
-  return { ttfcP50: rank(ttfc, 0.5), ttfcP75: rank(ttfc, 0.75), ttdP50: rank(ttd, 0.5), ttdP75: rank(ttd, 0.75) };
+  const of = (m: "ttfc" | "ttd" | "ttfd" | "render") => rows.flatMap((r) => (r[m]?.[i] ? [r[m]![i]!] : []));
+  const [ttfc, ttd, ttfd, render] = [of("ttfc"), of("ttd"), of("ttfd"), of("render")];
+  return {
+    ttfcP50: rank(ttfc, 0.5), ttfcP75: rank(ttfc, 0.75), ttdP50: rank(ttd, 0.5), ttdP75: rank(ttd, 0.75),
+    ...(ttfd.length ? { ttfdP50: rank(ttfd, 0.5), ttfdP75: rank(ttfd, 0.75) } : {}),
+    ...(render.length ? { renderP50: rank(render, 0.5), renderP75: rank(render, 0.75) } : {}),
+  };
 }
 
-// ---- The yardstick's identity: what starts an era
-
-/** The measuring code B1's numbers pass through (§5.2), hashed as the pinned harness has it. */
-export const MEASURED = ["evals/bridge/timing.ts", "evals/judge", "evals/core/diff.ts"];
-export function measureHash(repo = paths().repo): string {
-  const files = MEASURED.flatMap((p) => (statSync(join(repo, p)).isDirectory() ? readdirSync(join(repo, p)).sort().map((f) => `${p}/${f}`) : [p]))
-    .filter((f) => statSync(join(repo, f)).isFile());
-  return sha256(files.map((f) => `${f} ${sha256(readFileSync(join(repo, f)))}`).join("\n")).slice(0, 16);
-}
+// ---- The yardstick's identity: a new bench starts an era
 
 const benchDir = (b: Bench) => join(paths().history, "bench", b);
 const manifestOf = (b: Bench) => maybe<BenchManifest>(join(benchDir(b), "manifest.json"));
@@ -186,23 +177,6 @@ function judgeOf(run: string): string | undefined {
   return [...n].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
-/** The champion's share in first-order fidelity verdicts alone: the like-for-like number a re-judge compares. */
-const firstOrder = (js: Judged[]) => (js.length ? js.reduce((a, j) => a + (pick(j) === "B" ? 1 : pick(j) === "A" ? 0 : 0.5), 0) / js.length : 0.5);
-
-/** The judge bridge: the run's stored packets re-judged by today's judge (first order, in groups of 4). */
-async function rejudge(from: string, run: string): Promise<{ before: number; after: number }> {
-  const cases = readdirSync(runFile(from, "cases")).filter((c) => existsSync(join(caseDir(from, c), "judge", "packet.json")) && existsSync(join(caseDir(from, c), "judge", "fidelity-1.json"))).sort();
-  const after: Judged[] = [];
-  for (let k = 0; k < cases.length; k += 4)
-    after.push(...(await Promise.all(cases.slice(k, k + 4).map(async (c) => {
-      const p = readPacket(from, c);
-      const j = await fidelityCall(from, p, p.positions, variants().fidelity, run);
-      appendLine(runFile(run, "rejudged.jsonl"), { case: c, ...j });
-      return j;
-    }))));
-  return { before: firstOrder(cases.map((c) => json<Judged>(join(caseDir(from, c), "judge", "fidelity-1.json")))), after: firstOrder(after) };
-}
-
 function healthOf(run: string, rows: Row[], bench: Map<string, BenchCase>): CheckpointRow["health"] {
   let audited = 0, flipped = 0;
   for (const r of rows) {
@@ -219,7 +193,7 @@ function healthOf(run: string, rows: Row[], bench: Map<string, BenchCase>): Chec
   }
   const load = existsSync(runFile(run, "load.ndjson")) ? readFileSync(runFile(run, "load.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => (JSON.parse(l) as LoadSample).psiCpu) : [];
   return {
-    voidPct: rows.length ? rows.filter((r) => r.void).length / rows.length : 0, flipPct: audited ? flipped / audited : 0,
+    voidPct: rows.length ? rows.filter((r) => r.void || r.lost).length / rows.length : 0, flipPct: audited ? flipped / audited : 0,
     hedgePct: dirs.length ? dirs.filter((d) => maybe<Meant>(join(d, "meant.json"))?.hedged).length / dirs.length : 0,
     beatCompliance: beats.length ? beats.filter((c) => c.beatDone).length / beats.length : 1, thinking,
     coldShare: calls.length ? calls.filter((c) => c.readyAtTake === false).length / calls.length : 0, psiMedian: rank(load, 0.5),
@@ -263,27 +237,31 @@ function writeBack(run: string) {
   }
 }
 
-/** The trees a checkpoint's rig must serve: the anchor's and champion's, and the last pair's when the yardstick changed (its bridge). */
+/** The trees a checkpoint's rig must serve: the champion's and A0's (checkpoint 0's A0 is the champion: its tree twice, so each arm gets its own Vite). */
 export function checkpointTrees(champion: ArmSpec): string[] {
-  const anchors = historyRead("anchors.json"), era = historyRead("eras.json").at(-1);
-  const last = (historyRows("checkpoints.jsonl") as StoredCheckpoint[]).at(-1);
-  const bridge = last && era && (benchHash() !== era.bench || measureHash() !== era.measureHash);
-  // Checkpoint 0's anchor is the champion: its tree listed twice, so each arm gets its own Vite (openRig).
-  const shas = [anchors.at(-1)?.sha ?? champion.sha, ...(bridge ? [last.champion, anchors.find((a) => a.id === last.anchor)?.sha] : [])].filter((s): s is string => !!s);
-  return [champion.tree, ...new Set(shas.map(treeOf))];
+  return [champion.tree, treeOf(historyRead("anchors.json")[0]?.sha ?? champion.sha)];
 }
 
 /** The default runner: checkpointRun, live and unshared, judged by fidelity and craft on every case. */
+const pinArm = (a: Pin): ArmSpec => ({ sha: a.sha, tree: a.tree ?? treeOf(a.sha), ...(a.tuning ? { tuning: a.tuning } : {}) });
 const liveRunner = (rig?: Rig): Runner => async (s) => {
   if (!rig) throw new Error("a checkpoint needs a rig serving checkpointTrees()");
-  const arm = (a: Pin): ArmSpec => ({ sha: a.sha, tree: a.tree ?? treeOf(a.sha), ...(a.tuning ? { tuning: a.tuning } : {}) });
-  return (await checkpointRun(rig, { run: s.run, anchor: arm(s.anchor), champion: arm(s.champion), seed: s.seed, judge: judging(s.run, { seed: s.seed, craft: "all" }) })).rows;
+  return (await checkpointRun(rig, { run: s.run, anchor: pinArm(s.anchor), champion: pinArm(s.champion), seed: s.seed, judge: judging(s.run, { seed: s.seed, craft: "all" }) })).rows;
 };
+/** Bench R1, A0 against the champion, after B1 (LOOP-V2.md A5): reported, never deciding; a failure only says so. */
+async function realAt(rig: Rig, run: string, anchor: Pin, champion: Pin, seed: string): Promise<CheckpointRow["real"]> {
+  try {
+    return await realShadow(rig, { run, arms: { A: pinArm(anchor), B: pinArm(champion) }, seed, judge: judging(run, { seed, craft: "none" }) });
+  } catch (err) {
+    console.error(`${run}: R1 failed: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
 
 /**
  * The next checkpoint (ck-00 is checkpoint 0: the champion is A0 and runs against itself). `owner`: an owner
  * step for `rte sync` (§8.6), recorded as an owner-step decision and a marker. `runner` replaces the live run
- * (checks only). Writes checkpoints.jsonl, anchors.json, eras.json, markers.jsonl and runs/<id>.json, then commits.
+ * (checks only). Writes checkpoints.jsonl, anchors.json (at checkpoint 0), markers.jsonl and runs/<id>.json, then commits.
  */
 export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpec | Pin; seed?: string; owner?: { commits: number; baseSha: string; candSha: string }; runner?: Runner }): Promise<StoredCheckpoint> {
   openHistory();
@@ -292,38 +270,15 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   const id = `ck-${String(past.length).padStart(2, "0")}`, run = id, seed = o.seed ?? id;
   const now = new Date().toISOString();
   const runner = o.runner ?? liveRunner(o.rig);
-  const anchors = historyRead("anchors.json");
-  const anchor: Anchor = anchors.at(-1) ?? { id: "A0", sha: o.champion.sha, Q: 0, ...(o.champion.tuning ? { tuning: o.champion.tuning } : {}) };
-  const eras = historyRead("eras.json"), era0 = eras.at(-1);
-  const bench = benchHash(), measure = measureHash();
-
-  // A changed bench or measuring code: the last checkpoint's pair re-run under it first, the bridge.
-  let era: Era | undefined;
-  const why = era0 && (bench !== era0.bench ? "bench" : measure !== era0.measureHash ? "measure" : undefined);
-  if (why && last) {
-    const b = `${id}-bridge`;
-    const pin = anchors.find((a) => a.id === last.anchor)!;
-    const rows = await runner({ run: b, anchor: pin, champion: { sha: last.champion, tuning: last.championTuning }, seed: last.seed });
-    const step = {
-      Q: logit(shareOf(rows, (r) => r.s, b)?.share ?? 0.5) - logit(last.share.all!.share),
-      ttfc: (pairedRatio(rows, "ttfc")?.est ?? 1) / last.latency.ratioTtfc.est, ttd: (pairedRatio(rows, "ttd")?.est ?? 1) / last.latency.ratioTtd.est,
-    };
-    era = { era: era0!.era + 1, from: now, why, judgeId: "", bench, measureHash: measure, bridge: { run: b, step } };
-    saveRun(b);
-    writeBack(b);
-  }
+  const anchor: Anchor = historyRead("anchors.json")[0] ?? { id: "A0", sha: o.champion.sha, ...(o.champion.tuning ? { tuning: o.champion.tuning } : {}) };
+  const bench = benchHash();
 
   const rows = await runner({ run, anchor, champion: o.champion, seed });
-  const judgeId = judgeOf(run) ?? era0?.judgeId ?? "";
-  if (!era0) era = { era: 1, from: now, why: "bench", judgeId, bench, measureHash: measure };
-  else if (era) era.judgeId = judgeId; // the bridge ran under today's judge too
-  else if (era0.judgeId && judgeId !== era0.judgeId && last) {
-    // A new judge: the last checkpoint's stored packets re-judged by it, the bridge.
-    const b = `${id}-rejudge`;
-    const r = await rejudge(last.run, b);
-    era = { era: era0.era + 1, from: now, why: "judge", judgeId, bench, measureHash: measure, bridge: { run: b, step: { Q: logit(r.after) - logit(r.before), ttfc: 1, ttd: 1 } } };
-  }
-  const eraNo = era?.era ?? era0!.era;
+  const real = !o.runner && o.rig ? await realAt(o.rig, `real-r1-${id}`, anchor, o.champion, seed) : undefined;
+  const judgeId = judgeOf(run) ?? last?.judgeId ?? "";
+  // A new judge or bench measures differently: the next era, charted apart.
+  const moved = last && ((last.judgeId && judgeId !== last.judgeId) || (last.bench !== undefined && bench !== last.bench));
+  const era = moved ? last.era + 1 : (last?.era ?? 1);
 
   const byId = new Map(benchCases().map((c) => [c.id, c]));
   const setOf = (r: Row) => (byId.get(r.case)?.bench === "U1" ? "human" : byId.get(r.case)?.set);
@@ -333,46 +288,38 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   const all = share.all;
   if (!all) throw new Error(`checkpoint ${id}: every case is void (runs/${run}/invariants.jsonl)`);
   const craft = shareOf(ok, (r) => r.sCraft, `${seed} craft`) ?? { n: 0, share: 0.5, lo90: 0.5, hi90: 0.5 };
-  const Q = { value: anchor.Q + logit(all.share), lo90: anchor.Q + logit(all.lo90), hi90: anchor.Q + logit(all.hi90) };
   const health = healthOf(run, rows, byId);
   const voided = health.voidPct > LOOP.voidMax || health.flipPct > LOOP.flipAlarm;
   // Hedges and beat compliance are the frozen yardstick's, the same at every checkpoint of an era: reported in health, never
   // colouring a point (one low B1 would otherwise empty the era's trend lines).
   const trust = trustOf(voided, run, health.flipPct >= AMBER.flip);
-  // The anchor ladder (§5.2): only a clear win moves it, never at checkpoint 0 or on a void point.
-  const moved = !zero && trust !== "void" && all.share >= LOOP.anchorMove.share && all.lo90 >= LOOP.anchorMove.lo90;
-  const links = [...past.map((c) => c.links), linksOf(id, rows, moved)];
-  const { debts, vsLatencyCheckpoint, vsQualityCheckpoint } = debtsAfter(last?.debts, links);
+  // The latency veto's own test, the champion against A0: never slower, so the owner hears of it (it stops nothing).
+  const slower = zero ? undefined : latencyVeto(rows);
   const usd = (i: 0 | 1) => (ok.length ? ok.reduce((a, r) => a + r.usd[i], 0) / ok.length : 0);
   const overfitGap = share.tuning && share.heldout ? share.tuning.share - share.heldout.share : 0;
   const harness = harnessTag();
   const served = [...new Set(meterOf(run).filter(product).flatMap((c) => (c.servedModel ? [c.servedModel] : [])))].sort();
   const aa = zero ? aaPass(rows) : undefined;
+  const [ttfd, render] = [pairedRatio(rows, "ttfd"), pairedRatio(rows, "render")];
   const row: StoredCheckpoint = {
-    id, epoch: o.epoch, era: eraNo, at: now, machine: process.arch === "arm64" ? "pgx" : "laptop", trust,
-    champion: o.champion.sha, anchor: anchor.id, anchorMoved: moved, share, craft, Q,
+    id, epoch: o.epoch, era, at: now, machine: process.arch === "arm64" ? "pgx" : "laptop", trust,
+    champion: o.champion.sha, anchor: anchor.id, share, craft,
     latency: {
       champion: latOf(ok, 1), anchor: latOf(ok, 0), ratioTtfc: pairedRatio(rows, "ttfc") ?? ONE, ratioTtd: pairedRatio(rows, "ttd") ?? ONE,
-      chainedTtfc: Math.exp(chainSince(links, undefined, "ttfc").log), chainedTtd: Math.exp(chainSince(links, undefined, "ttd").log),
-      debt: debts.latency.debt, vsLatencyCheckpoint,
+      ...(ttfd ? { ratioTtfd: ttfd } : {}), ...(render ? { ratioRender: render } : {}), ...(slower ? { slower } : {}),
     },
-    quality: { debt: debts.quality.debt, vsQualityCheckpoint },
     ...(aa ? { aa: { pass: aa.pass, ci: aa.ci, tests: aa.tests } } : {}),
-    productUsdPerSend: { champion: usd(1), anchor: usd(0) }, overfitGap, health, realism: realismOf([...byId.values()]),
-    run, seed, judgeId, ...(o.champion.tuning ? { championTuning: o.champion.tuning } : {}), links: links.at(-1)!, debts, harness, served,
+    productUsdPerSend: { champion: usd(1), anchor: usd(0) }, overfitGap, health, realism: realismOf([...byId.values()]), ...(real ? { real } : {}),
+    run, seed, judgeId, ...(o.champion.tuning ? { championTuning: o.champion.tuning } : {}), bench, harness, served,
   };
 
   // ---- Written only now, so a failed run leaves the record as it was.
-  const mark = (kind: Marker["kind"], label: string, ref?: string) => historyAdd("markers.jsonl", { at: now, era: eraNo, kind, label, ...(ref ? { ref } : {}) });
-  if (era) historyWrite("eras.json", [...eras, era]);
+  const mark = (kind: Marker["kind"], label: string, ref?: string) => historyAdd("markers.jsonl", { at: now, era, kind, label, ...(ref ? { ref } : {}) });
   if (zero) historyWrite("anchors.json", [anchor]);
+  if (moved) mark("era", `era ${era}: ${judgeId !== last.judgeId ? "a new judge" : "a new bench"}`, id);
   if (last && harness !== last.harness) mark("harness", harness ? `${harness} re-pinned` : "harness off its tag", harness || undefined);
   if (last && served.join() !== last.served.join()) mark("served-model", `served ${served.join(", ")}`, served.join(","));
-  if (moved) {
-    const next: Anchor = { id: `A${anchors.length}`, sha: o.champion.sha, Q: Q.value, latency: row.latency.champion, ...(o.champion.tuning ? { tuning: o.champion.tuning } : {}) };
-    historyWrite("anchors.json", [...anchors, next]);
-    mark("anchor", `anchor ${next.id}`, id);
-  }
+  if (slower) ownerItem(`${id}: the champion is surely slower than A0: ${slower}`);
   if (last && overfitGap > LOOP.overfitGap && last.overfitGap > LOOP.overfitGap)
     ownerItem(`overfitting: tuning share minus H-chart share ${overfitGap.toFixed(2)} at ${id} and ${last.overfitGap.toFixed(2)} at ${last.id}`);
   if (aa) historyAdd("health.jsonl", { at: now, kind: "aa", pass: aa.pass, detail: { checkpoint: id, failed: aa.failed, kneeDown: aa.kneeDown } });
@@ -381,7 +328,8 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
     const d: DecisionRow = {
       id: `owner-${id}`, kind: "owner-step", epoch: o.epoch, candSha: o.owner.candSha, baseSha: o.owner.baseSha, class: "owner", goal: "owner", verdict: "owner",
       reasons: [`owner: ${o.owner.commits} commits merged by rte sync`], trust, looks: [], counts: { wins: 0, losses: 0, ties: 0, exactTies: 0 },
-      affected: { tuning: 0, of: 0, topUp: 0 }, checkpoint: id, latency: { ttfc: row.latency.ratioTtfc, ttd: row.latency.ratioTtd },
+      affected: { tuning: 0, of: 0, topUp: 0 }, checkpoint: id,
+      latency: { ttfc: row.latency.ratioTtfc, ttd: row.latency.ratioTtd, ...(row.latency.ratioTtfd ? { ttfd: row.latency.ratioTtfd } : {}), ...(row.latency.ratioRender ? { render: row.latency.ratioRender } : {}) },
       work: 1, emptyRise: 0, failedPicRise: 0, cost: { usdPerCaseRatio: usd(0) ? usd(1) / usd(0) : 1, listUsd: info?.meter.listUsd ?? 0, calls: info?.meter.calls ?? 0 },
       minutes: Math.round(info?.meter.minutes ?? 0), run, judgeId, configId,
     };
@@ -392,6 +340,6 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   writeBack(run);
   historyAdd("checkpoints.jsonl", row);
   saveRun(run);
-  commitHistory(`${id}: share ${all.share.toFixed(2)} against ${anchor.id}, Q ${Q.value.toFixed(2)}${moved ? `, anchor A${anchors.length}` : ""}${era ? `, era ${era.era} (${era.why})` : ""}${o.owner ? ", owner step" : ""}`);
+  commitHistory(`${id}: share ${all.share.toFixed(2)} against A0${slower ? ", surely slower" : ""}${moved ? `, era ${era}` : ""}${o.owner ? ", owner step" : ""}`);
   return row;
 }
