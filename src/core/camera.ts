@@ -70,7 +70,22 @@ export function parseCamera(reply: string, scene: Scene, t: Tuning = DEFAULTS): 
   return { view: { x: cx - w / 2, y: cy - w / ASPECT / 2, w, h: w / ASPECT }, how };
 }
 
-export type CameraMove = { view: View; how: string; reply: string; prompt: CameraPrompt; stats: ModelStats };
+/** Whether a camera(...) line only re-frames what `current` already shows: each framed shape, or the new rectangle, at least camera.shownShare inside it. */
+export function alreadyShown(line: string, current: View, scene: Scene, t: Tuning = DEFAULTS): boolean {
+  try {
+    const m = /camera\(([^)]*)\)/.exec(line);
+    if (!m) return false;
+    const args = m[1].split(/[,\s]+/).map((a) => a.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+    const share = t["camera.shownShare"];
+    if (args.length && args.every((a) => Number.isFinite(Number(a)))) return insideShare(parseCamera(line, scene, t).view, current) >= share;
+    const shapes = args.map((id) => scene.get(id));
+    return shapes.length > 0 && shapes.every((s) => !!s && insideShare(s.box, current) >= share);
+  } catch {
+    return false;
+  }
+}
+
+export type CameraMove ={ view: View; how: string; reply: string; prompt: CameraPrompt; stats: ModelStats };
 
 export async function moveCamera(said: string, current: View, scene: Scene, t: Tuning = DEFAULTS, parent?: TraceContext): Promise<CameraMove> {
   return span("move the camera", parent, async (ctx) => {

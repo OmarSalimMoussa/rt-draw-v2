@@ -220,6 +220,9 @@ export const KNOBS: Knob[] = [
   K("camera.padFrac", 0.06, 0, 0.5, 0.01, "framing shapes by id leaves this margin, as a share of their size"),
   K("camera.minViewPx", 160, 40, 800, 20, "the camera never shows less than this much of the board across", "px"),
   K("camera.easeMs", 450, 0, 2000, 50, "the camera glides to its new view over this long", "ms"),
+  B("camera.guard", 1, "drop unasked camera moves", "on: Jev answers beside the resolver whether they ask to look at, go to, zoom or move the screen; when it says no (below camera.lookYes) and the drawing model's camera(...) only re-frames what the screen already shows, the move is skipped. A failed or late Jev answer, or a target off screen, keeps the move"),
+  K("camera.lookYes", 0.5, 0.05, 0.95, 0.05, "with camera.guard: they ask to move the screen when Jev's probability is at or above this"),
+  K("camera.shownShare", 0.9, 0.5, 1, 0.05, "with camera.guard: a target is already shown when this share of it (each framed shape, or the new view) lies inside the current view"),
 
   // Router: fast lane (small model, no picture) vs full lane.
   K("router.fastMaxWords", 12, 1, 40, 1, "a send this short can take the fast lane"),

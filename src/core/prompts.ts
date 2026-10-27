@@ -201,6 +201,12 @@ export const DRAW_ADD = {
   line: 'Every shape() description is at least 6 words (count them): it is how the shape is found when they point at it later. For a name, price, label or button write e.g. "starter plan price line near top of card".',
 };
 
+export const CAMERA_LOOK = {
+  question: "Do they ask to look at, go to, zoom or move the screen to some place?",
+  yes: "They ask to see, show, go to, scroll, pan, zoom in or out, or move the view to a page, shape or part of the board.",
+  no: "They only ask to change, add, move, remove, recolor, resize or reorder shapes, without asking to look anywhere.",
+};
+
 export type Role = keyof typeof PROMPTS;
 
 /** Each role's prompt knob: <role>.prompt, except Jev's questions, which belong to the part that asks them. */

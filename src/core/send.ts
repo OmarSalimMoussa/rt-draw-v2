@@ -3,12 +3,16 @@
 // (evals/bridge), so the eval measures exactly what the playground does. Product
 // code: the loop may improve it (pipelining the resolver, pictures and drawing call).
 import type { View } from "./board.ts";
+import { alreadyShown } from "./camera.ts";
+import { decide } from "./decide.ts";
+import { jevOf } from "./model.ts";
+import { CAMERA_LOOK } from "./prompts.ts";
 import { type OpResult, type Prompt, type SendResult, buildPrompt, run } from "./draw.ts";
 import type { Stroke } from "./ink.ts";
 import type { Word } from "./link.ts";
 import { type SendContext, pictureFiller } from "./picture.ts";
 import type { Scene } from "./scene.ts";
-import { type TraceContext, spanSync } from "./trace.ts";
+import { type TraceContext, span, spanSync } from "./trace.ts";
 import type { Tuning } from "./tuning.ts";
 
 /** What the person gave this send: their ink, and their words spoken (timed) or typed (a string). */
@@ -42,10 +46,22 @@ export async function send(scene: Scene, input: SendInput, t: Tuning, hooks: Sen
   let guess: Promise<Prompt | undefined> | undefined;
   const final = buildPrompt(scene, input.strokes, input.words, t, parent, camera, (g) => (guess = g));
   void final.then((p) => (context.sketches = p.sketches ?? []), () => {});
+  // camera.guard: Jev's one question beside the resolver, never waited for (until it answers, camera ops land as today).
+  let lookP: number | undefined;
+  if (t["camera.guard"] && camera) {
+    const state = { canvas: scene.shapes.size ? `${scene.shapes.size} shapes` : "empty", said: context.said || "(no words)" };
+    void span("decide look", parent, (dctx) => decide(jevOf(t["draw.thinkJevModel"]), state, { look: { type: "noul", instructions: CAMERA_LOOK.question, criteria: { yes: CAMERA_LOOK.yes, no: CAMERA_LOOK.no } } }, "camera-look", dctx))
+      .then((d) => (lookP = d.yes.look), () => {});
+  }
+  let seen = camera;
   let gliding: Promise<void> = Promise.resolve();
   const onOp = (r: OpResult) => {
-    hooks.onOp?.(r);
-    if (r.camera && hooks.setView) gliding = hooks.setView(r.camera, t["camera.easeMs"]);
+    const unasked = !!r.camera && seen !== undefined && lookP !== undefined && lookP < t["camera.lookYes"] && alreadyShown(r.line, seen, scene, t);
+    hooks.onOp?.(unasked ? { ...r, camera: undefined } : r);
+    if (r.camera && !unasked && hooks.setView) {
+      seen = r.camera;
+      gliding = hooks.setView(r.camera, t["camera.easeMs"]);
+    }
     draw();
     pictures?.kick();
   };
