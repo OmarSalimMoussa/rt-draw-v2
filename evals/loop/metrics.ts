@@ -23,12 +23,14 @@ const maybe = <T>(file: string): T | undefined => (existsSync(file) ? json<T>(fi
 /**
  * A send's render (LOOP-V2.md A2): one paint plus one op's apply, the mean over both arms' boards when the engine was
  * timed on both, so the two arms' engines are compared on the same content: of each board, only what both engines'
- * timings share (Engine.same: paint and apply, paint alone, or nothing); none when they share nothing.
+ * timings share (Engine.same: paint and apply, paint alone, or nothing); none when they share nothing. On B's own board
+ * with paint alone (a new op A's engine can't apply), B's apply still counts, against A's paint alone: a slow new op
+ * shows, and what A's apply would have added falls on B.
  */
-const renderOf = (e: Engine) => {
-  const cost = (x: EngineRun | undefined, s: Same = "all") => (!x || s === "none" ? undefined : x.paintMs + (s === "all" ? x.applyMs / Math.max(1, x.ops) : 0));
+const renderOf = (e: Engine, arm: Arm) => {
+  const cost = (x: EngineRun | undefined, s: Same = "all", apply = s === "all") => (!x || s === "none" ? undefined : x.paintMs + (apply ? x.applyMs / Math.max(1, x.ops) : 0));
   if (!e.same && e.skew) return null;
-  const xs = [cost(e, e.same?.own), cost(e.other, e.same?.other)].filter((x): x is number => x !== undefined);
+  const xs = [cost(e, e.same?.own, e.same?.own !== "paint" || arm === "B"), cost(e.other, e.same?.other)].filter((x): x is number => x !== undefined);
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 };
 
@@ -85,7 +87,7 @@ export function armMetrics(runId: string, caseId: string, arm: Arm, before: Scen
     .reduce((a, c) => a + (c.mode === "replay" ? recordedUsd(c) : c.shared === "follower" && !c.listUsd ? (mine.find((l) => l.reqHash === c.reqHash && l.shared === "leader")?.listUsd ?? 0) : c.listUsd), 0);
   const waits = product.map((c) => c.waitMs).filter((w): w is number => w !== undefined);
   return {
-    ttfc: timing.ttfcMs ?? null, ttd: timing.ttdMs, ttlo: timing.ttloMs, ttfd: timing.ttfdMs ?? null, render: timing.engine ? renderOf(timing.engine) : null, deferred: !!timing.engine?.deferred, renderSame: timing.engine?.same?.own ?? "all",
+    ttfc: timing.ttfcMs ?? null, ttd: timing.ttdMs, ttlo: timing.ttloMs, ttfd: timing.ttfdMs ?? null, render: timing.engine ? renderOf(timing.engine, arm) : null, deferred: !!timing.engine?.deferred, renderSame: timing.engine?.same?.own ?? "all",
     // With copies, the one that streamed (a dropped copy has no first text).
     firstTextMs: product.find((c) => c.role === "draw" && c.firstMs !== undefined)?.firstMs,
     resolverMs: product.find((c) => /resolve|refs/.test(c.role))?.ms,

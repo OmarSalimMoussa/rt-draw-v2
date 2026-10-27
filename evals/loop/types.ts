@@ -130,7 +130,7 @@ export type Row = {
   ttfd?: Pair<number | null>; render?: Pair<number | null>;
   /** An arm's render() left work for after it returned (Engine.deferred): B's alone vetoes a keep. */
   deferred?: Pair<boolean>;
-  /** What of each arm's own board both engines' timings shared (Engine.same), when not all of it: a new op's apply or a new shape kind's paint untimed. */
+  /** What of each arm's own board both engines' timings shared (Engine.same), when not all of it: paint alone (a new op), or nothing (a new shape kind). */
   renderSame?: Pair<Same>;
   /** Pictures drawn and failed, for the failed-picture veto (§1.4 item 5). */
   pics: Pair<[drawn: number, failed: number]>;

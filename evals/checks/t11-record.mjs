@@ -256,4 +256,21 @@ const kept = contents();
   check([...kept].every((h) => now.has(h)), "a file's content disappeared: something was deleted or overwritten");
 }
 
+// ---- Render on a new op's board (renderOf): paint alone where the other engine applied fewer of its lines, plus B's own
+// apply on B's board, so a slow new op shows.
+{
+  const RUN2 = "2026-10-16T11-00-e1-h2-ab";
+  rec.writeRun({ id: RUN2, kind: "ab", arms: { A: { sha: "aaa", tuningId: "t0", tree: "h1" }, B: { sha: "bbb", tuningId: "t1", tree: "h1" } }, configId: "cfg", harnessTag: "eval-harness-1", judgeId: "j1", machine: "laptop", slots: 2, load: { load1: 0.3 }, meter: { calls: 0 } });
+  const er = (applyMs, paintMs, board, applied = 4) => ({ applyMs, paintMs, ops: 4, applied, board });
+  // A's engine applied 2 of B's 4 lines; B's apply is 10 ms a line.
+  const engine = {
+    A: { ...er(4, 2, "a"), other: er(0.4, 3, "b", 2), same: { own: "all", other: "paint" } },
+    B: { ...er(40, 3, "b"), other: er(4, 2, "a"), same: { own: "paint", other: "all" } },
+  };
+  for (const a of ["A", "B"]) rec.writeArm(RUN2, CASE, a, { "result.json": result(), "timing.json": timing({ engine: engine[a] }), "spans.json": [], "after.scene.json": afterA, "after.jpg": jpg(9) }, BEFORE, [CAM, CAM]);
+  const m2 = caseMetrics(RUN2, CASE, []);
+  // A: its board whole (2 + 4/4), B's board's paint (3): 3. B: its board's paint and its apply (3 + 40/4), A's board whole (2 + 4/4): 8.
+  check(m2.A.render === 3 && m2.B.render === 8, `render on a new op's board: A ${m2.A.render} (want 3), B ${m2.B.render} (want 8)`);
+}
+
 finish();

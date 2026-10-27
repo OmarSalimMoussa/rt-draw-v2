@@ -242,9 +242,10 @@ export function decide(input: DecideInput, card: HypothesisCard): Decision {
   if (seen.failedPicRise > LOOP.failedPicRiseMax) veto("pictures", `failed pictures up ${(100 * seen.failedPicRise).toFixed(1)} points`);
   const deferred = at.filter((r) => r.deferred?.[1] && !r.deferred[0]).length;
   if (deferred) veto("deferred", `render() leaves its work for after it returns (${deferred} cases), so its render time isn't measured`);
-  // Not measured whole: no render at all, or B's own board not fully compared (a new op's apply, a new shape kind's paint).
-  const unmeasured = sent.filter((r) => (r.render && (r.render[0] === null || r.render[1] === null)) || (r.renderSame && r.renderSame[1] !== "all")).length;
-  if (sent.length && unmeasured / sent.length > LOOP.renderUnmeasuredMax) owner.push(`render not measured whole on ${unmeasured} of ${sent.length} cases (a new op's apply or a new shape kind's paint untimed), so the render veto can't speak for this keep`);
+  // Not measured: no render at all, or nothing of B's own board compared (a new shape kind's paint). A new op's board
+  // compares its paint, with B's apply charged on top (metrics.ts renderOf), so a slow new op still shows.
+  const unmeasured = sent.filter((r) => (r.render && (r.render[0] === null || r.render[1] === null)) || r.renderSame?.[1] === "none").length;
+  if (sent.length && unmeasured / sent.length > LOOP.renderUnmeasuredMax) owner.push(`render not measured on ${unmeasured} of ${sent.length} cases (a new shape kind's paint untimed), so the render veto can't speak for this keep`);
   const pending: Decision["pending"] = [];
   if (!revert.length && !owner.length) {
     // G3 confirms every keep, whatever its class (LOOP-V2.md D2): the affected H-gate cases, which no card is ever

@@ -220,11 +220,13 @@ for (const [name, d] of Object.entries(nearMisses)) check(says(d, d.verdict === 
   check(sameContent(A, run1(3, "b")).A.own === "none", "an engine with no timing on the other board wasn't caught");
   // Too many cases without render go to the owner.
   const half = rows(32).map((r, i) => (i % 2 ? { ...r, render: [r.render[0], null] } : r));
-  check(says(run(half), "owner", /render not measured whole on 16 of 32/), `half the cases without render didn't go to the owner: ${run(half).verdict} ${run(half).vetoes}`);
+  check(says(run(half), "owner", /render not measured on 16 of 32/), `half the cases without render didn't go to the owner: ${run(half).verdict} ${run(half).vetoes}`);
   // A new shape kind on B's board: render still reads on A's board alone, but B's new paint was never timed.
   const kind = rows(32).map((r, i) => (i % 3 ? r : { ...r, renderSame: ["all", "none"] }));
-  check(says(run(kind), "owner", /render not measured whole on 11 of 32/), `cases timed only on A's board didn't count as unmeasured: ${run(kind).verdict} ${run(kind).vetoes}`);
+  check(says(run(kind), "owner", /render not measured on 11 of 32/), `cases timed only on A's board didn't count as unmeasured: ${run(kind).verdict} ${run(kind).vetoes}`);
   check(run(rows(32).map((r, i) => (i % 8 ? r : { ...r, renderSame: ["all", "paint"] }))).verdict === "keep", "a few cases with a new op went to the owner");
+  // A new op on over a third of the cases (e106-h1: 30 of 80) still compares their paint, nearly all of render.
+  check(run(rows(32).map((r, i) => (i % 8 > 2 ? r : { ...r, renderSame: ["all", "paint"] }))).verdict === "keep", "a new op on 12 of 32 cases went to the owner");
 }
 check(says(run(rows(32, { class: "N" })), "revert", /no effect/), "class N isn't reverted as no effect");
 const rare = decide({ tuning: rows(20), exhausted: true }, card());
