@@ -134,10 +134,17 @@ every token is past 90% of its five-hour window (testers share the token); each 
 
 ## 5. The morning check
 
-1. The progress page: Quality and Latency against the anchor, Cost per epoch against v1's band, Decisions (click one for
-   its cases and every call), Health, and the status strip (stopped or running, and why).
-2. `cat ~/rt-eval/history/owner-list.md`: everything waiting for you (a card that needs a frozen area, a sync conflict,
-   a stop reason, the morning summary).
+1. The progress page's **Needs you**, at the top: everything waiting for you, decisions held for your call first (red),
+   then the open owner-list items newest first (a card that needs a frozen area, a sync conflict, a stop reason), each in
+   plain words with its cases, ledger and patch. The count is in the tab title, `(3) rt-draw v2 · eval progress`: what
+   no one has answered you on, plus side chats Claude answered last. Each item takes your answer or comment (**answer**,
+   Ctrl+Enter sends) and **resolve**; **New side chat** starts a thread on anything. Claude answers in the same thread
+   (`rte note`), shown within 20 s without a reload. Threads are in `~/rt-eval/notes/threads.jsonl`, never in
+   history/ (public); an item is settled when ticked in `owner-list.md` or resolved on the page, and the page never
+   edits `owner-list.md` (the loop writes it).
+2. Below it: Quality and Latency against the anchor, Cost per epoch against v1's band, Decisions (click one for its
+   cases and every call), Health, and the status strip (stopped or running, and why). `owner-list.md` itself is
+   `cat ~/rt-eval/history/owner-list.md`.
 3. `tail -3 ~/rt-eval/history/budget.jsonl`: each token's five-hour and seven-day use (`fiveHour` is a 0–1 share).
 4. `rte status`: the cursor, the lock, the slots.
 
@@ -175,13 +182,16 @@ through the funnel; `--card <decision id>` decides a loop card's candidate again
 `rte aa --live --cap n` (checkpoint 0's unshared A/A again on today's champion, nothing written to history), `rte real
 update` (testers' sends from the last pull through to R1, every step but the owner's review, each paying step capped at
 1.5× its calls), `rte human freeze` (U1 from the owner's recorded sends), `rte remetric <run>`, `rte gc --trees`, `rte loop
---resume` (a stale lock resumes by itself). `python3 -I evals/tools/verify_decision.py ~/rt-eval/runs <run>…` recomputes a
+--resume` (a stale lock resumes by itself), `rte note` (the owner's threads where he wrote last, with their items, and
+the items resolved on the page that `owner-list.md` still has open; `rte note <thread> "<text>" [--resolve]` answers as
+Claude, `rte note new "<text>"` starts a side chat; a watcher can follow `tail -F -n0 ~/rt-eval/notes/threads.jsonl |
+grep --line-buffered '"who":"owner"'` or poll `GET /api/eval/threads?waiting`). `python3 -I evals/tools/verify_decision.py ~/rt-eval/runs <run>…` recomputes a
 decision's numbers from its rows without the harness's code, numbers only.
 
 A loop stops on §6.7's rules (weekly allowance, 2 voids in a row, a V9 invariant, readiness, calibration not passed, a
 sync conflict, the call cap, a blocked request), pauses on others (all slots past 0.90 of their five-hour window until the
-earliest reset, overloads, disk, battery) and writes each to the owner list. Mornings: `/evals/progress/`,
-`owner-list.md`, `budget.jsonl`.
+earliest reset, overloads, disk, battery) and writes each to the owner list. Mornings: `/evals/progress/` (Needs you),
+`budget.jsonl`.
 
 ## 8. Rehearsing at 0 calls
 
@@ -239,6 +249,7 @@ as eval/history-import), then `rte init --refresh` there.
 | `state.json`, `loop.lock`, `heartbeat.json` | the coordinator's cursor, one loop at a time, suspend detection |
 | `logs/` | every `run.ts` line (`run-<date>.log`), arm servers |
 | `machine.json`, `ready/`, `labels/`, `human/`, `out/` | the ladder's slots, readiness runs, calibration labels, the owner's sends, baked pictures |
+| `notes/threads.jsonl` | the owner's and Claude's threads beside Needs you: `{at, thread, item?, who, text, resolved?}` a line, append-only, outside git |
 
 Code: `evals/loop/` (CLI, gateway, runner, history), `evals/judge/`, `evals/optimizer/` (agents, digests, G0),
 `evals/core/` (driver, synthesizer, personas), `evals/checks/` (one acceptance check per task, 0 real calls).
