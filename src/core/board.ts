@@ -280,15 +280,20 @@ export function pickViews(scene: Scene, camera: View, strokes: Stroke[], said: s
   const last: NamedView[] = t["board.overview"]
     ? [{ name: "the whole board", why: "the biggest zoom that holds every page", view: fitView(pagesOf(scene).length ? union(pagesOf(scene).map((p) => p.box)) : boardBounds(scene), 0.03), width: t["board.overviewWidthPx"], tags: !!t["board.overviewTags"] }]
     : [];
+  // One page, and the camera shows nearly all of it at nearly the whole board's zoom: the two pictures show the same place, so keep the larger one, with tags.
+  const pages = pagesOf(scene);
+  const same = !!t["board.oneViewWhenSame"] && first.length > 0 && last.length > 0 && pages.length === 1 && insideShare(pages[0].box, camera) >= t["board.sameViewShare"] && last[0].view.w <= camera.w * t["board.sameViewWidthRatio"];
+  const lead: NamedView[] = same ? [] : first;
+  const tail: NamedView[] = same ? [{ ...last[0], name: "what you see (the whole board)", tags: true }] : last;
   // What you see and the whole board are kept; the rest fill the budget in order.
-  let tokens = [...first, ...last].reduce((a, v) => a + viewTokens(v), 0);
+  let tokens = [...lead, ...tail].reduce((a, v) => a + viewTokens(v), 0);
   const kept: NamedView[] = [];
   for (const v of middle) {
-    if (first.length + kept.length + last.length >= t["board.maxViews"] || tokens + viewTokens(v) > t["board.imageBudget"]) continue;
+    if (lead.length + kept.length + tail.length >= t["board.maxViews"] || tokens + viewTokens(v) > t["board.imageBudget"]) continue;
     kept.push(v);
     tokens += viewTokens(v);
   }
-  return [...first, ...kept, ...last];
+  return [...lead, ...kept, ...tail];
 }
 
 /** The rules alone: no resolver. */
