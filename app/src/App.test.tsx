@@ -5,6 +5,7 @@ import ELK from "elkjs/lib/elk.bundled.js";
 import { act } from "react";
 import { type Root as ReactRoot, createRoot } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Word } from "../../src/core/link.ts";
 import { runScript } from "../../src/core/ops.ts";
 import { Scene, type SceneJSON } from "../../src/core/scene.ts";
 import type { Board } from "./board/board.ts";
@@ -20,6 +21,8 @@ import { getModel, setModel } from "./settings.ts";
 const fake = vi.hoisted(() => ({
   send: undefined as undefined | ((...args: any[]) => Promise<unknown>),
   mics: [] as { on: boolean }[],
+  /** Each Scribe engine's events, for a test to speak through. */
+  scribes: [] as import("../../src/core/speech.ts").SpeechEvents[],
 }));
 vi.mock("../../src/core/send.ts", () => ({ send: (...args: unknown[]) => fake.send!(...args) }));
 vi.mock("../../src/core/speech.ts", () => ({
@@ -36,6 +39,9 @@ vi.mock("../../src/core/speech.ts", () => ({
     }
   },
   ScribeEngine: class {
+    constructor(events: (typeof fake.scribes)[number]) {
+      fake.scribes.push(events);
+    }
     async start() {}
     async stop() {}
   },
@@ -64,6 +70,11 @@ const project = (...docs: SceneJSON[]) => {
   return id;
 };
 const sent = { prompt: {}, result: { ops: [], ms: 1, reply: "" } };
+/** Typing in a React text field: its value set as the browser would, then the input event. */
+function type(input: HTMLTextAreaElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
 const job = (label: string) => ({ label, spoken: false, strokes: [], words: Promise.resolve(label), enter: performance.now() });
 
 let root: ReactRoot | undefined;
@@ -97,6 +108,7 @@ afterEach(async () => {
   delete (window as { rtApp?: unknown }).rtApp;
   document.body.innerHTML = "";
   fake.mics.length = 0;
+  fake.scribes.length = 0;
 });
 
 describe("the editor", () => {
@@ -155,6 +167,40 @@ describe("the editor", () => {
     } finally {
       setModel(was.name);
     }
+  });
+
+  it("what's said is written into the text box, stays there to edit, and is sent only at Enter, with its times", async () => {
+    await open(project(doc()));
+    let input: { words: Word[] | string } | undefined;
+    fake.send = async (_scene, i) => ((input = i), sent);
+    const box = () => document.querySelector<HTMLTextAreaElement>(".pg-bar textarea")!;
+    await act(async () => type(box(), "add a header,"));
+    await act(async () => document.querySelector<HTMLButtonElement>(".pg-mic")!.click());
+    await until(() => fake.scribes.length);
+    const scribe = fake.scribes[0];
+    await act(async () => scribe.onInterim("make the hero"));
+    expect(box().value).toBe("add a header, make the hero");
+    expect(document.querySelector(".pg-captions")).toBeNull();
+    const t = performance.now() - 2000;
+    const heard = ["make", "the", "hero", "blue"].map((word, i) => ({ word, t0: t + i * 100, t1: t + i * 100 + 80 }));
+    await act(async () => scribe.onFinal({ text: "make the hero blue", words: heard, t0: t, t1: t + 380, finalAt: t + 700, features: {} }));
+    expect(box().value).toBe("add a header, make the hero blue");
+    // Speech ending sends nothing: the words wait in the box.
+    await wait(100);
+    expect(input).toBeUndefined();
+    expect(app()!.log.sends).toHaveLength(0);
+
+    await act(async () => type(box(), "add a header, make the hero red please"));
+    await act(async () => void box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await until(() => input);
+    expect(box().value).toBe("");
+    const words = input!.words as Word[];
+    expect(words.map((w) => w.word)).toEqual(["add", "a", "header,", "make", "the", "hero", "red", "please"]);
+    // On the ink clock: said words a tenth of a second apart, "red" at the time "blue" was said, typed words at Enter.
+    expect(words.slice(3, 7).map((w) => w.t0 - words[3].t0)).toEqual([0, 100, 200, 300]);
+    expect(words[0].t0).toBe(words[7].t0);
+    expect(words[7].t0).toBeGreaterThan(words[6].t1);
+    expect(app()!.log.sends[0]).toMatchObject({ label: "add a header, make the hero red please", spoken: true });
   });
 
   it("a send while an old version is pinned is timed from the live board", async () => {

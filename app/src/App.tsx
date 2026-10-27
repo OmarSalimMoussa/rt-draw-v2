@@ -43,7 +43,7 @@ import { StatusBadge } from "./StatusBadge.tsx";
 import { Icon } from "./sketch/Icon.tsx";
 import { Logo } from "./sketch/Logo.tsx";
 import { MarkSketch } from "./sketch/MarkSketch.tsx";
-import { Voice, onInkClock, plainVoiceError, withTyped } from "./speech/voice.ts";
+import { Voice, onInkClock, plainVoiceError } from "./speech/voice.ts";
 import { keepWarm } from "./warm.ts";
 
 /** Height kept clear at the top for the toolbar. */
@@ -281,10 +281,9 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     };
   }, []);
 
-  // The voice: on until turned off; each Enter takes what was said since the last.
+  // The voice: on until turned off; what it hears is written into the text box, and each Enter takes the box.
   const voice = useMemo(() => new Voice({ mic: () => new Mic(), engine: (events, mic) => new ScribeEngine(events, mic as Mic, () => board.tuning) }), []);
   useSyncExternalStore(voice.subscribe, voice.getVersion);
-  const spoken = `${voice.heard} ${voice.interim}`.trim();
 
   // Another project opened in this tab mounts a new editor: this one's send stops (what landed is kept in its
   // project's versions), the mic is let go, and its board stops following saves and settings.
@@ -313,7 +312,19 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   const undoStroke = () => setStrokes(strokesRef.current.slice(0, -1));
   const marks = useMemo(() => groupStrokes(strokes, board.tuning), [strokes]);
 
-  const [prompt, setPrompt] = useState("");
+  /** The text box: typed and said alike (voice.ts), the person's to edit until Enter. */
+  const prompt = voice.text;
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  const boxText = useRef(prompt);
+  // A new value puts the caret at the end: while the box has focus it goes back where the voice left it; otherwise the newest words scroll into view.
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el || boxText.current === prompt) return;
+    boxText.current = prompt;
+    const sel = voice.sel;
+    if (document.activeElement !== el) el.scrollTop = el.scrollHeight;
+    else if (sel && (el.selectionStart !== sel[0] || el.selectionEnd !== sel[1])) el.setSelectionRange(sel[0], sel[1]);
+  });
 
   /**
    * A click in the preview that leads nowhere yet: a send that builds its page (build.ts), queued like any
@@ -341,16 +352,14 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   }
 
   function submit() {
-    const typed = prompt.trim();
-    const said = spoken;
     const taken = strokesRef.current;
-    if (!typed && !taken.length && !said) return;
+    if (!prompt.trim() && !taken.length) return;
     const enter = performance.now();
     const ep = epoch.current;
-    const words = voice.take().then((ws) => withTyped(onInkClock(ws, ep), typed, Math.round(enter - ep)));
-    sender.enqueue({ label: typed || said || "(drawing only)", spoken: !typed && !!said, strokes: taken, words, enter, clock0: ep });
+    // The box as it stands, its said words timed (the last of them may still be on their way from Scribe).
+    const { text, spoken, words } = voice.take(enter);
+    sender.enqueue({ label: text || "(drawing only)", spoken, strokes: taken, words: words.then((ws) => (typeof ws === "string" ? ws : onInkClock(ws, ep))), enter, clock0: ep });
     setStrokes([]);
-    setPrompt("");
     epoch.current = performance.now();
     nextStroke.current = 1;
   }
@@ -524,26 +533,28 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           submit();
         }}
       >
-        {(spoken || voice.error) && (
+        {voice.error && (
           <div className="pg-captions" aria-live="polite">
-            {spoken && <div className="pg-heard"><Icon name="mic" /> {spoken}…</div>}
-            {voice.error && <div className="bad">{seesInternals() ? voice.error : plainVoiceError(voice.error)}</div>}
+            <div className="bad">{seesInternals() ? voice.error : plainVoiceError(voice.error)}</div>
           </div>
         )}
         <div className="pg-row">
           <textarea
+            ref={boxRef}
             value={prompt}
             rows={2}
             placeholder={
               strokes.length
                 ? "Say what the drawings mean, or just Send: an arrow moves a thing there"
                 : voice.listening
-                  ? "Listening: talk and draw, then press Enter. You can still type here."
+                  ? "Listening: talk and draw. Your words appear here to edit; press Enter to send."
                   : empty
                     ? "Think out loud about your page, e.g. “a landing page for rubber ducks, big yellow hero with a duck photo…”"
                     : "Keep going: “make the hero blue”, “add pricing under that”, or circle something and say “move this up”…"
             }
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(e) => voice.type(e.target.value, e.target.selectionStart, e.target.selectionEnd)}
+            onSelect={(e) => voice.select(e.currentTarget.selectionStart, e.currentTarget.selectionEnd)}
+            onBlur={() => voice.select()}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -561,10 +572,10 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           >
             <Icon name="mic" size={20} />
           </button>
-          {busy && !prompt.trim() && !strokes.length && !spoken ? (
+          {busy && !prompt.trim() && !strokes.length ? (
             <button type="button" className="pg-stop" onClick={() => sender.stop()}>Stop</button>
           ) : (
-            <button type="submit" className="pg-send" disabled={!prompt.trim() && !strokes.length && !spoken}>{busy ? "Queue" : "Send"}</button>
+            <button type="submit" className="pg-send" disabled={!prompt.trim() && !strokes.length}>{busy ? "Queue" : "Send"}</button>
           )}
         </div>
         {strokes.length > 0 && (

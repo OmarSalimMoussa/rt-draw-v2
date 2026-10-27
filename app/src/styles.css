@@ -84,7 +84,6 @@ pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; background:
 .pg-marks path.mk-fill { stroke-width: 1; opacity: 0.25; }
 .pg-marks text { fill: var(--bad); font: 700 18px var(--hand); }
 .pg-captions { display: flex; flex-direction: column; gap: 2px; font-size: 13px; padding: 0 2px; }
-.pg-heard { color: var(--muted); font-style: italic; }
 .pg-mic { align-self: stretch; display: grid; place-items: center; width: 48px; padding: 0; border-radius: 8px; color: #495057; }
 .pg-mic:hover { background: #f1f3f5; }
 .pg-mic.on { background: var(--bad); border-color: var(--bad); color: #fff; animation: pg-pulse 1s infinite alternate; }
