@@ -185,12 +185,13 @@ try {
   check(json(site).shapes.some((s) => s.id === "cover"), "the saved page isn't the first-timer's page after send 3");
 
   // Undo: S1's third case starts from the scene before its second (restored by the harness), and its only product calls are its
-  // send's: the drawing call and its resolver (Jev's by default, with the add hint), no picture redrawn by the restore.
+  // send's: the drawing call, its resolver (Jev's by default, with the add hint) and the camera guard's Jev question, no picture
+  // redrawn by the restore.
   check(JSON.stringify(json(bankFile("c-b1-s01-3", "before.scene.json"))) === JSON.stringify(json(bankFile("c-b1-s01-2", "before.scene.json"))), "undo didn't restore the previous scene");
   const meter = () => readMeter(p.calls).filter((l) => "mode" in l);
   const of = (id) => meter().filter((l) => l.case === id);
   const s13 = of("c-b1-s01-3");
-  check(s13.filter((l) => l.role === "driver").length === 2 && s13.filter((l) => l.arm).every((l) => ["draw", "draw-refs", "draw-refs-jev", "draw-add", "draw-think"].includes(l.role)) && s13.filter((l) => l.role === "draw").length === 1,
+  check(s13.filter((l) => l.role === "driver").length === 2 && s13.filter((l) => l.arm).every((l) => ["draw", "draw-refs", "draw-refs-jev", "draw-add", "draw-think", "camera-look"].includes(l.role)) && s13.filter((l) => l.role === "draw").length === 1,
     `the undo case's calls: ${s13.map((l) => l.role).join(", ")}`);
 
   // V-events, from the sessions' files.

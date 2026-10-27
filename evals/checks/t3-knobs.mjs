@@ -33,12 +33,15 @@ const NEW = { "draw.prompt": 0, "resolve.prompt": 0, "describe.prompt": 0, "pict
   "draw.thinkRouter": 0, "draw.thinkYes": 0.5, "draw.thinkJevModel": 0, "draw.thinkPrompt": 0, "draw.copies": 1, "draw.copyAfterMs": 0, "picture.copies": 1, "picture.copyAfterMs": 0 };
 // Knobs added after T3, at their defaults.
 const LATER = { "draw.addHint": 1, "draw.addYes": 0.5, "draw.addWaitMs": 1500, "picture.strokeWidth": 3, "render.captionMaxShare": 0.4, "render.minTextScale": 0.4,
-  "ops.waitForShape": 1, "picture.context": 2, "picture.contextColors": 8, "picture.contextPoints": 300, "render.pictureBox": 1 };
+  "ops.waitForShape": 1, "picture.context": 2, "picture.contextColors": 8, "picture.contextPoints": 300, "render.pictureBox": 1,
+  "ops.earlyShape": 1, "ops.earlyAtBox": 1, "draw.emptyBoardFast": 1, "board.oneViewWhenSame": 1, "board.sameViewShare": 0.9, "board.sameViewWidthRatio": 1.25,
+  "camera.guard": 1, "camera.lookYes": 0.5, "camera.shownShare": 0.9 };
 // Defaults the owner changed since T3 (decisions on eval/history, and LOOP-V2.md's product fixes), and later knobs that
 // change what a send asks or shows, at their T3-time behaviour: the comparisons with the code before T3 run under these,
 // since they're about T3's refactor, not later decisions.
 const T3_TIME = { "resolve.noThink": 0, "picture.maxPaths": 24, "picture.colors": 4, "resolve.engine": 0, "resolve.jevHints": 0, "resolve.speculate": 0, "draw.prompt": 0, "picture.prompt": 0,
-  "draw.addHint": 0, "picture.context": 0, "render.pictureBox": 0, "ops.waitForShape": 0, "draw.thinkRouter": 0 };
+  "draw.addHint": 0, "picture.context": 0, "render.pictureBox": 0, "ops.waitForShape": 0, "draw.thinkRouter": 0,
+  "ops.earlyShape": 0, "ops.earlyAtBox": 0, "draw.emptyBoardFast": 0, "board.oneViewWhenSame": 0, "board.markZoomFrac": 0.6, "camera.guard": 0 };
 const OWNER_DEFAULTS = {
   "resolve.noThink": 1, // 2026-10-19: e2-h1, the resolver answers without thinking (TTFC ×0.66)
   "resolve.engine": 1, // 4420f45: Jev resolves references
@@ -46,8 +49,9 @@ const OWNER_DEFAULTS = {
   "resolve.speculate": 1, // 94ba1c1: the drawing call starts on Jev's guess
   "picture.maxPaths": 0, "picture.colors": 0, // LOOP-V2.md B1: no caps on a picture's elements or colors
   "picture.prompt": 3, // LOOP-V2.md B1: detail matched to the ask
-  "draw.prompt": 1, // LOOP-V2.md B2, B4, C1: the illustrated manual
+  "draw.prompt": 2, // e88-h1 (4e0dca9), from the loop's champion: style-first shape and text lines (the illustrated manual was 1)
   "draw.thinkRouter": 1, "draw.thinkYes": 0.9, // e73-h2, the owner kept it 2026-10-27: Jev routes thinking at a 0.9 bar
+  "board.markZoomFrac": 0.35, // e98-h3b (04f5558), from the loop's champion: a mark's close-up only when the camera is zoomed out
 };
 // Fields of knobs from before T3 that changed since, as they were then.
 const T3_FIELDS = {
@@ -55,6 +59,7 @@ const T3_FIELDS = {
   "shot.inkNumberGapPx": { doc: "the [n] sits this far up and right of the mark's top-right-most ink" },
   "picture.maxPaths": { value: 24, min: 4, doc: "a doodle may use at most this many paths" },
   "picture.colors": { value: 4, min: 1, doc: "and at most this many colors" },
+  "board.markZoomFrac": { value: 0.6 },
 };
 for (const [key, value] of Object.entries({ ...NEW, ...LATER, ...OWNER_DEFAULTS })) {
   const k = KNOBS.find((x) => x.key === key);

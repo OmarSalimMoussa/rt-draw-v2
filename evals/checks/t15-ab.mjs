@@ -164,6 +164,7 @@ export async function fakeLoop({ port, slots = 2 }) {
     // bootReqs: the bootstrap's Jev questions, the fake API's only requests before a check's own.
     home, work, p, repo, champ, api, gw, rig, boot, bootReqs: api.requests.length, roles: [...roles],
     tuning: of("tuning"), gate: of("heldout-gate"), chart: of("heldout-chart"), stray: "c-x-stray", kindOf: (id) => cases.findIndex((c) => c.id === id) % 4,
+    blank: (id) => cases.find((c) => c.id === id)?.start === "blank",
     async close() {
       await rig.close();
       await gw.close();
@@ -229,7 +230,8 @@ if (import.meta.main) {
   const q = await scan(rig, { ...base, arms: { A: champ, B: arm({ "draw.sendMarks": 0 }) }, run: "scan-q", cases: [...L.tuning, ...L.gate], card: card() });
   check(q.class === "Q" && q.cases.some((c) => c.requests.includes("draw")) && (q.affected["heldout-gate"] ?? []).length > 0, `the request tweak is ${q.class} (draw differs on ${q.cases.filter((c) => c.requests.includes("draw")).length})`);
   // Drawing starts without waiting for a late add hint (the bank's comes at 600 ms, with nothing to add): first drawing moves.
-  const s = await scan(rig, { ...base, arms: { A: champ, B: arm({ "draw.addWaitMs": 100 }) }, run: "scan-s", cases: L.tuning, card: card({ classGuess: "S" }) });
+  // On the toyshop cases: a blank board asks for no hint (draw.emptyBoardFast), so it has no wait to cut.
+  const s = await scan(rig, { ...base, arms: { A: champ, B: arm({ "draw.addWaitMs": 100 }) }, run: "scan-s", cases: L.tuning.filter((id) => !L.blank(id)), card: card({ classGuess: "S" }) });
   check(s.class === "S" && s.cases.every((c) => !c.scene && !c.svg && !c.requests.length) && s.timed?.ttfd?.est < 0.9, `the scheduling tweak is ${s.class} (scenes identical: ${s.cases.every((c) => !c.scene)}, requests identical: ${s.cases.every((c) => !c.requests.length)}, timed ${timed(s.timed)})`);
   // Pictures one at a time only make the send end later: time to done decides nothing (LOOP-V2.md), so it's no effect.
   const tdOnly = await scan(rig, { ...base, arms: { A: champ, B: arm({ "picture.parallel": 1 }) }, run: "scan-ttd", cases: L.tuning, card: card({ classGuess: "S" }) });
