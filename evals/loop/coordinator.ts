@@ -372,6 +372,9 @@ export async function loop(rte: Rte) {
     if (!resume) {
       const epochs = rte.num("epochs");
       st.until = epochs === undefined ? undefined : st.epoch + epochs - 1;
+      // Starting afresh is the owner's word that what emptied the last epochs is dealt with (e85 and e86's agent bugs
+      // stopped the next start before its seed cards ran); --resume keeps the count.
+      st.emptyEpochs = 0;
       if (typeof rte.o.f["seed-cards"] === "string") {
         const seen = new Set([...historyRows("decisions.jsonl").map((d) => d.card?.id), ...st.queue.map((c) => c.id), ...st.cards.map((c) => c.card.id)]);
         st.queue.push(...(JSON.parse(readFileSync(rte.o.f["seed-cards"], "utf8")) as HypothesisCard[]).filter((c) => !seen.has(c.id)));
