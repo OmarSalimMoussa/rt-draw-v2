@@ -22,7 +22,11 @@ Object.assign(process.env, env);
 const git = (...a) => execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const ID = ["-c", "user.name=rt-check", "-c", "user.email=check@localhost"];
 const json = (f) => JSON.parse(readFileSync(f, "utf8"));
-const lines = (f) => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+// A JSONL file being appended to can end mid-line: that line isn't written yet.
+const lines = (f) => {
+  const t = existsSync(f) ? readFileSync(f, "utf8") : "";
+  return t.slice(0, t.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (s) => s.trim().split("\n").slice(-6).join(" | ").slice(0, 900);
 const HOOKS = join(ROOT, "evals/loop/node-hooks.mjs"), RUN = join(ROOT, "evals/loop/run.ts");
