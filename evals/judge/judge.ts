@@ -179,7 +179,8 @@ export function positionsFor(caseIds: string[], seed: string | number): Map<stri
 
 /** §4.4's fallback: above LOOP.flipAlarm once LOOP.flipFallbackAfter audited cases are in, the rest of the run is judged in both orders. */
 export const bothOrders = (audited: number, flipped: number) => audited >= LOOP.flipFallbackAfter && flipped / audited > LOOP.flipAlarm;
-const audited = (seed: string | number, caseId: string) => draw(seed, "audit", caseId) < LOOP.auditShare;
+/** The audit sample: the cases judged in both orders whatever the first verdict's confidence, so their flips measure the judge. */
+export const inAudit = (seed: string | number, caseId: string) => draw(seed, "audit", caseId) < LOOP.auditShare;
 
 export type CaseVerdict = { s: -1 | 0 | 1; sCraft?: -1 | 0 | 1; first: Judged; second?: Judged; craft?: Judged };
 
@@ -195,7 +196,7 @@ export function judging(run: string, o: { seed: string | number; craft: "all" | 
   const cases = runFile(run, "cases");
   for (const c of existsSync(cases) ? readdirSync(cases) : []) {
     const [f1, f2] = ["fidelity-1.json", "fidelity-2.json"].map((f) => maybe<Judged>(join(cases, c, "judge", f)));
-    if (!isDone(join(cases, c)) || !f1 || !f2 || !audited(o.seed, c)) continue;
+    if (!isDone(join(cases, c)) || !f1 || !f2 || !inAudit(o.seed, c)) continue;
     st.audited++;
     if (pick(f1) !== pick(f2)) st.flipped++;
   }
@@ -206,7 +207,7 @@ export function judging(run: string, o: { seed: string | number; craft: "all" | 
     const first = await fidelityCall(run, p, p.positions, v.fidelity);
     put(file("fidelity-1.json"), first);
     // A tie is never re-judged: a second order could only disagree, which is a tie again.
-    const audit = audited(o.seed, caseId);
+    const audit = inAudit(o.seed, caseId);
     if (first.winner === "tie" || !(audit || first.confidence <= LOOP.lowConfidence || st.both)) return { first };
     const second = await fidelityCall(run, p, swap(p.positions), v.fidelity);
     put(file("fidelity-2.json"), second);
