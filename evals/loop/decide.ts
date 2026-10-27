@@ -298,11 +298,11 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
     const wt = worktreeOf(c.branch);
     if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
     if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
-      const engineer = async (note?: string) => {
+      const engineer = async (note?: string, role = "engineer") => {
         const token = await freeSlot(rte, gw);
         // The budget stopped the loop: the card stays to build when it resumes.
         if (!token) return false;
-        await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token, mockApi: await rte.agentMock(), note });
+        await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-${role}`, token, mockApi: await rte.agentMock(), note });
         return true;
       };
       let built = true;
@@ -318,6 +318,16 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
           built = await engineer(`Its tried patches don't apply one after another on today's champion (they edit the same lines, or the code moved). Make all of them together by hand, each one's intent kept:\n\n${patches}`);
         }
       } else built = await engineer();
+      // G0's diff gates, free, once as built: a reject its engineer can fix (e88-h4's `const HEX = 16` outside tuning.ts)
+      // goes back to it once with the reasons, rather than reverting the card unmeasured.
+      if (built && c.card.kind !== "knob" && git(wt, "status", "--porcelain")) {
+        commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
+        const g = g0({ diff: diffOf(wt, "loop/champion", "HEAD") });
+        if (g.verdict === "reject") {
+          rte.say(`${c.id}: the gate rejects it as built (${g.reasons.join("; ").slice(0, 200)}): its engineer fixes it once`);
+          built = await engineer(`The gate rejects this change as built. Fix what it names and keep the change's intent:\n- ${g.reasons.join("\n- ")}`, "engineer-fix");
+        }
+      }
       if (!built) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
     }
     if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);

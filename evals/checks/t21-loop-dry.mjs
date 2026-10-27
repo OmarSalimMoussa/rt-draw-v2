@@ -95,7 +95,8 @@ const readyDir = join(L.home, "ready", "ready-2026-10-16T00-00-00-000Z");
 mkdirSync(readyDir, { recursive: true });
 writeFileSync(join(readyDir, "ready.json"), JSON.stringify({ run: "ready-check", at: new Date().toISOString(), harnessTag: harnessTag(), results: [{ id: "R1", ok: true }] }));
 
-// The canned optimizer: epoch 1 a knob card, a code patch (the resolver's prompt: every case's requests differ) and a no-op; epoch 2 a card that edits a frozen file.
+// The canned optimizer: epoch 1 a knob card, a code patch (the resolver's prompt: every case's requests differ) and a no-op
+// (built first with a stray number, which its engineer takes out when the gate sends it back); epoch 2 a card that edits a frozen file.
 const FAKES = join(L.work, "fakes.mjs");
 const mod = (f) => JSON.stringify(pathToFileURL(join(ROOT, f)).href);
 writeFileSync(FAKES, `import { readFileSync, writeFileSync } from "node:fs";
@@ -108,11 +109,11 @@ const CARDS = {
   2: [card("frozen", { change: "a vite.config.ts comment" })],
 };
 export const critic = async ({ run }) => ({ cards: CARDS[/-e(\\d+)-critic$/.exec(run)[1]] ?? [], dropped: [], result: {} });
-const EDITS = { points: ["src/core/prompts.ts", (s) => s.replace("which shapes on a canvas a person means.", "which shapes on a canvas a person points at.")], noop: ["src/core/draw.ts", (s) => s + "\\n// rt-check: a comment that changes nothing\\n"], frozen: ["vite.config.ts", (s) => s + "\\n// rt-check\\n"] };
-export async function engineer({ card, branch }) {
+const EDITS = { points: ["src/core/prompts.ts", (s) => s.replace("which shapes on a canvas a person means.", "which shapes on a canvas a person points at.")], noop: ["src/core/draw.ts", (s, note) => note ? s.replace("export const rtCheck = 7;\\n", "") : s + "\\n// rt-check: a comment that changes nothing\\nexport const rtCheck = 7;\\n"], frozen: ["vite.config.ts", (s) => s + "\\n// rt-check\\n"] };
+export async function engineer({ card, branch, note }) {
   const wt = worktreeOf(branch);
   const [f, edit] = EDITS[card.id];
-  writeFileSync(join(wt, f), edit(readFileSync(join(wt, f), "utf8")));
+  writeFileSync(join(wt, f), edit(readFileSync(join(wt, f), "utf8"), note));
   return { text: "", stop: "done", turns: 1, minutes: 0, usd: 0, denied: [], wt };
 }
 /** The knob card's arm wins every case, the patch's loses every case. */
@@ -175,6 +176,7 @@ check(dec["e1-h1"]?.verdict === "keep" && dec["e1-h1"].class === "Q", `the knob 
 // A resolver card is class D (08aed14: what a later send's words point at moves, so the continuation sends run).
 check(dec["e1-h2"]?.verdict === "revert" && dec["e1-h2"].class === "D", `the code patch: ${say(dec["e1-h2"])}`);
 check(dec["e1-h3"]?.verdict === "revert" && dec["e1-h3"].class === "N" && /no effect/.test(dec["e1-h3"].reasons.join()), `the no-op: ${say(dec["e1-h3"])}`);
+check(/e1-h3: the gate rejects it as built \(magic number 7 in src\/core\/draw\.ts.*its engineer fixes it once/.test(first.out() + resumed.out), "the no-op's stray number didn't go back to its engineer");
 const noopCalls = upstream(all).filter((l) => /-e1-h3-/.test(l.run)).length;
 check(noopCalls === 0, `the no-op's decision made ${noopCalls} calls`);
 check(dec["e2-h1"]?.verdict === "owner" && /frozen path vite\.config\.ts/.test(dec["e2-h1"].reasons.join()), `the frozen-path card: ${say(dec["e2-h1"])}`);
