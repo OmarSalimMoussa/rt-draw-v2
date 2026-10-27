@@ -131,6 +131,9 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
   const model = MODELS[a.role] ?? MODEL_IDS.sonnet;
   const usage = { ...NONE };
   let rateLimit: RateLimit | undefined;
+  // The answer: every text block since the last tool call. The result's text is the last block alone, and an answer
+  // the model broke up (a thinking block mid-list) kept only its tail: e85's critic lost its cards' opening "[".
+  let answer: string[] = [];
   const refuse = (tool: string, input: Record<string, unknown>) => {
     const why = a.rule(tool, input);
     if (why) r.denied.push(`${tool} ${JSON.stringify(input).slice(0, 160)}: ${why}`);
@@ -173,8 +176,13 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
         if (r.usd >= a.caps.usd) end("usd");
       } else if (m.type === "rate_limit_event") {
         rateLimit = rateLimitOf(m.rate_limit_info as unknown as Record<string, unknown>);
+      } else if (m.type === "assistant") {
+        for (const b of m.message.content) {
+          if (b.type === "tool_use") answer = [];
+          else if (b.type === "text") answer.push(b.text);
+        }
       } else if (m.type === "result") {
-        if (m.subtype === "success") r.text = m.result;
+        if (m.subtype === "success") r.text = answer.join("") || m.result;
         else {
           if (r.stop === "done") r.stop = m.subtype === "error_max_turns" ? "turns" : "error";
           r.error ??= m.subtype;

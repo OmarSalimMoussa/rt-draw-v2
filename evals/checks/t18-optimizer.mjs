@@ -395,7 +395,9 @@ const t0 = Date.now();
 const slow = await run(apiB, { caps: { turns: 20, minutes: 0.02, usd: 5 } });
 check(slow.result.stop === "minutes" && Date.now() - t0 < 4000, `the minute cap: ${JSON.stringify(slow.result)} after ${Date.now() - t0} ms`);
 await apiB.close();
-const apiC = await startFakeApi({ port: PORTS.fakeA, script: script("cards.json", [tool("Glob", { pattern: "*.md", path: tree }, 0), { content: [{ type: "text", text: `Here are the cards:\n\`\`\`json\n${JSON.stringify(cards)}\n\`\`\`` }] }]) });
+// The answer in two text blocks (e85's critic: the result's text is the last block alone, which lost the list's "[").
+const said = `Here are the cards:\n\`\`\`json\n${JSON.stringify(cards)}\n\`\`\``, half = said.length >> 1;
+const apiC = await startFakeApi({ port: PORTS.fakeA, script: script("cards.json", [tool("Glob", { pattern: "*.md", path: tree }, 0), { content: [{ type: "text", text: said.slice(0, half) }, { type: "text", text: said.slice(half) }] }]) });
 const good = await run(apiC, {});
 check(good.result.stop === "done" && good.cards.map((c) => c.id).join() === "h1,h2,h4,h5,h6,h7" && good.dropped.some((d) => /h3: kind bogus/.test(d)) && good.dropped.some((d) => /h8: over the 6-card limit/.test(d)), `the critic's cards: ${JSON.stringify({ cards: good.cards.map((c) => c.id), dropped: good.dropped, r: good.result })}`);
 await apiC.close();
