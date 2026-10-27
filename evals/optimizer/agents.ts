@@ -25,7 +25,8 @@ import { ANALYST_SYSTEM, CRITIC_SYSTEM, ENGINEER_SYSTEM, FAILURE_SYSTEM } from "
 export type Caps = { turns: number; minutes: number; usd: number };
 /** Frozen per-session caps (§8.2). */
 export const CAPS = { analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } } satisfies Record<string, Caps>;
-const MODEL = MODEL_IDS.sonnet;
+/** Each role's model: the analyst's ideas decide what the loop measures, and its session costs little next to an epoch's measuring (~$0.3 against ~$13 on Sonnet). */
+const MODELS: Record<string, string> = { analyst: MODEL_IDS.opus, critic: MODEL_IDS.sonnet, engineer: MODEL_IDS.sonnet };
 const WEB = ["WebSearch", "WebFetch"];
 const TOOLS = { analyst: ["Read", "Grep", "Glob", ...WEB], critic: ["Read", "Grep", "Glob", ...WEB], engineer: ["Read", "Edit", "Write", "Grep", "Glob", "Bash", ...WEB] };
 
@@ -127,6 +128,7 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
   const p = paths();
   const t0 = Date.now();
   const r: AgentResult = { text: "", stop: "done", turns: 0, minutes: 0, usd: 0, denied: [] };
+  const model = MODELS[a.role] ?? MODEL_IDS.sonnet;
   const usage = { ...NONE };
   let rateLimit: RateLimit | undefined;
   const refuse = (tool: string, input: Record<string, unknown>) => {
@@ -137,8 +139,8 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
   const q = query({
     prompt: a.prompt,
     options: {
-      model: MODEL, systemPrompt: a.system, tools: TOOLS[a.role], settingSources: [], persistSession: false, includePartialMessages: true, effort: "high",
-      maxTurns: a.caps.turns, cwd: a.cwd, env: childEnv(a.token.token, { configDir: p.claudeConfig, model: MODEL, maxRetries: 2, mockApi: a.mockApi }),
+      model, systemPrompt: a.system, tools: TOOLS[a.role], settingSources: [], persistSession: false, includePartialMessages: true, effort: "high",
+      maxTurns: a.caps.turns, cwd: a.cwd, env: childEnv(a.token.token, { configDir: p.claudeConfig, model, maxRetries: 2, mockApi: a.mockApi }),
       // "default": every ask reaches canUseTool (left unset, Claude Code may pick auto mode and its classifier calls).
       permissionMode: "default", canUseTool: canUseToolOf(a.rule),
       // Claude Code runs read-only tools and some Bash without asking: the hook sees every call.
@@ -167,7 +169,7 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
           : { ...NONE, outTokens: m.event.type === "message_delta" ? (m.event.usage?.output_tokens ?? 0) : 0 };
         if (u) r.turns++;
         for (const k of Object.keys(usage) as (keyof typeof usage)[]) usage[k] += turn[k];
-        r.usd += listUsd(MODEL, turn);
+        r.usd += listUsd(model, turn);
         if (r.usd >= a.caps.usd) end("usd");
       } else if (m.type === "rate_limit_event") {
         rateLimit = rateLimitOf(m.rate_limit_info as unknown as Record<string, unknown>);
@@ -189,7 +191,7 @@ export async function runAgent(a: AgentRun): Promise<AgentResult> {
     clearTimeout(timer);
   }
   r.minutes = (Date.now() - t0) / 60_000;
-  meterAgent(p.calls, { at: new Date().toISOString(), run: a.run, role: a.role, agent: true, model: MODEL, totalCostUsd: r.usd, usage, turns: r.turns, minutes: r.minutes, token: a.token.slot });
+  meterAgent(p.calls, { at: new Date().toISOString(), run: a.run, role: a.role, agent: true, model, totalCostUsd: r.usd, usage, turns: r.turns, minutes: r.minutes, token: a.token.slot });
   // The slot's five-hour estimate and weekly allowance count this session too (no gateway: a check's agent, nothing to tell).
   await recordSpend({ slot: a.token.slot, usd: r.usd, rateLimit }).catch(() => {});
   return r;
@@ -267,15 +269,15 @@ function cardFault(c: Partial<HypothesisCard>): string | undefined {
   }
 }
 
-/** At most LOOP.search.cards well-formed cards, knob and sweep cards first (no engineer); the rest with why they were dropped. */
+/** At most LOOP.search.cards well-formed cards, in the critic's order; the rest with why they were dropped. */
 export function readCards(text: string): { cards: HypothesisCard[]; dropped: string[] } {
   // A list of cards, else an empty list (no card worth running): never an array the prose quotes ("the cap [24]").
   const all = jsonIn<Partial<HypothesisCard>[]>(text, "[", objects) ?? jsonIn<[]>(text, "[", (v) => Array.isArray(v) && !v.length);
   if (!Array.isArray(all)) return { cards: [], dropped: ["no JSON array of cards in the critic's answer"] };
   const dropped = all.flatMap((c) => (cardFault(c) ? [`${c.id ?? "?"}: ${cardFault(c)}`] : []));
   const ok = all.filter((c) => !cardFault(c)) as HypothesisCard[];
-  const free = (c: HypothesisCard) => c.kind === "knob" || c.kind === "sweep";
-  const cards = [...ok.filter(free), ...ok.filter((c) => !free(c))].slice(0, LOOP.search.cards);
+  // Free cards first (knobs and sweeps, no engineer) made up 26 of era 3's decisions, none kept, and none the analyst's.
+  const cards = ok.slice(0, LOOP.search.cards);
   return { cards, dropped: [...dropped, ...ok.filter((c) => !cards.includes(c)).map((c) => `${c.id}: over the ${LOOP.search.cards}-card limit`)] };
 }
 

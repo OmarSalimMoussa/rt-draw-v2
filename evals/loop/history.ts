@@ -152,15 +152,6 @@ export function triedPatch(d: DecisionRow, repo = paths().repo) {
   writeFileSync(at("tried", `${d.id}.patch`), `${head.join("\n")}\n---\n${body}\n`);
 }
 
-/** The critic's tried index, one line per patch: "<id> <title> | <component> | <diff hash> | <verdict>". */
-export function triedIndex(): string[] {
-  const dir = at("tried");
-  return (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".patch")).sort() : []).map((f) => {
-    const h = Object.fromEntries(readFileSync(join(dir, f), "utf8").split("\n---\n")[0].split("\n").map((l) => [l.slice(0, l.indexOf(":")), l.slice(l.indexOf(":") + 2)]));
-    return `${h["rt-eval tried"]} ${h.title} | ${h.component} | ${h.diff} | ${h.verdict.split(":")[0]}`;
-  });
-}
-
 /** One open owner-list item (a markdown task), once. */
 export function ownerItem(text: string) {
   const f = at("owner-list.md");

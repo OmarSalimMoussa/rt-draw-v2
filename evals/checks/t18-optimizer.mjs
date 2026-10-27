@@ -22,7 +22,7 @@ const put = (file, data) => (mkdirSync(join(file, ".."), { recursive: true }), w
 const sha12 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
 const { g0, parseDiff, diffOf, cardOwnerReasons } = await import("../optimizer/gates.ts");
-const { analystDigest, failureDigest, tokensOf, writeLossDigest, writeMissDigest, DIGEST } = await import("../optimizer/digest.ts");
+const { analystDigest, decisionLines, failureDigest, tokensOf, writeLossDigest, writeMissDigest, DIGEST } = await import("../optimizer/digest.ts");
 const { OVERUSE, PATTERNS, tracePatterns } = await import("../optimizer/patterns.ts");
 const { BASH_ALLOW, CAPS, analyst, critic, engineer, engineerCanUseTool, failureAnalyst, readCards, slotToken, toolRule } = await import("../optimizer/agents.ts");
 const prompts = await import("../optimizer/prompts.ts");
@@ -181,14 +181,14 @@ for (const c of tuningCases.slice(100, 110)) armFiles("cp1", c.id, "A", false);
 rows("ab1", [...abCases.map((c, i) => rowOf(c.id, i % 4 === 0 ? -1 : i % 4 === 1 ? 0 : 1, { beat: c.beat })), ...heldCases.slice(0, 6).map((c) => rowOf(c.id, -1))]);
 
 // ---- The digest
-const digest = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, runs: ["ab1"], ledger: ["e1-h1 resolve.noThink: keep"], tried: ["e1-h2 draw prose opener | draw | 3f2a | revert"], failures: ['[{"case":"x","component":"draw","evidence":"e","tag":"t"}]'] });
+const digest = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, runs: ["ab1"], decisions: ["- e1-h2 code draw fidelity: draw prose opener → revert: Rule F at look 48 (1-2-3)"], failures: ['[{"case":"x","component":"draw","evidence":"e","tag":"t"}]'] });
 check(tokensOf(digest) <= DIGEST.maxTokens, `the digest is ${tokensOf(digest)} tokens (> ${DIGEST.maxTokens})`);
 check(digest.length / 4 <= DIGEST.maxTokens, `the digest is over 40k tokens even at 4 characters a token`);
 check(!digest.includes(SECRET) && !heldCases.some((c) => digest.includes(c.id)), "the digest includes a held-out case");
 const at = (s) => digest.indexOf(s);
-check(at("# 1. Where the champion fails") === 0 && at("# 1.") < at("# 2. Candidate losses") && at("# 2.") < at("# 3. The champion's traces"), "the digest's sections are out of order");
-const s1 = digest.slice(0, at("# 2."));
-const s2 = digest.slice(at("# 2."), at("# 3."));
+check(at("# 1. Where the time to first drawing goes") === 0 && at("# 1.") < at("# 2. Where the champion fails") && at("# 2.") < at("# 3. Candidate losses") && at("# 3.") < at("# 4. Failure analysts") && at("# 4.") < at("# 5. Every decision so far"), "the digest's sections are out of order");
+const s1 = digest.slice(at("# 2."), at("# 3."));
+const s2 = digest.slice(at("# 3."), at("# 4."));
 check(/\(\+\d+ more not shown\)/.test(s1), "section 1 isn't cut to its budget (the synthetic bank is larger than it)");
 for (const want of ["driver rated", "miss check no", "miss check partly", "lost to the anchor at the last checkpoint", "empty send", "failed ops", "failed pictures"]) check(s1.includes(want), `section 1 has no '${want}'`);
 for (const by of ["By beat:", "By ask type:", "By start:", "By component:"]) check(s1.includes(by), `section 1 isn't grouped: no '${by}'`);
@@ -201,14 +201,14 @@ check(scores[0]?.[0] === worst && scores.every((x, i) => !i || x[1] <= scores[i 
 check(cpLost.every((c) => !scores.some(([id]) => id === c) || s1.includes(`${c} [`)), "a checkpoint loss is missing");
 check(s2.includes("LOST") && s2.indexOf("LOST") < s2.indexOf(" tie ") && /B's failed ops/.test(s2) && /judge: A kept/.test(s2) && /B's top spans/.test(s2) && /thinking A true B false/.test(s2) && /By persona:/.test(s2) && /By fixture:/.test(s2) && /differs in: draw/.test(s2), `section 2 lacks the candidate losses' fields: ${s2.slice(0, 400)}`);
 // 10 checkpoint cases + 40 decision cases (the 6 held-out ones never read).
-check(/Waiting on a slow answer only part of the work needs.*: 50 cases/.test(digest) && /First drawing by step/.test(digest) && digest.includes("# 7. Tried"), "section 3 (patterns, latency, tried) is missing");
+check(/Waiting on a slow answer only part of the work needs.*: 50 cases/.test(digest) && /First drawing by step/.test(digest) && digest.includes("# 5. Every decision so far") && digest.includes("e1-h2 code draw fidelity"), "the patterns, latency or decisions are missing");
 // First drawing's phases on the champion's 50 sends: the call starts at 3700, first text 800 ms later, the op 500 ms after.
 for (const want of ["over 50 champion sends", "before the drawing call (Jev, screenshots, the prompt): 3700 ms", "the drawing model's first text: 800 ms", "streamed after it (nothing is drawn before a whole line): 500 ms",
   "to the first drawing (paint, or a picture's strokes or a later op): 50 ms", "first drawing: 5050 ms (p90 5050); render per op: p50 0.9 ms", "draw · sonnet: first text 800 ms (p90 800), 200 tok/s, thought on"])
   check(digest.includes(want), `section 3's first drawing steps lack "${want}": ${digest.slice(digest.indexOf("First drawing by step"), digest.indexOf("First drawing by step") + 900)}`);
 writeMissDigest("champ", { run: "cp1", champion: "A" });
 writeLossDigest("ab1");
-check(existsSync(p.digest("champ")) && readFileSync(p.digest("champ"), "utf8").startsWith("# 1. Where the champion fails") && existsSync(join(p.run("ab1"), "digest.md")), "the digests weren't written to digests/<sha>.md and runs/<run>/digest.md");
+check(existsSync(p.digest("champ")) && readFileSync(p.digest("champ"), "utf8").startsWith("# 2. Where the champion fails") && existsSync(join(p.run("ab1"), "digest.md")), "the digests weren't written to digests/<sha>.md and runs/<run>/digest.md");
 const fd = failureDigest([...heldCases.slice(0, 3).map((c) => ({ case: c.id })), ...tuningCases.slice(0, 14).map((c) => ({ case: c.id })), { case: abCases[0].id, run: "ab1" }]);
 check((fd.match(/^## /gm) ?? []).length === DIGEST.failureCases && !fd.includes(SECRET), `the failure digest holds ${(fd.match(/^## /gm) ?? []).length} cases or a held-out one`);
 check(/draw reply \(first 30 lines\):\n(?:shape.*\n){30}(?!shape)/.test(fd) && /thinking: draw/.test(fd) && /miss check: no/.test(fd) && /resolver: "the header" → a/.test(fd), "the failure digest lacks the draw reply's first 30 lines, the miss check, the resolver or thinking");
@@ -328,11 +328,11 @@ check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["Rule F keep at look 48", "held-out: ttfd ×1.004 isn't faster"] })]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", codes: ["floor"], reasons: ["fidelity Z -0.80 < -0.5"] })]) === undefined, "G3's direction rule or a fidelity floor on a latency value pruned the values beyond it");
 check(/the sweep kept e5-h2a/.test(search.sweepSkip(sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "keep" } : c)), c2, []) ?? ""), "a keep doesn't end its sweep");
 const dec = (id, o) => ({ id, kind: "card", verdict: "revert", class: "Q", goal: "fidelity", reasons: ["Rule F at look 48"], counts: { wins: 20, losses: 15, ties: 13, exactTies: 0 }, looks: [{ n: 16 }, { n: 32 }, { n: 48 }], latency: { ttfc: { est: 1 }, ttd: { est: 1 }, ttfd: { est: 0.97 } }, card: { kind: "knob", component: "draw", change: id }, ...o });
-const near = search.nearWins([dec("w1"), dec("w2", { counts: { wins: 10, losses: 15, ties: 5 } }), dec("w3", { reasons: ["latency veto: ttfd ×1.1"] }), dec("w4", { class: "N" }), dec("w5", { goal: "latency", card: { kind: "code", component: "picture", change: "w5", metric: "ttfd" } }), dec("w6", { verdict: "keep" }),
-  dec("w7", { codes: ["heldout"], reasons: ["Rule F keep at look 48", "held-out: fidelity Z 0.00 doesn't lean"] }), dec("w8", { reasons: ["Rule F keep at look 32", "empty sends up 4.0 points"] }), dec("w9", { goal: "latency", reasons: ["fidelity Z -0.80 < -0.5"], card: { kind: "knob", component: "draw", change: "w9", metric: "ttfd" } })]);
-check(near.length === 2 && /^w5 /.test(near[0]) && /^w1 .*20-15-13 at look 48, first drawing ×0\.97/.test(near[1]), `near wins aren't the reverted cards that leaned the right way, newest first: ${near.join(" | ")}`);
-const nd = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, tried: ["e1-h2 draw prose opener | draw | 3f2a | revert"], nearWins: near });
-check(nd.includes("# 4. Near wins") && nd.indexOf("# 4. Near wins") < (nd.indexOf("# 7. Tried") >>> 0), "the analyst's digest lacks the near wins section, ahead of the tried index");
+// Every decision, newest first, with why it went the way it did (the tried index and the ledger said only "revert").
+const lines5 = decisionLines([dec("w1"), dec("w5", { goal: "latency", reasons: ["latency: ttfd ×0.97 (p slower 0.4, p faster 0.2)"], counts: { wins: 0, losses: 0, ties: 48 } }), { ...dec("o1"), kind: "owner-step" }]);
+check(lines5.length === 2 && /^- w5 .*latency: .* → revert: latency: ttfd ×0\.97 .*\(0-0-48, first drawing ×0\.970/.test(lines5[0]) && /^- w1 .* → revert: Rule F at look 48 \(20-15-13/.test(lines5[1]), `the decision lines: ${lines5.join(" | ")}`);
+const nd = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, decisions: lines5 });
+check(nd.includes("# 5. Every decision so far, newest first") && nd.indexOf("# 5.") > nd.indexOf("# 2. Where the champion fails"), "the analyst's digest lacks every decision, after the champion's misses");
 
 // ---- The engineer's canUseTool
 const repo = p.repo;
@@ -387,7 +387,7 @@ check(slow.result.stop === "minutes" && Date.now() - t0 < 4000, `the minute cap:
 await apiB.close();
 const apiC = await startFakeApi({ port: PORTS.fakeA, script: script("cards.json", [tool("Glob", { pattern: "*.md", path: tree }, 0), { content: [{ type: "text", text: `Here are the cards:\n\`\`\`json\n${JSON.stringify(cards)}\n\`\`\`` }] }]) });
 const good = await run(apiC, {});
-check(good.result.stop === "done" && good.cards.map((c) => c.id).join() === "h2,h5,h8,h1,h4,h6" && good.dropped.some((d) => /h3: kind bogus/.test(d)) && good.dropped.some((d) => /h7: over the 6-card limit/.test(d)), `the critic's cards: ${JSON.stringify({ cards: good.cards.map((c) => c.id), dropped: good.dropped, r: good.result })}`);
+check(good.result.stop === "done" && good.cards.map((c) => c.id).join() === "h1,h2,h4,h5,h6,h7" && good.dropped.some((d) => /h3: kind bogus/.test(d)) && good.dropped.some((d) => /h8: over the 6-card limit/.test(d)), `the critic's cards: ${JSON.stringify({ cards: good.cards.map((c) => c.id), dropped: good.dropped, r: good.result })}`);
 await apiC.close();
 const apiD = await startFakeApi({ port: PORTS.fakeA, script: script("engineer.json", [tool("Read", { file_path: "/etc/hostname" }, 0), tool("Write", { file_path: "src/core/x.ts", content: "export const x = 2;\n" }, 1), tool("Bash", { command: "npx tsc --noEmit" }, 2), tool("Read", { file_path: "src/core/x.ts" }, 3), { content: [{ type: "text", text: "Changed nothing: a check." }] }]) });
 const eng = await engineer({ run: "e1", token, mockApi: mockOf(apiD), card: card("h9", "code"), branch: "cand/e1-h9" });
@@ -405,7 +405,7 @@ check(an.includes('"hypotheses"') && apiF.requests.length === 2 && readMeter(p.c
 await apiF.close();
 for (const s of sessions) check(s.api.requests.length === sessions.filter((x) => x.api === s.api).reduce((a, x) => a + x.turns, 0), `a fake API got ${s.api.requests.length} requests for ${s.turns} turns`);
 const agentLines = readMeter(p.calls).filter((l) => l.agent);
-check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === "claude-sonnet-5-5" && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
+check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === (l.role === "analyst" ? "claude-opus-5-5" : "claude-sonnet-5-5") && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
 
 // ---- The failure analyst: one gateway call, on the gateway's token slot
 mkdirSync(join(home, "replies"));

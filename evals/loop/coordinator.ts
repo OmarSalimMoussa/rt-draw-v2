@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { canaryDue, runCanary } from "../judge/canary.ts";
 import { calibrationFile, variants } from "../judge/judge.ts";
 import * as agents from "../optimizer/agents.ts";
-import { analystDigest } from "../optimizer/digest.ts";
+import { analystDigest, decisionLines } from "../optimizer/digest.ts";
 import { cardOwnerReasons } from "../optimizer/gates.ts";
 import { harnessTag } from "./ab.ts";
 import { refresh } from "./bank.ts";
@@ -14,12 +14,12 @@ import type { StoredCheckpoint } from "./checkpoint.ts";
 import { CapReached, ask, gatewayStatus } from "./client.ts";
 import { LOOP, NOTIFY, WEEK_CHECK, configId } from "./config.ts";
 import type { DriveCtx } from "./drive.ts";
-import { commitHistory, historyAdd, historyRows, openHistory, ownerItem, recordMachine, triedIndex } from "./history.ts";
+import { commitHistory, historyAdd, historyRows, openHistory, ownerItem, recordMachine } from "./history.ts";
 import { heartbeat, onAC, refuseFactorySlice } from "./load.ts";
 import { readMeter, rollup } from "./meter.ts";
 import { paths } from "./paths.ts";
 import { appendLine, put, runFile } from "./record.ts";
-import { cardStates, nearWins, sweepSkip } from "./search.ts";
+import { cardStates, sweepSkip } from "./search.ts";
 import { type Facts, type Notice, RULES, type State, lock, newState, notices, readState, rules, saveState, stampNow } from "./state.ts";
 import type { SlotN } from "./tokens.ts";
 import { treeOf } from "./trees.ts";
@@ -198,15 +198,16 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
     "a cap on a picture's elements or colors (picture.maxPaths, picture.colors above 0): the owner ruled caps out",
     ...(!variants().illustrationsCalibrated ? ["a keep that switches the picture model (a picture.*Model knob): held for the owner until the judge is calibrated on illustrations"] : []),
   ];
+  const decisions = decisionLines(historyRows("decisions.jsonl") as DecisionRow[]);
   const digest = analystDigest({
     championSha: sha, checkpoint: ck, runs: st.lastRuns, wont, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
-    ledger: historyRows("decisions.jsonl").slice(-12).map((d) => `${d.id} ${d.card?.change ?? d.reasons[0]} → ${d.verdict}`), tried: triedIndex(), nearWins: nearWins(historyRows("decisions.jsonl") as DecisionRow[]),
+    decisions,
   });
   const tree = treeOf(sha);
   const analysis = await rte.engine().analyst({ run, token: await agents.slotToken(rte.tokens(), gw), digest, tree, mockApi: await rte.agentMock() });
   put(runFile(run, "analyst.json"), { text: analysis });
   const criticRun = `${st.stamp}-e${st.epoch}-critic`;
-  const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tried: triedIndex(), tree, mockApi: await rte.agentMock() });
+  const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tried: decisions, tree, mockApi: await rte.agentMock() });
   // Its answer as written, so a dropped or empty epoch can be read back.
   put(runFile(criticRun, "critic.json"), { text: r.result?.text ?? "", cards: r.cards.map((c) => c.id), dropped: r.dropped });
   if (r.dropped.length) rte.say(`critic: dropped ${r.dropped.join("; ")}`);

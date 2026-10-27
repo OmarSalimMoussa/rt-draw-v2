@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { readRows } from "../loop/metrics.ts";
 import { paths } from "../loop/paths.ts";
 import { caseDir, put, runFile } from "../loop/record.ts";
-import type { Arm, ArmResult, ArmTiming, CaseInfo, CaseInput, ChampionOutcome, Judged, Meant, Miss, Packet, Rating, Readings, RecordedReply, SpanJSON } from "../loop/types.ts";
+import type { Arm, ArmResult, ArmTiming, CaseInfo, CaseInput, ChampionOutcome, DecisionRow, Judged, Meant, Miss, Packet, Rating, Readings, RecordedReply, SpanJSON } from "../loop/types.ts";
 import { tracePatterns } from "./patterns.ts";
 
 /** Frozen numbers of the digests. */
@@ -16,8 +16,12 @@ export const DIGEST = {
   maxTokens: 40_000,
   /** Conservative: prose and JSON run 3.5–4.5 characters a token. */
   charsPerToken: 3.5,
-  /** Each section's share of maxTokens, in order: champion misses, candidate losses, the rest. */
-  share: { misses: 0.5, losses: 0.3, rest: 0.2 },
+  /**
+   * Each section's share of maxTokens: where first drawing's time goes, champion misses, candidate losses, and the
+   * failure analysts with every decision so far. Misses had half and decisions a tail end until 2026-10-27, when the
+   * digest's misses were 60% of it and its latency 2%, and 4 of era 3's 111 decisions fit in its tried list.
+   */
+  share: { time: 0.05, misses: 0.3, losses: 0.2, rest: 0.45 },
   /** Cases in a failure analyst's digest. */
   failureCases: 12,
   /** Lines of the draw reply a failure digest shows. */
@@ -136,7 +140,7 @@ export function missSection(championSha: string, checkpoint?: CheckpointRef, cha
   const hit = new Set(misses.map((m) => m.id));
   const n = (re: RegExp) => misses.filter((m) => m.why.some((w) => re.test(w))).length;
   const head = [
-    `# 1. Where the champion fails (tuning bank, champion ${championSha})`,
+    `# 2. Where the champion fails (tuning bank, champion ${championSha})`,
     `${misses.length} of ${cases.length} tuning cases miss: driver rating ≤ 2: ${n(/^driver rated/)}, miss check no or partly: ${n(/^miss check/)}, lost to the anchor at the last checkpoint: ${n(/^lost to/)}, empty: ${n(/^empty/)}, failed ops: ${n(/failed ops/)}, failed pictures: ${n(/failed pictures/)}.`,
     table("beat", cases.map((c) => ({ key: c.beat ?? "-", hit: hit.has(c.id) }))),
     table("ask type", cases.map((c) => ({ key: c.ask, hit: hit.has(c.id) }))),
@@ -278,33 +282,45 @@ function firstDrawingSteps(arms: ReturnType<typeof championArms>): string[] {
 export type DigestInput = {
   championSha: string;
   checkpoint?: CheckpointRef;
-  /** The last decisions' runs. */
+  /** The last decisions' runs: only the live A/Bs among them are read. */
   runs?: string[];
-  /** The failure analysts' answers, the ledger's one-liners, the tried index (title, component, diff hash, verdict). */
-  failures?: string[]; ledger?: string[]; tried?: string[];
+  /** The failure analysts' answers; every decision so far, newest first, with why (decisionLines). */
+  failures?: string[]; decisions?: string[];
   /** What the coordinator would drop unrun now (paused components, --quality-only, owner-only kinds). */
   wont?: string[];
-  /** Reverted cards that leaned the right way without proving it (run.ts' nearWins): to combine or retry. */
-  nearWins?: string[];
 };
 
-/** The analyst's input: champion misses first, then candidate losses, trace patterns, latency, failures, ledger, tried. */
+/**
+ * A run with live sends: a diffscan's (kind "scan") replays recorded replies in ~0.2 s and a G0 run has no cases, so
+ * neither says anything of latency or losses (in 9 of era 3's 17 digests, replays were 34–89% of the latency sample).
+ */
+const live = (run: string) => existsSync(runFile(run, "cases")) && read<{ kind?: string }>(runFile(run, "run.json"))?.kind !== "scan";
+
+/** One line per decided card, newest first: what it changed and why it went the way it did. */
+export function decisionLines(rows: DecisionRow[]): string[] {
+  return rows.filter((d) => d.kind === "card").reverse().map((d) => {
+    const lat = [d.latency?.ttfd && `first drawing ×${d.latency.ttfd.est.toFixed(3)}`, d.latency?.render && `render ×${d.latency.render.est.toFixed(3)}`].filter(Boolean).join(", ");
+    const n = d.affected ? `, ${d.affected.tuning} of ${d.affected.of} cases affected` : "";
+    return `- ${d.id} ${d.card?.kind ?? "-"} ${d.card?.component ?? "-"} ${d.goal}: ${cut(d.card?.change, 120)} → ${d.verdict}: ${cut(d.reasons[0] ?? "-", 160)} (${d.counts.wins}-${d.counts.losses}-${d.counts.ties}${lat ? `, ${lat}` : ""}${n})`;
+  });
+}
+
+/** The analyst's input: where first drawing's time goes, where the champion fails, candidate losses, failures, every decision. */
 export function analystDigest(o: DigestInput): string {
   const budget = (share: number) => DIGEST.maxTokens * share * DIGEST.charsPerToken;
-  const runs = o.runs ?? [];
-  const losses = runs.length
-    ? fit(["# 2. Candidate losses (the last decisions)"], runs.map((r) => lossSection(r, budget(DIGEST.share.losses) / runs.length - 20)), budget(DIGEST.share.losses))
-    : "# 2. Candidate losses (the last decisions)\nnone yet";
+  const runs = (o.runs ?? []).filter(live);
   const arms = championArms([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
   const report = Object.values(tracePatterns(arms)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
-  const rest = fit(["# 3. The champion's traces", "Patterns:", ...report, ...firstDrawingSteps(arms)],
-    [
-      ...(o.nearWins?.length ? ["# 4. Near wins (reverted, but leaning the right way: combine them in a combo card, or retry with what differs)", ...o.nearWins] : []),
-      ...(o.failures?.length ? ["# 5. Failure analysts", ...o.failures] : []), ...(o.ledger?.length ? ["# 6. Ledger", ...o.ledger] : []), ...(o.tried?.length ? ["# 7. Tried (don't repeat without saying what differs)", ...o.tried] : []),
-    ],
-    budget(DIGEST.share.rest));
+  const time = fit(["# 1. Where the time to first drawing goes (the champion's live sends)", ...firstDrawingSteps(arms), "Trace patterns:"], report, budget(DIGEST.share.time));
+  const losses = runs.length
+    ? fit(["# 3. Candidate losses (the last decisions)"], runs.map((r) => lossSection(r, budget(DIGEST.share.losses) / runs.length - 20)), budget(DIGEST.share.losses))
+    : "# 3. Candidate losses (the last decisions)\nnone yet";
+  const rest = fit([], [
+    ...(o.failures?.length ? ["# 4. Failure analysts", ...o.failures] : []),
+    ...(o.decisions?.length ? ["# 5. Every decision so far, newest first (don't repeat one without saying what differs)", ...o.decisions] : []),
+  ], budget(DIGEST.share.rest));
   const wont = o.wont?.length ? `# 0. What the loop won't run now (don't propose it)\n${o.wont.map((w) => `- ${w}`).join("\n")}` : undefined;
-  return [...(wont ? [wont] : []), missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
+  return [...(wont ? [wont] : []), time, missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
 }
 
 // ---- The failure analyst's digest: at most 12 cases in full

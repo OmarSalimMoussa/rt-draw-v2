@@ -35,7 +35,7 @@ export const LOOP = {
   // to sweepMax values, a combo one card of up to comboMax tried patches), and the near wins the digest lists.
   // A sweep's k values share one card's error (D3): each keeps past keepZ raised by z(1 − sweepAlpha/k) − z(1 − sweepAlpha),
   // sweepAlpha being Rule F's one-sided pass rate for a no-op at G2 (5.5% simulated), and a latency value on a p k times smaller.
-  search: { hypotheses: [8, 16], cards: 6, sweepMax: 4, comboMax: 3, nearWins: 8, pruneZ: -1.0, sweepAlpha: 0.055 },
+  search: { hypotheses: [4, 8], cards: 6, sweepMax: 4, comboMax: 3, pruneZ: -1.0, sweepAlpha: 0.055 },
   // renderUnmeasuredMax: past this share of a keep's cases without a render both engines could compare (a new shape
   // kind), the render veto can't speak for it: the owner's.
   workMin: 0.85, emptyRiseMax: 0.02, failedPicRiseMax: 0.02, renderUnmeasuredMax: 0.25,

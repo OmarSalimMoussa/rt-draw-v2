@@ -307,7 +307,6 @@ const head = H.recordDecision(d, { owner: ["3 failures in a row on draw"] });
 const patch = readFileSync(join(hist, "tried", "e1-h1.patch"), "utf8");
 check(d.verdict === "revert" && d.counts.exactTies === 48 && d.cost.listUsd === 1.5 && lines(join(hist, "decisions.jsonl")).at(-1).id === "e1-h1", `the card decision's row: ${JSON.stringify({ verdict: d.verdict, counts: d.counts, cost: d.cost })}`);
 check(/^rt-eval tried: e1-h1\ntitle: draw prose opener\ncomponent: draw\nverdict: revert/.test(patch) && patch.includes("diff --git a/src/app.ts") && patch.includes("candidate: resolve with fewer words"), `tried/e1-h1.patch isn't the format-patch under a card and verdict header:\n${patch.slice(0, 300)}`);
-check(H.triedIndex().some((l) => /^e1-h1 draw prose opener \| draw \| [0-9a-f]{12} \| revert$/.test(l)), `the tried index: ${H.triedIndex().join(" / ")}`);
 check(readFileSync(join(hist, "ledger.md"), "utf8").includes("## e1-h1 · draw · revert (Q, fidelity)") && /- \[ \] \d{4}-\d\d-\d\d: e1-h1: 3 failures in a row on draw/.test(readFileSync(join(hist, "owner-list.md"), "utf8")), "the ledger entry or the owner-list item is missing");
 check(json(join(hist, "runs", "e1-h1-g2.json")).rows.length === 16 && json(join(hist, "runs", "e1-h1-g2.json")).run.meter.calls === 40, "runs/<id>.json doesn't hold the run and its rows");
 check(head && git("-C", bare, "rev-parse", "eval/history") === head && !git("-C", hist, "status", "--porcelain"), "the decision's commit wasn't pushed to the branch's remote");
