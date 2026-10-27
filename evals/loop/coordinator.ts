@@ -375,10 +375,11 @@ export async function loop(rte: Rte) {
       // Starting afresh is the owner's word that what emptied the last epochs is dealt with (e85 and e86's agent bugs
       // stopped the next start before its seed cards ran); --resume keeps the count.
       st.emptyEpochs = 0;
-      if (typeof rte.o.f["seed-cards"] === "string") {
-        const seen = new Set([...historyRows("decisions.jsonl").map((d) => d.card?.id), ...st.queue.map((c) => c.id), ...st.cards.map((c) => c.card.id)]);
-        st.queue.push(...(JSON.parse(readFileSync(rte.o.f["seed-cards"], "utf8")) as HypothesisCard[]).filter((c) => !seen.has(c.id)));
-      }
+    }
+    // Seed cards queue on a resume too (a --resume once dropped them without a word); a card already queued or decided doesn't.
+    if (typeof rte.o.f["seed-cards"] === "string") {
+      const seen = new Set([...historyRows("decisions.jsonl").map((d) => d.card?.id), ...st.queue.map((c) => c.id), ...st.cards.map((c) => c.card.id)]);
+      st.queue.push(...(JSON.parse(readFileSync(rte.o.f["seed-cards"], "utf8")) as HypothesisCard[]).filter((c) => !seen.has(c.id)));
     }
     saveState(st);
     const every = Object.fromEntries(Object.entries(NOTIFY).map(([k, v]) => [k, rte.num(`notify-${k}`) ?? v])) as typeof leg.every;
