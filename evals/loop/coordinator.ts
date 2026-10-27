@@ -16,7 +16,7 @@ import { LOOP, NOTIFY, WEEK_CHECK, configId } from "./config.ts";
 import type { DriveCtx } from "./drive.ts";
 import { commitHistory, historyAdd, historyRows, openHistory, ownerItem, recordMachine } from "./history.ts";
 import { heartbeat, onAC, refuseFactorySlice } from "./load.ts";
-import { readMeter, rollup } from "./meter.ts";
+import { METER_ROTATE_BYTES, readMeter, rollup, rotateMeter } from "./meter.ts";
 import { paths } from "./paths.ts";
 import { appendLine, put, runFile } from "./record.ts";
 import { cardStates, sweepSkip } from "./search.ts";
@@ -50,6 +50,8 @@ class MeterTail {
   read(): this {
     if (!existsSync(this.file)) return this;
     const size = statSync(this.file).size;
+    // A meter moved aside (meter.ts rotateMeter) starts again from its first byte.
+    if (size < this.off) this.off = 0, this.rest = "";
     if (size <= this.off) return this;
     const buf = Buffer.alloc(size - this.off);
     const fd = openSync(this.file, "r");
@@ -397,6 +399,8 @@ export async function loop(rte: Rte) {
           if (await halt(rte, gw, st)) return;
           // After an owner step, a refresh or the canary: the rules (and the owner's notices) again before the next epoch.
           if (!st.cards.length && ((await between(rte, gw, st)), await halt(rte, gw, st))) return;
+          const moved = st.cards.length ? undefined : rotateMeter(paths().calls);
+          if (moved) rte.say(`loop: the meter moved aside to ${moved} (over ${METER_ROTATE_BYTES >> 20} MB)`);
           if (!(await epoch(rte, gw, st))) return;
         }
         if (st.keepsSinceCheckpoint > 0) await loopCheckpoint(rte, gw, st);

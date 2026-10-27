@@ -364,7 +364,14 @@ for (const h of homes) {
   const replies = readdirSync(join(h, "cache", "replies"));
   check(!replies.some((f) => secrets.some((t) => readFileSync(join(h, "cache", "replies", f), "utf8").includes(t))), `a token is in ${h}'s reply cache`);
 }
-const { rollup } = await import("../loop/meter.ts");
+const { rollup, rotateMeter } = await import("../loop/meter.ts");
+// A meter past its size moves aside whole and is kept (e101's loop died reading a 512 MB one into one string).
+const rot = mkdtempSync(join(tmpdir(), "rt-t5-rotate-"));
+writeFileSync(join(rot, "calls.jsonl"), '{"at":"x"}\n'.repeat(10));
+const small = rotateMeter(join(rot, "calls.jsonl"), new Date("2026-10-27T17:18:00Z"), 1000);
+const moved = rotateMeter(join(rot, "calls.jsonl"), new Date("2026-10-27T17:18:00Z"), 100);
+check(!small && moved === join(rot, "calls-2026-10-27T17-18-00-000Z.jsonl") && !existsSync(join(rot, "calls.jsonl")) && readFileSync(moved, "utf8").split("\n").length === 11,
+  `the meter's rotation: under the size ${small}, over it ${moved}`);
 const byRole = rollup(meterLines(), (l) => l.role);
 check(byRole.judge?.calls === 12 && byRole.judge.usd > 0 && byRole.judge.write1h === 0 && byRole.draw?.calls >= 3, `rollup by role: ${JSON.stringify(byRole.judge)}`);
 const live = meterLines().filter((l) => l.mode === "live" && l.shared !== "follower");
