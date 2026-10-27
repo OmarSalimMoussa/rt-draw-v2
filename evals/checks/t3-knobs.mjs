@@ -38,7 +38,7 @@ const LATER = { "draw.addHint": 1, "draw.addYes": 0.5, "draw.addWaitMs": 1500, "
 // change what a send asks or shows, at their T3-time behaviour: the comparisons with the code before T3 run under these,
 // since they're about T3's refactor, not later decisions.
 const T3_TIME = { "resolve.noThink": 0, "picture.maxPaths": 24, "picture.colors": 4, "resolve.engine": 0, "resolve.jevHints": 0, "resolve.speculate": 0, "draw.prompt": 0, "picture.prompt": 0,
-  "draw.addHint": 0, "picture.context": 0, "render.pictureBox": 0, "ops.waitForShape": 0 };
+  "draw.addHint": 0, "picture.context": 0, "render.pictureBox": 0, "ops.waitForShape": 0, "draw.thinkRouter": 0 };
 const OWNER_DEFAULTS = {
   "resolve.noThink": 1, // 2026-10-19: e2-h1, the resolver answers without thinking (TTFC ×0.66)
   "resolve.engine": 1, // 4420f45: Jev resolves references
@@ -47,6 +47,7 @@ const OWNER_DEFAULTS = {
   "picture.maxPaths": 0, "picture.colors": 0, // LOOP-V2.md B1: no caps on a picture's elements or colors
   "picture.prompt": 3, // LOOP-V2.md B1: detail matched to the ask
   "draw.prompt": 1, // LOOP-V2.md B2, B4, C1: the illustrated manual
+  "draw.thinkRouter": 1, "draw.thinkYes": 0.9, // e73-h2, the owner kept it 2026-10-27: Jev routes thinking at a 0.9 bar
 };
 // Fields of knobs from before T3 that changed since, as they were then.
 const T3_FIELDS = {

@@ -154,7 +154,7 @@ check(failed.r.via === "jev" && !failed.r.ids.length, `engine 1, every shape at 
 
 // ---- The think router: one question beside the resolver; "off" below draw.thinkYes, the model's choice above it.
 const typed = "move the clown left";
-const off = tune({ "draw.thinkRouter": 1, "draw.sendScreenshot": 0, "draw.sendRefs": 0 });
+const off = tune({ "draw.thinkRouter": 1, "draw.thinkYes": 0.5, "draw.sendScreenshot": 0, "draw.sendRefs": 0 });
 api.set({ jev: { think: 0.2 } });
 const j0 = jevReqs().length;
 const quick = await buildPrompt(scene, [], typed, off);
@@ -165,16 +165,16 @@ const deep = await buildPrompt(scene, [], typed, off);
 check(deep.thinking === undefined && deep.features.thinkP === 0.8, `the think router on a big ask: ${deep.thinking}, p ${deep.features.thinkP}`);
 const j1 = jevReqs().length;
 const plain = await buildPrompt(scene, [], typed, tune({ "draw.sendScreenshot": 0, "draw.sendRefs": 0 }));
-// The default asks Jev one thing beside the resolver, the add hint (draw.addHint, 4f0de87), never whether to think.
+// The default asks Jev whether to think (e73-h2, kept 2026-10-27) at a 0.9 bar: a send it rates 0.8 drafts straight away.
 const asked = jevReqs().slice(j1).map((r) => r.questions.join());
-check(plain.thinking === undefined && plain.features.thinkP === undefined && !asked.includes("think"), `the default asked Jev about thinking (${asked.join(" | ")})`);
+check(plain.thinking === "off" && plain.features.thinkP === 0.8 && asked.some((q) => q.split(",").includes("think")), `the default on a send Jev rates 0.8: ${plain.thinking}, p ${plain.features.thinkP}, asked ${asked.join(" | ")}`);
 
 // ---- resolve.speculate: the drawing call starts on Jev's guess, its ops held until the resolver answers; the same
 // prompt lets them land (one drawing call), another drops that call and draws again on the answer.
 // Speculation guesses only for Claude's resolver (resolve.engine 0): Jev alone has nothing to wait for. The fake resolver
 // answers a second late, as a live one does: answering at once (3 ms, before Jev's 90) drops a wrong guess's call
 // before its request goes out, so the call dropped in flight is never seen.
-const spec = tune({ "resolve.speculate": 1, "resolve.engine": 0, "resolve.jevHints": 0, "draw.addHint": 0, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
+const spec = tune({ "resolve.speculate": 1, "resolve.engine": 0, "resolve.jevHints": 0, "draw.addHint": 0, "draw.thinkRouter": 0, "draw.sendScreenshot": 0, "draw.fillPictures": 0 });
 const fresh = () => runScript(asPage(readFileSync(join(ROOT, "src/fixtures/clowns.ops.txt"), "utf8"), "page", "Home")).scene;
 const said = "make the clown with the balloon bigger";
 const draws = () => api.requests.filter((r) => r.role === "draw").length;
