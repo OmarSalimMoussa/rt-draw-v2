@@ -81,6 +81,7 @@ export const KNOBS: Knob[] = [
   K("ops.cellPx", 40, 10, 120, 5, "grid cell size for boxes written as cells (C2-J7)", "px"),
   B("ops.waitForShape", 1, "ops wait for their shape", "on: an op naming a shape a later line makes waits for that line, and fails only if the reply ends without it; off: it fails at once"),
 
+  B("ops.earlyAtBox", 1, "paint a shape once its box is closed", "on: a streaming shape() line is applied as a provisional new shape as soon as the comma after its id, kind and box arrives (the description quote need not be open), and each later closed style arg reapplies it in place; the finished line replaces it, a line that fails or is cut off takes it away"),
   B("ops.earlyShape", 1, "paint a shape before its description", "on: a streaming shape() line whose id, kind, box and styles are complete and whose description quote is still open is applied as a provisional new shape and painted; the finished line replaces it, a line that fails or is cut off takes it away (best with the style-first draw prompt, which writes the description last)"),
 
   // Speech: turning the mic into timed words (ElevenLabs Scribe).

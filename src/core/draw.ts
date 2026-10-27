@@ -279,20 +279,27 @@ async function runIn(ctx: TraceContext, scene: Scene, prompt: Prompt, t: Tuning,
   // ops.earlyShape: the id of the shape painted from a shape() line still being written. The line's own end (its
   // result, or a failure, or the reply cut off) takes it away first, so a line that fails leaves nothing behind.
   let early: string | undefined;
+  let earlyLine = "";
   const unearly = () => {
     if (early) scene.remove(early);
     early = undefined;
+    earlyLine = "";
   };
   const showEarly = () => {
-    if (!t["ops.earlyShape"] || early || dropped || held) return;
-    const op = earlyShape(scene, stream.pending());
-    if (!op) return;
+    const atBox = !!t["ops.earlyAtBox"];
+    if (!(t["ops.earlyShape"] || atBox) || (early && !atBox) || dropped || held) return;
+    // ops.earlyAtBox: each later closed arg reapplies the shape in place.
+    const op = earlyShape(scene, stream.pending(), atBox, early);
+    if (!op || op.line === earlyLine) return;
+    const again = !!early;
     try {
       applyOp(scene, op, opT);
     } catch {
       return;
     }
+    earlyLine = op.line;
     early = op.args.find((a) => !a.key)!.value;
+    if (again) return void spanSync(`early shape: ${early}`, ctx, () => onOp({ line: op.line, ok: true, ms: Math.round(performance.now() - t0) }), { ok: true, line: op.line });
     const ms = Math.round(performance.now() - t0);
     firstOpMs ??= ms;
     if (!marked) {

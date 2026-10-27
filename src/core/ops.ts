@@ -210,20 +210,38 @@ function idOf(scene: Scene, op: Op, id: string) {
  * (ops.earlyShape), as an op with the id for a stand-in description. Only a shape the line would add: an existing id,
  * a group or a page's name gives nothing, since those can't be taken back by removing the shape.
  */
-export function earlyShape(scene: Scene, pending: string): Op | undefined {
-  const m = /^\s*shape\s*\(([^"]*),\s*"[^"]*$/.exec(pending);
-  if (!m) return undefined;
+export function earlyShape(scene: Scene, pending: string, atBox = false, own?: string): Op | undefined {
+  let inner: string | undefined;
+  if (atBox) {
+    // ops.earlyAtBox: everything up to the last comma outside quotes is closed args; the open one after it is left out.
+    const head = /^\s*shape\s*\(/.exec(pending);
+    if (!head) return undefined;
+    let inQuote = false;
+    let last = -1;
+    for (let i = head[0].length; i < pending.length; i++) {
+      const c = pending[i];
+      if (inQuote) {
+        if (c === "\\") i++;
+        else if (c === '"') inQuote = false;
+      } else if (c === '"') inQuote = true;
+      else if (c === ",") last = i;
+      else if (c === ")") return undefined;
+    }
+    if (last < 0) return undefined;
+    inner = pending.slice(head[0].length, last);
+  } else inner = /^\s*shape\s*\(([^"]*),\s*"[^"]*$/.exec(pending)?.[1];
+  if (inner === undefined) return undefined;
   let args: Arg[];
   try {
-    args = splitArgs(m[1]);
+    args = splitArgs(inner);
   } catch {
     return undefined;
   }
   const pos = args.filter((a) => !a.key);
   const [id, ...rest] = pos.map((a) => a.value);
-  if (!id || scene.get(id) || scene.groups.has(id)) return undefined;
+  if (!id || (scene.get(id) && id !== own) || scene.groups.has(id)) return undefined;
   if (!rest.some((v) => KINDS.includes(v as Kind)) || !rest.some(looksLikeBox)) return undefined;
-  const op: Op = { name: "shape", args: [...args, { value: id, quoted: true }], line: pending };
+  const op: Op = { name: "shape", args: [...args, { value: id, quoted: true }], line: atBox ? `shape(${inner})` : pending };
   return idOf(scene, op, id) === id ? op : undefined;
 }
 
