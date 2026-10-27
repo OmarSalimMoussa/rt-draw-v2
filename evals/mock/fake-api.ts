@@ -15,7 +15,8 @@
 //   arms sending the same prompt get the same reply whatever their order.
 //   A reply "!limit", "!overload" or "!auth" fails that one request (429, 529, 401).
 // --script <file>: a JSON array of assistant turns [{content: [blocks], stop_reason?, usage?}],
-//   text and tool_use blocks; a request's turn is the number of assistant messages it carries.
+//   text and tool_use blocks; a request's turn is the number of assistant messages it carries; drop: n drops
+//   the connection mid-reply the first n times that turn is served.
 // POST /v1/systemone is a fake Jev (dev/jev.ts): each question's probability of yes is opts.jev[id],
 //   else opts.jev["*"] (default 0.1), after opts.jevMs (default 90); logged with role "jev" and the
 //   question ids, so checks can prove a Jev call never left the machine.
@@ -43,7 +44,7 @@ export type FakeOpts = {
   jev?: Record<string, number>; jevMs?: number;
 };
 export type FakeRequest = {
-  at: number; endAt?: number; path: string; model: string; mode: FakeMode; status: number; role?: string;
+  at: number; endAt?: number; path: string; model: string; mode: FakeMode; status: number; role?: string; dropped?: boolean;
   /** sha12 of each system block (Claude Code adds its own blocks before ours). */
   systemSha: string[]; ttls: string[]; beta: string; firstUser: string; thinking?: unknown; effort?: string; maxTokens?: number;
   images: number; assistantTurns: number;
@@ -57,7 +58,8 @@ const sha12 = (s: string) => createHash("sha256").update(s).digest("hex").slice(
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 type Block = { type: string; text?: string; cache_control?: { ttl?: string }; [k: string]: unknown };
 type Body = { model: string; system?: string | Block[]; messages: { role: string; content: string | Block[] }[]; thinking?: unknown; output_config?: { effort?: string }; max_tokens?: number };
-type Turn = { content: Block[]; stop_reason?: string; usage?: Record<string, number> };
+/** drop: the first `drop` times this turn is served, the connection drops after its first text (e89's analyst: ECONNRESET). */
+type Turn = { content: Block[]; stop_reason?: string; usage?: Record<string, number>; drop?: number };
 type Timed = { firstMs: number; restMs: number; chunks: number };
 
 /** Every cache_control TTL in the request ("5m" when unset: the API's default). */
@@ -85,6 +87,7 @@ export async function startFakeApi(opts: FakeOpts = {}) {
       replies.set(m[2], { role: m[1], texts: m[3] === "json" ? (JSON.parse(raw) as string[]) : [raw] });
     }
   const script: Turn[] = o.script ? JSON.parse(readFileSync(o.script, "utf8")) : [];
+  const dropped = new Map<number, number>();
   // Each role's own lines (a line's `from`, `<from>:off` for thinking off) when the request's role is known, else every line in turn.
   const timings = new Map<string, Timed[]>([["*", []]]);
   if (o.latency && existsSync(o.latency))
@@ -169,6 +172,11 @@ export async function startFakeApi(opts: FakeOpts = {}) {
         for (let at = 0; at < text.length || at === 0; at += size) {
           if (at) await sleep(timed ? timed.restMs / parts : slow ? o.chunkMs! : 0);
           ev("content_block_delta", { index: i, delta: { type: "text_delta", text: text.slice(at, at + size) } });
+          if (script.length && (turn.drop ?? 0) > (dropped.get(rec.assistantTurns) ?? 0)) {
+            dropped.set(rec.assistantTurns, (dropped.get(rec.assistantTurns) ?? 0) + 1);
+            rec.dropped = true;
+            return void res.socket?.destroy();
+          }
           if (!text) break;
         }
         outTokens += Math.ceil(text.length / 4);

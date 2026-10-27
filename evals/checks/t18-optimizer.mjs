@@ -421,6 +421,12 @@ await apiF.close();
 for (const s of sessions) check(s.api.requests.length === sessions.filter((x) => x.api === s.api).reduce((a, x) => a + x.turns, 0), `a fake API got ${s.api.requests.length} requests for ${s.turns} turns`);
 const agentLines = readMeter(p.calls).filter((l) => l.agent);
 check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === (l.role === "analyst" ? "claude-opus-5-5" : "claude-sonnet-5-5") && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
+// A connection dropped mid-reply ends the session on an "API Error" answer (e89's analyst: ECONNRESET, so its critic read
+// that as the analysis and the epoch had no cards): the session runs once more.
+const apiG = await startFakeApi({ port: PORTS.fakeA, script: script("analyst-drop.json", [{ content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "shot"}]}' }], drop: 3 }]) });
+const anG = await analyst({ run: "e1", token, mockApi: mockOf(apiG), digest: "d", tree });
+check(anG.includes('"shot"') && apiG.requests.filter((r) => r.dropped).length === 3, `after a dropped connection the analyst answered ${anG.slice(0, 160)} (${apiG.requests.length} requests, ${apiG.requests.filter((r) => r.dropped).length} dropped)`);
+await apiG.close();
 
 // ---- The failure analyst: one gateway call, on the gateway's token slot
 mkdirSync(join(home, "replies"));

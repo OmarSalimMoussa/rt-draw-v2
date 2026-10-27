@@ -124,8 +124,21 @@ function rateLimitOf(i: Record<string, unknown>): RateLimit {
   return { status: String(i.status), fiveHour: w.five_hour?.utilization ?? own("five_hour"), sevenDay: w.seven_day?.utilization ?? own("seven_day"), resetsAt: w.five_hour?.resetsAt ?? (i.resetsAt as number | undefined) };
 }
 
-/** One capped agent session; its meter line is written however it ends. */
+/**
+ * One capped agent session, run once more when an API error ended it: a connection dropped past the CLI's own retries
+ * (e89's analyst, ECONNRESET) answers "API Error: …", which its critic read as the analysis, proposing nothing. Twice,
+ * there's no answer. Each session writes its meter line however it ends.
+ */
 export async function runAgent(a: AgentRun): Promise<AgentResult> {
+  const first = await session(a);
+  if (!apiError(first)) return first;
+  const r = await session(a);
+  const both = { ...r, usd: first.usd + r.usd, turns: first.turns + r.turns, minutes: first.minutes + r.minutes, denied: [...first.denied, ...r.denied] };
+  return apiError(r) ? { ...both, text: "", stop: "error", error: r.text.trim().slice(0, 300) } : both;
+}
+const apiError = (r: AgentResult) => /^API Error\b/.test(r.text.trim());
+
+async function session(a: AgentRun): Promise<AgentResult> {
   const p = paths();
   const t0 = Date.now();
   const r: AgentResult = { text: "", stop: "done", turns: 0, minutes: 0, usd: 0, denied: [] };
