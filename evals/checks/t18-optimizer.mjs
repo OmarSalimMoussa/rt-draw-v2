@@ -78,6 +78,9 @@ for (const [file, added, removed] of [["src/core/render.ts", ["    roughness: 0,
   check(verdict(diff(file, added, removed)).verdict === "owner", `a crisp outline in ${file} isn't an owner-list item: ${verdict(diff(file, added, removed)).reasons}`);
 check(verdict(diff("src/core/render.ts", [`${KNOB} // the shape's own style first`], [KNOB])).verdict === "pass", "a render edit that keeps the knob read isn't passed");
 check(verdict(diff("src/core/prompts.ts", ["When the ink is a rough box, fill that box with the shape it stands for."], [])).verdict === "pass", "a prompt line about the user's rough ink is held as a look change");
+check(verdict(diff("src/core/prompts.ts", ['<circle cx="60" cy="60" r="34" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>'], [])).verdict === "pass"
+  && verdict(diff("src/core/prompts.ts", ["Draw every outline at a thinner stroke width so the page reads clean."], [])).verdict === "owner"
+  && verdict(diff("src/core/prompts.ts", ["Set strokeWidth=1 on every shape."], [])).verdict === "owner", "an SVG element's stroke-width (the picture prompt's own) is held, or an op's stroke width asked for isn't");
 // No caps on a picture's elements or colors (LOOP-V2.md B1): setting one is a reject, taking one off passes.
 const capLine = (v) => `  K("picture.colors", ${v}, 0, 10, 1, "and at most this many colors (0: as many as it needs)"),`;
 check(verdict(diff("src/core/tuning.ts", [capLine(4)], [capLine(0)])).verdict === "reject", `a picture colour cap isn't refused: ${verdict(diff("src/core/tuning.ts", [capLine(4)], [capLine(0)])).reasons}`);

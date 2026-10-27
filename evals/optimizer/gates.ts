@@ -185,8 +185,9 @@ const OUTLINE_SET = /\b(roughness|strokeWidth)\s*(:|=(?!=))/;
  * and INK can't be redefined or dropped, no text gets a font of its own (the grid labels' monospace aside), and these go
  * to the owner (a crisp page could win the craft judge): a hand-drawn knob set under 0.8× today's value, an outline's
  * roughness or width set in render.ts, picture.ts or ops.ts other than from its knob, a dropped read of one of those knobs, and
- * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape). The word itself: "a rough
- * box" is the user's ink (e80-h3's false hold), and every true one in history named roughness or stroke-width.
+ * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape, as `roughness` and
+ * `strokeWidth`). The words themselves: "a rough box" is the user's ink (e80-h3's false hold), and SVG's `stroke-width`
+ * is what the picture prompt already asks of every element (e83-h3 held for copying its examples into the draw prompt).
  */
 export function lookGate(files: FileDiff[]): Finding[] {
   const out: Finding[] = [];
@@ -208,7 +209,7 @@ export function lookGate(files: FileDiff[]): Finding[] {
   const reads = (ls: string[]) => ls.filter(knobRead).length;
   if (reads(core.flatMap((f) => f.added)) < reads(core.flatMap((f) => f.removed))) out.push({ verdict: "owner", why: `a read of ${HAND_DRAWN.join(", ")} dropped: how hand-drawn the page looks is the owner's` });
   for (const l of files.find((f) => f.path === "src/core/prompts.ts")?.added ?? [])
-    if (/roughness|stroke.?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
+    if (/roughness|stroke ?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
   // More effects added than removed: moving or re-indenting today's (render.ts' fade filter) isn't a new one.
   for (const f of files.filter((x) => x.path.startsWith("src/") && !/\.test\.tsx?$/.test(x.path))) {
     const n = (ls: string[]) => ls.reduce((a, l) => a + effectsIn(l).length, 0);

@@ -196,6 +196,8 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
     ...(!hasU1() ? ["cards on the ink readers (marks, arrow, hit, link): no U1 set to check them on, they go to the owner"] : []),
     "patch knobs and frozen areas: they go to the owner unmeasured",
     "a cap on a picture's elements or colors (picture.maxPaths, picture.colors above 0): the owner ruled caps out",
+    // e78-h5 and e82-h6 read as no effect at 0 calls: a scan answers no warm-up, and live, a shared call erases a pool's depth.
+    "a deeper or earlier warm pool (more warmModel calls): every case is warmed before it's timed and both arms share identical calls, so the A/B can't see it; the owner's to try on prod",
     ...(!variants().illustrationsCalibrated ? ["a keep that switches the picture model (a picture.*Model knob): held for the owner until the judge is calibrated on illustrations"] : []),
   ];
   const decisions = decisionLines(historyRows("decisions.jsonl") as DecisionRow[]);

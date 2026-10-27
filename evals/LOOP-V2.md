@@ -182,6 +182,10 @@ its fixes. Each is a number or a step that would have changed a recorded decisio
 | G3's veto at fidelity Z −1.0, direction from 8 held-out cases | d-cand-e70-h1 (TTFD ×0.862, held-out Z −1.15) and d-cand-e80-h3 (G2 Z 1.97, held-out −0.63 on 13 cases; 1.50 pooled) | Veto at −1.645, direction from 16 (`LOOP.heldoutVetoZ`, `heldoutConfirmMin`) |
 | A hedge decided at 0 calls | e74-h2, e76-h1 and e76-h2 (`draw.copies`, `picture.copies`) read as no effect: a copy answers nothing in a scan | Measured live on every scanned case (`decide.ts` `hedgeScan`) |
 | 30 min of measuring a decision | The slowest 80-case decision took 10 min; 160 doubles it | 45 (`RULES.decisionMaxMin`) |
+| A decision recorded once per id | d-cand-e80-h3 decided again on fresh cases went unrecorded | Once per run (`decide.ts` `record`) |
+| A variant card's knob left to its engineer | e83-h4 wrote prompt variant 3 and kept the old default: B ran today's text, "no effect" at 0 calls (e25-h1 and e25-h2 likely too) | A built card's knobs are applied to its tree (`build`) |
+| The look gate on any "stroke-width" in a prompt | e83-h3 held for the picture prompt's own SVG examples copied into the draw prompt | Op words only: roughness, stroke width, strokeWidth (`gates.ts`) |
+| Warm-pool cards proposed | e78-h5 and e82-h6: every case is warmed before it's timed and the arms share identical calls, so no A/B can see a pool's depth | The analyst is told up front; the owner's to try on prod |
 
 The latency rule keeps its looks to 80: another look at p < 0.10 would add false keeps. Left as they were: the
 look-16 latency stop (10 cards, all with medians ×1.001–1.052; removing it moved simulated keep rates ≤ 2 points) and

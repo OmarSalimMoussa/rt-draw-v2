@@ -317,8 +317,11 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
         }
       } else built = await engineer();
       if (!built) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
-      if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     }
+    // A card's knobs are what B runs, on a branch built now or before: an engineer that wrote prompt variant 3 but left
+    // its default (e83-h4's {"draw.prompt": 3}) had B run today's text, read as no effect at 0 calls. Set, it's a no-op.
+    if (c.card.kind !== "knob" && Object.keys(c.card.knobs ?? {}).length) applyKnobs(wt, c.card.knobs!);
+    if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
   } catch (err) {
     rte.say(`${c.id}: not built: ${msg(err)}`);
