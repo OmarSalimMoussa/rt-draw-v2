@@ -173,7 +173,9 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   return rte.withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
     // G1: the diffscan at 0 calls (a finished scan is read back on resume).
     const scanRun = run("scan");
-    const sc = hedgeScan(c.card, maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) })));
+    // Knobs a code card adds or moves in tuning.ts, as its own knobs are: e88-h3's jev.copies came that way.
+    const moved = [...git(p.repo, "diff", base, cand, "--", "src/core/tuning.ts").matchAll(/^\+\s*K\("([\w.]+)"/gm)].map((m) => m[1]);
+    const sc = hedgeScan(c.card, maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) })), moved);
     const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? [])];
     Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
     if (rte.o.f["quality-only"] && sc.class === "S") {
@@ -282,8 +284,8 @@ async function freeSlot(rte: Rte, gw: string): Promise<Token | undefined> {
  * were decided at 0 calls that way. It goes live on every scanned case, none from the cache: each arm's first call is
  * one shared live call, B's copies fresh ones, and the first to stream wins.
  */
-export function hedgeScan(card: HypothesisCard, sc: ScanResult): ScanResult {
-  const hedge = Object.keys(card.knobs ?? {}).some((k) => /\.(copies|copyAfterMs)$/.test(k));
+export function hedgeScan(card: HypothesisCard, sc: ScanResult, moved: string[] = []): ScanResult {
+  const hedge = [...Object.keys(card.knobs ?? {}), ...moved].some((k) => /\.(copies|copyAfterMs)$/.test(k));
   if (!hedge || (sc.class !== "N" && sc.class !== "S")) return sc;
   const affected: ScanResult["affected"] = {};
   for (const x of sc.cases) (affected[x.set] ??= []).push(x.case);

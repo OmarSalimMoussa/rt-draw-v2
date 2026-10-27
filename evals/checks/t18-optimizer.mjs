@@ -317,7 +317,8 @@ const { hedgeScan } = await import("../loop/decide.ts");
 const scanned = { run: "s", class: "N", mismatch: false, cases: [{ case: "c1", set: "tuning", affected: false }, { case: "c2", set: "heldout-gate", affected: false }], affected: {}, cached: ["h1"] };
 const hedged = hedgeScan({ knobs: { "draw.copies": 2 } }, scanned);
 check(hedged.class === "Q" && hedged.affected.tuning?.join() === "c1" && hedged.affected["heldout-gate"]?.join() === "c2" && !hedged.cached.length
-  && hedgeScan({ knobs: { "draw.thinkYes": 0.8 } }, scanned) === scanned && hedgeScan({ knobs: { "picture.copyAfterMs": 400 } }, { ...scanned, class: "Q" }).cached.length === 1,
+  && hedgeScan({ knobs: { "draw.thinkYes": 0.8 } }, scanned) === scanned && hedgeScan({ knobs: { "picture.copyAfterMs": 400 } }, { ...scanned, class: "Q" }).cached.length === 1
+  && hedgeScan({ kind: "code" }, scanned, ["jev.copies"]).class === "Q" && hedgeScan({ kind: "code" }, scanned, ["jev.model"]) === scanned,
   `a hedge card isn't measured live on every scanned case, or another card is: ${JSON.stringify(hedged)}`);
 const [a, b, c2] = sw.cards.filter((c) => c.sweep);
 const row = (id, verdict, looks, o = {}) => ({ id, verdict, class: "Q", reasons: [`Rule F at look ${16 * looks}`], looks: Array.from({ length: looks }, () => ({ n: 16, decisive: 10, z: -1.5 })), ...o });
