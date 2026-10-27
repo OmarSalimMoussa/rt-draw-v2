@@ -207,7 +207,7 @@ export const KNOBS: Knob[] = [
   K("board.overviewWidthPx", 1280, 320, 2000, 32, "width of the whole-board picture", "px"),
   K("board.markPadFrac", 0.3, 0, 3, 0.05, "a close-up shows this much around its mark, as a share of the mark's size"),
   K("board.markMinViewPx", 480, 100, 2000, 20, "a close-up shows at least this much of the board across", "px"),
-  K("board.markZoomFrac", 0.6, 0.2, 1, 0.05, "skip a close-up unless it's at most this share of the camera's width (zoomed in enough to add something)"),
+  K("board.markZoomFrac", 0.35, 0.2, 1, 0.05, "skip a close-up unless it's at most this share of the camera's width (zoomed in enough to add something)"),
   K("board.linkSnapPx", 60, 0, 200, 5, "an arrow end this close to a page counts as on it, for links", "px"),
   K("board.mapDepth", 2, 0, 5, 1, "site map: levels of each page's content listed (0: pages and links only)"),
   K("board.mapWords", 10, 0, 40, 1, "site map: words of each shape's description (0: ids only)"),
