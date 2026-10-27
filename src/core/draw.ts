@@ -131,13 +131,17 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
     const said = typeof words === "string" ? (words.trim() ? typedWords(words, marks) : []) : words;
     const r0t = performance.now();
     // Which shapes the words and ink mean: one more model call unless the ink settles it.
-    const refsCall = t["draw.sendRefs"] && (marks.length || said.length) ? span("resolve references", ctx, (rctx) => resolve(said, strokes, marks, scene, hits, t, "draw-refs", rctx)) : undefined;
+    // A board that is one empty page: nothing to resolve or route, so no Jev call waits before the drawing call.
+    const blank = !!t["draw.emptyBoardFast"] && scene.shapes.size === 1 && pagesOf(scene).length === 1;
+    const refsCall = !blank && t["draw.sendRefs"] && (marks.length || said.length) ? span("resolve references", ctx, (rctx) => resolve(said, strokes, marks, scene, hits, t, "draw-refs", rctx)) : undefined;
     let resolveMs = 0;
     const resolved = refsCall?.then((r) => ((resolveMs = Math.round(performance.now() - r0t)), r));
     // Whether the drawing model may think on this send: Jev's one question, alongside the resolver (a failed call leaves it to draw.noThink).
-    const thinkCall = t["draw.thinkRouter"] ? span("decide thinking", ctx, (dctx) => needsThought(scene, transcript, readings, t, dctx)).catch(() => undefined) : undefined;
+    const thinkCall = !blank && t["draw.thinkRouter"] ? span("decide thinking", ctx, (dctx) => needsThought(scene, transcript, readings, t, dctx)).catch(() => undefined) : undefined;
     // Whether the send asks for something new: Jev's one question beside the resolver (a failed or late call leaves the text unchanged).
-    const addCall = t["draw.addHint"]
+    const addCall = blank && t["draw.addHint"]
+      ? Promise.resolve(1)
+      : t["draw.addHint"]
       ? span("decide add", ctx, (dctx) => Promise.race([asksForNew(scene, transcript, readings, t, dctx), new Promise<undefined>((res) => setTimeout(res, t["draw.addWaitMs"]))])).catch(() => undefined)
       : undefined;
     const shotCall = t["draw.sendScreenshot"] && !camera
@@ -205,7 +209,7 @@ export async function buildPrompt(scene: Scene, strokes: Stroke[], words: Word[]
         transcript,
         refs,
         sketches: marks.filter((_, i) => readings[i].kind === "sketch").flatMap((m) => m.strokes),
-        thinking: thinkP !== undefined && thinkP < t["draw.thinkYes"] ? "off" : undefined,
+        thinking: blank || (thinkP !== undefined && thinkP < t["draw.thinkYes"]) ? "off" : undefined,
         features: {
           thinkP,
           marksSent: t["draw.sendMarks"] && marks.length ? marks.length : 0, refs: refs ? refs.via : "off", resolveMs, chars: system.length + user.length, imageTokens, shapes: scene.shapes.size, marks: marks.length, idMap: idMap.length, ops: ops ? ops.split("\n").length : 0, screenshot: pictures.length ? 1 : 0, grid: cell,

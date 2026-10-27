@@ -162,6 +162,7 @@ export const KNOBS: Knob[] = [
   K("draw.thinkYes", 0.9, 0.05, 0.95, 0.05, "with draw.thinkRouter: the drawing model may think when Jev's probability that the send needs it is at or above this"),
   K("draw.thinkJevModel", 0, 0, 1, 1, "with draw.thinkRouter: the Jev version (0 jev-1.13.0, 1 jev-latest)"),
   B("draw.addHint", 1, "short-description warning on add asks", "on: Jev answers beside the resolver whether the person asks for something new to be added or built, and on yes the drawing model's user text (never its system prompt) ends with a line that every shape() description needs at least 6 words; a failed or late Jev call leaves the text unchanged"),
+  B("draw.emptyBoardFast", 1, "no Jev calls on a blank board", "on: when the board is one page and nothing else, the drawing prompt skips the resolver, the thinking router and the add question (no references, the add line is always added, thinking stays at the default) so it waits only for its pictures"),
   K("draw.addYes", 0.5, 0.05, 0.95, 0.05, "with draw.addHint: the line is added when Jev's probability that the send asks for something new is at or above this"),
   K("draw.addWaitMs", 1500, 100, 5000, 100, "with draw.addHint: Jev's answer later than this is dropped (no line)", "ms"),
   K("draw.copies", 1, 1, 3, 1, "copies of the drawing call sent at once: the API's wait before the first text varies from call to call, so the first copy to stream is kept and the others are dropped (each copy pays its input)"),
