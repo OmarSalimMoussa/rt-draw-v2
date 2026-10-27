@@ -318,10 +318,8 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
       } else built = await engineer();
       if (!built) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
     }
-    // A card's knobs are what B runs, on a branch built now or before: an engineer that wrote prompt variant 3 but left
-    // its default (e83-h4's {"draw.prompt": 3}) had B run today's text, read as no effect at 0 calls. Set, it's a no-op.
-    if (c.card.kind !== "knob" && Object.keys(c.card.knobs ?? {}).length) applyKnobs(wt, c.card.knobs!);
     if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
+    knobbed(c);
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
   } catch (err) {
     rte.say(`${c.id}: not built: ${msg(err)}`);
@@ -331,7 +329,29 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
 }
 
 /** The candidate on top of today's champion (a keep moved it); a conflict rebuilds it once (the engineer once more). */
+/**
+ * A card's knobs are what B runs, on a branch built now or before (a resumed card, `rte decide --card`): an engineer
+ * that wrote prompt variant 3 but left its default (e83-h4's {"draw.prompt": 3}), or a new knob at 0 (e83-h3's
+ * draw.inlinePictures), had B run today's behaviour, read as no effect at 0 calls. Already set, it changes nothing.
+ */
+function knobbed(c: CardState) {
+  if (c.card.kind === "knob" || !Object.keys(c.card.knobs ?? {}).length) return;
+  const wt = worktreeOf(c.branch);
+  applyKnobs(wt, c.card.knobs!);
+  if (!git(wt, "status", "--porcelain")) return;
+  commitAll(wt, `${c.id}: its card's knobs set, ${JSON.stringify(c.card.knobs)}`);
+  c.cand = git(wt, "rev-parse", "HEAD");
+}
+
 export async function rebased(rte: Rte, gw: string, st: State, c: CardState): Promise<boolean> {
+  try {
+    knobbed(c);
+  } catch (err) {
+    rte.say(`${c.id}: not built: ${msg(err)}`);
+    c.status = "dropped";
+    saveState(st);
+    return false;
+  }
   const champ = championSha();
   if (isAncestor(champ, c.cand!)) return true;
   const wt = worktreeOf(c.branch);

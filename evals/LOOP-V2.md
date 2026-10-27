@@ -183,7 +183,7 @@ its fixes. Each is a number or a step that would have changed a recorded decisio
 | A hedge decided at 0 calls | e74-h2, e76-h1 and e76-h2 (`draw.copies`, `picture.copies`) read as no effect: a copy answers nothing in a scan | Measured live on every scanned case (`decide.ts` `hedgeScan`) |
 | 30 min of measuring a decision | The slowest 80-case decision took 10 min; 160 doubles it | 45 (`RULES.decisionMaxMin`) |
 | A decision recorded once per id | d-cand-e80-h3 decided again on fresh cases went unrecorded | Once per run (`decide.ts` `record`) |
-| A variant card's knob left to its engineer | e83-h4 wrote prompt variant 3 and kept the old default: B ran today's text, "no effect" at 0 calls (e25-h1 and e25-h2 likely too) | A built card's knobs are applied to its tree (`build`) |
+| A variant or code card's knob left to its engineer | e83-h4 wrote prompt variant 3 and kept the old default, B running today's text: "no effect" at 0 calls (e25-h1 and e25-h2 likely too); e83-h3's new knob stayed at 0 | A card's knobs are set on its branch before every decision (`decide.ts` `knobbed`) |
 | The look gate on any "stroke-width" in a prompt | e83-h3 held for the picture prompt's own SVG examples copied into the draw prompt | Op words only: roughness, stroke width, strokeWidth (`gates.ts`) |
 | Warm-pool cards proposed | e78-h5 and e82-h6: every case is warmed before it's timed and the arms share identical calls, so no A/B can see a pool's depth | The analyst is told up front; the owner's to try on prod |
 
