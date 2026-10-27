@@ -148,10 +148,11 @@ export async function fakeLoop({ port, slots = 2 }) {
       roles.add(c.role);
       // Jev's yes/no calls (the resolver, the add hint), which the scan asked the fake API live, are banked as an empty
       // answer (no one is a yes), the add hint's 600 ms late, so draw.addWaitMs is a pure schedule change (the scheduling
-      // tweak below).
+      // tweak below). The think router's is banked as it was answered: an empty answer would flip its choice (thinking
+      // off below draw.thinkYes), and with it the drawing request the bank holds.
       const slow = c.role === "draw-add" ? 600 : 30;
       const got = c.cacheFile ? json(p.reply(c.cacheFile.replace(/\.json$/, ""))) : undefined;
-      const src = got && !/^jev-/.test(got.request?.model ?? "") ? got : { text: "{}", chunks: [{ ms: slow, text: "{}" }], doneMs: slow + 10, stats: {}, request: {} };
+      const src = got && (!/^jev-/.test(got.request?.model ?? "") || c.role === "draw-think") ? got : { text: "{}", chunks: [{ ms: slow, text: "{}" }], doneMs: slow + 10, stats: {}, request: {} };
       put(p.reply(c.reqHash), { ...src, reqHash: c.reqHash, run: "bank", role: c.role });
       return { ...c, cacheFile: `${c.reqHash}.json`, offsets: src.chunks.map((x) => x.ms) };
     });
