@@ -25,8 +25,10 @@ import { ANALYST_SYSTEM, CRITIC_SYSTEM, ENGINEER_SYSTEM, FAILURE_SYSTEM } from "
 
 export type Caps = { turns: number; minutes: number; usd: number };
 /** Frozen per-session caps (§8.2). */
-export const CAPS = { analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } } satisfies Record<string, Caps>;
-/** Each role's model: the analyst's ideas decide what the loop measures, and its session costs little next to an epoch's measuring (~$0.3 against ~$13 on Sonnet). */
+// The analyst on Opus (4413f10) took $1.5 to $2.6, 16 to 29 turns and up to 11 minutes on 2026-10-27: e90's hit its
+// $2.5 cap before it answered, so its critic had the digest alone. Its caps are Opus's.
+export const CAPS = { analyst: { turns: 60, minutes: 25, usd: 8 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } } satisfies Record<string, Caps>;
+/** Each role's model: the analyst's ideas decide what the loop measures, and its session costs little next to an epoch's measuring (~$2 on Opus against ~$15). */
 const MODELS: Record<string, string> = { analyst: MODEL_IDS.opus, critic: MODEL_IDS.sonnet, engineer: MODEL_IDS.sonnet };
 const WEB = ["WebSearch", "WebFetch"];
 const TOOLS = { analyst: ["Read", "Grep", "Glob", ...WEB], critic: ["Read", "Grep", "Glob", ...WEB], engineer: ["Read", "Edit", "Write", "Grep", "Glob", "Bash", ...WEB] };

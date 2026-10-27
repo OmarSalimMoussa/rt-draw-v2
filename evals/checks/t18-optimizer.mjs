@@ -368,7 +368,7 @@ for (const cmd of ["npx tsc --noEmit", "./node_modules/.bin/tsc --noEmit && curl
 for (const cmd of ["./node_modules/.bin/tsc --noEmit", "git diff", "git status", "git diff --stat src/core/x.ts", "node --permission --allow-fs-read=. --import ./evals/loop/node-hooks.mjs scripts/tune.ts sets/marks.json --parts marks,arrow"])
   check(await allowed("Bash", { command: cmd }), `the engineer may not run ${cmd}`);
 check(BASH_ALLOW.some((re) => re.test("./node_modules/.bin/tsc --noEmit")) && !BASH_ALLOW.some((re) => /npx/.test(re.source)), "the allowlist isn't tsc without npx");
-check(JSON.stringify(CAPS) === JSON.stringify({ analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } }), `CAPS ${JSON.stringify(CAPS)}`);
+check(JSON.stringify(CAPS) === JSON.stringify({ analyst: { turns: 60, minutes: 25, usd: 8 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } }), `CAPS ${JSON.stringify(CAPS)}`);
 
 // ---- Agents on the fake API: the turn, $ and minute caps, cards, refused tools
 const token = { slot: 1, token: "sk-ant-oat01-fake-t18" };
