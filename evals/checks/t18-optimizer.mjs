@@ -172,6 +172,9 @@ const armFiles = (run, c, a, failedOps) => {
   put(join(d, "result.json"), { ops: [{ line: "shape(h, rect)", ok: true, ms: 10 }, ...(failedOps ? [{ line: "shape(x, blob)", ok: false, error: "unknown kind blob", ms: 20 }] : [])], reply: "shape(h, rect)", stopReasons: [], calls: [{ role: "draw", reqHash: a === "A" ? "d1" : "d2", shared: "-", mode: "live", ms: 5000, thinkingTokens: 10 }, { role: "draw-refs", reqHash: "r1", shared: "leader", mode: "live", ms: 3000 }] });
   put(join(d, "timing.json"), { enterAt: 0, ttfcMs: 1200, ttdMs: 6000, ttfdMs: 5050, renderP50Ms: 0.9, firstTextMs: 900, resolverMs: 3000, picturesMs: 2000, renders: 3, longTasksMs: 0, quiescedAt: 6000, heapMb: 50, gatewayLoopP99Ms: 1 });
   put(join(d, "changes.json"), [a === "A" ? "resized 'header'" : "added rect 'promo'"]);
+  // The think router's answer, cached as cache.ts writes it: section 1 reads Jev's range from it.
+  put(join(d, "replies.json"), [{ role: "draw-think", ordinal: 0, reqHash: `think-${run}-${c}-${a}`, cacheFile: `think-${run}-${c}-${a}.json`, offsets: [30] }]);
+  put(p.reply(`think-${run}-${c}-${a}`), { text: '{"think":{"type":"noul","noul":0.62}}' });
   put(join(d, "spans.json"), [sp("build the prompt", 0, 3600, { id: "bp" }), sp("resolve references", 0, 3500, { id: "rr", parent: "bp" }), sp("model call · draw-refs · haiku", 0, 3500, { id: "mr", parent: "rr", attrs: { from: "draw-refs", model: "haiku" } }), sp("board screenshots", 3510, 3700, { id: "bs", parent: "bp" }),
     sp("model call · draw · sonnet", 3700, 6000, { id: "md", attrs: { from: "draw", model: "sonnet", outTokens: 200 } }), sp("model: time to first text", 3700, 4500, { parent: "md" }),
     sp("model: streaming the reply", 4500, 5500, { parent: "md" }), sp("op 1: shape(h, rect)", 5000, 5000, { attrs: { ok: true, line: "shape(h, rect)" } })]);
@@ -207,7 +210,8 @@ check(s2.includes("LOST") && s2.indexOf("LOST") < s2.indexOf(" tie ") && /B's fa
 check(/Waiting on a slow answer only part of the work needs.*: 50 cases/.test(digest) && /First drawing by step/.test(digest) && digest.includes("# 5. Every decision so far") && digest.includes("e1-h2 code draw fidelity"), "the patterns, latency or decisions are missing");
 // First drawing's phases on the champion's 50 sends: the call starts at 3700, first text 800 ms later, the op 500 ms after.
 for (const want of ["over 50 champion sends", "before the drawing call (Jev, screenshots, the prompt): 3700 ms", "the drawing model's first text: 800 ms", "streamed after it (nothing is drawn before a whole line): 500 ms",
-  "to the first drawing (paint, or a picture's strokes or a later op): 50 ms", "first drawing: 5050 ms (p90 5050); render per op: p50 0.9 ms", "draw · sonnet: first text 800 ms (p90 800), 200 tok/s, thought on"])
+  "to the first drawing (paint, or a picture's strokes or a later op): 50 ms", "first drawing: 5050 ms (p90 5050); render per op: p50 0.9 ms", "draw · sonnet: first text 800 ms (p90 800), 200 tok/s, thought on",
+  "- draw-think: 0.62, 0.62–0.62, 0.62–0.62 (50 answers)"])
   check(digest.includes(want), `section 3's first drawing steps lack "${want}": ${digest.slice(digest.indexOf("First drawing by step"), digest.indexOf("First drawing by step") + 900)}`);
 writeMissDigest("champ", { run: "cp1", champion: "A" });
 writeLossDigest("ab1");

@@ -207,13 +207,13 @@ export function writeLossDigest(run: string): string {
 
 // ---- 3. The champion's traces: patterns and latency per component
 
-/** The champion's arm of each tuning case in these runs: its spans, its clock and its calls. */
-function championArms(runs: CheckpointRef[]): { case: string; spans: SpanJSON[]; timing?: ArmTiming; calls: ArmResult["calls"] }[] {
+/** The champion's arm of each tuning case in these runs: its spans, its clock, its calls and their replies. */
+function championArms(runs: CheckpointRef[]): { case: string; spans: SpanJSON[]; timing?: ArmTiming; calls: ArmResult["calls"]; replies: RecordedReply[] }[] {
   return runs.flatMap(({ run, champion }) => {
     const dir = runFile(run, "cases");
     return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => tuningInfo(id)).map((id) => ({
       case: id, spans: arm<SpanJSON[]>(run, id, champion, "spans.json") ?? [], timing: arm<ArmTiming>(run, id, champion, "timing.json"),
-      calls: arm<ArmResult>(run, id, champion, "result.json")?.calls ?? [],
+      calls: arm<ArmResult>(run, id, champion, "result.json")?.calls ?? [], replies: arm<RecordedReply[]>(run, id, champion, "replies.json") ?? [],
     }));
   });
 }
@@ -279,6 +279,31 @@ function firstDrawingSteps(arms: ReturnType<typeof championArms>): string[] {
   ];
 }
 
+/**
+ * Jev's yes/no answers by role over the champion's sends: a knob's bar outside their range never fires (e107-h3 and
+ * e107-h4 put theirs at 0.3 on draw-think, whose answers ran 0.41–0.78, and measured nothing, 2026-10-27).
+ */
+function jevAnswers(arms: ReturnType<typeof championArms>): string[] {
+  const by = new Map<string, number[]>();
+  for (const r of arms.flatMap((a) => a.replies)) {
+    const text = replyText(r);
+    if (!text?.startsWith("{")) continue;
+    let answer: Record<string, { noul?: unknown } | null>;
+    try {
+      answer = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    const ps = Object.values(answer).flatMap((v) => (typeof v?.noul === "number" ? [v.noul] : []));
+    if (ps.length) by.set(r.role, [...(by.get(r.role) ?? []), ...ps]);
+  }
+  const f = (x: number) => x.toFixed(2);
+  return by.size
+    ? ["Jev's answers by role (median, p10–p90, min–max; a knob's bar outside them never fires):",
+      ...[...by].map(([role, ps]) => `- ${role}: ${f(pct(ps, 0.5))}, ${f(pct(ps, 0.1))}–${f(pct(ps, 0.9))}, ${f(Math.min(...ps))}–${f(Math.max(...ps))} (${ps.length} answers)`)]
+    : [];
+}
+
 export type DigestInput = {
   championSha: string;
   checkpoint?: CheckpointRef;
@@ -311,7 +336,7 @@ export function analystDigest(o: DigestInput): string {
   const runs = (o.runs ?? []).filter(live);
   const arms = championArms([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
   const report = Object.values(tracePatterns(arms)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
-  const time = fit(["# 1. Where the time to first drawing goes (the champion's live sends)", ...firstDrawingSteps(arms), "Trace patterns:"], report, budget(DIGEST.share.time));
+  const time = fit(["# 1. Where the time to first drawing goes (the champion's live sends)", ...firstDrawingSteps(arms), ...jevAnswers(arms), "Trace patterns:"], report, budget(DIGEST.share.time));
   const losses = runs.length
     ? fit(["# 3. Candidate losses (the last decisions)"], runs.map((r) => lossSection(r, budget(DIGEST.share.losses) / runs.length - 20)), budget(DIGEST.share.losses))
     : "# 3. Candidate losses (the last decisions)\nnone yet";
