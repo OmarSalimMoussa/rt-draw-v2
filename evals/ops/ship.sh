@@ -5,13 +5,15 @@
 # the eval's history (rte shipped), so Eval HQ shows what's on prod. Nothing of yours is touched: your checkout, its
 # .data and its dev server stay as they are (the try runs on port 5190 with a data dir of its own).
 #   bash evals/ops/ship.sh
-# The machines are this laptop's, not the repo's: ~/.config/rt-eval/hosts.env sets RT_PGX, as for deploy.sh.
+# The machines are this laptop's, not the repo's: ~/.config/rt-eval/hosts.env sets RT_PGX, as for deploy.sh, and
+# RT_PGX_EVAL_HOME when the loop's home there isn't ~/rt-eval.
 set -euo pipefail
 
 HOSTS=${RT_HOSTS:-$HOME/.config/rt-eval/hosts.env}
 # shellcheck disable=SC1090
 [ -f "$HOSTS" ] && . "$HOSTS"
 PGX=${RT_PGX:?set RT_PGX in $HOSTS}
+PGX_HOME=${RT_PGX_EVAL_HOME:-rt-eval}
 TRY_PORT=${RT_TRY_PORT:-5190}
 cd "$(dirname "$0")/../.."
 root=$(pwd)
@@ -30,7 +32,7 @@ git worktree add -q --detach "$wt" origin/master
 cd "$wt"
 
 echo "== the champion, from the PGX"
-git fetch -q "$PGX:rt-eval/repo" loop/champion
+git fetch -q "$PGX:$PGX_HOME/repo" loop/champion
 champ=$(git rev-parse FETCH_HEAD)
 if git merge-base --is-ancestor "$champ" HEAD; then
   echo "ship: master already has the champion ${champ:0:12}"
@@ -69,16 +71,17 @@ echo "== prod"
 [ -z "$(git status --porcelain)" ] || { echo "ship: the worktree isn't clean, so the image would be tagged dirty" >&2; git status --short >&2; exit 1; }
 bash scripts/deploy.sh
 tag=v2-$(git rev-parse --short=12 HEAD)
+url=https://$(sed -n 's/^HOST=//p' scripts/deploy.sh)
 
 echo "== the record"
 # The PGX's checkout and the loop's clone see master as shipped (so the champion's keeps count from it), and history
 # gets the ship.
-ssh -o BatchMode=yes "$PGX" bash -s -- "$sha" "$tag" <<'EOF'
+ssh -o BatchMode=yes "$PGX" bash -s -- "$sha" "$tag" "$url" "$PGX_HOME" <<'EOF'
 set -euo pipefail
-set -a; . "${RT_EVAL_HOME:-$HOME/rt-eval}/rt-units.env"; set +a
+set -a; . "$HOME/$4/rt-units.env"; set +a
 from=$(sed -n 's/.*"from": *"\([^"]*\)".*/\1/p' "$RT_EVAL_HOME/init.json")
 git -C "$from" fetch -q origin master && git -C "$from" merge -q --ff-only FETCH_HEAD
 git -C "$RT_EVAL_HOME/repo" fetch -q origin master
-"$RT_EVAL_HOME/repo/bin/rte" shipped --sha "$1" --tag "$2"
+"$RT_EVAL_HOME/repo/bin/rte" shipped --sha "$1" --tag "$2" --url "$3"
 EOF
 echo "ship: $tag is on prod"

@@ -36,6 +36,8 @@ const at = (e) => epochs.find((x) => x.epoch === e).at;
 put(join(home, "history/health.jsonl"), [{ at: at(2), kind: "calib", pass: true, detail: {} }, { at: at(12), kind: "canary", pass: true, detail: {} }].map((r) => JSON.stringify(r)).join("\n") + "\n");
 put(join(home, "history/ships.jsonl"), `${JSON.stringify({ at: at(20), sha: "a".repeat(40), tag: "v2-aaaaaaaaaaaa" })}\n`);
 put(join(home, "heartbeat.json"), JSON.stringify({ wall: Date.now(), mono: 1 }));
+// Intake's last pass: its third in a row with a failing stage, which is the owner's to look at.
+put(join(home, "real/intake.json"), JSON.stringify({ at: new Date(Date.now() - 600_000).toISOString(), failed: 2, failedPasses: 3 }));
 put(join(home, "state.json"), JSON.stringify({ run: { status: "running", at: new Date().toISOString(), phase: "e21-h1 measuring", slot: 2 } }));
 
 // The latest decision's raw run: two cases, a packet, three calls and their reply cache entries.
@@ -50,18 +52,22 @@ hashes.forEach((h, i) => put(join(home, `cache/replies/${h}.json`), JSON.stringi
 
 const server = await createServer({ root: ROOT, configFile: join(ROOT, "evals/pages.vite.config.ts"), cacheDir: join(home, "vite-cache"), logLevel: "error", clearScreen: false, server: { port: PORT, strictPort: true, host: "127.0.0.1", watch: null } });
 await server.listen();
-const proxy = ({ url, method, body }) => {
+// The server's front page is Eval HQ's, not the repo's playground index.
+const front = await fetch(`http://127.0.0.1:${PORT}/`, { redirect: "manual" });
+check(front.status === 302 && front.headers.get("location") === "/evals/progress/", `GET / on the pages server: ${front.status} ${front.headers.get("location")}`);
+const proxy = ({ url, method, headers, body }) => {
   const u = new URL(url);
-  return fetch(`http://127.0.0.1:${PORT}${u.pathname}${u.search}`, { method, body: method === "GET" ? undefined : body }).then(async (r) => ({ status: r.status, type: r.headers.get("content-type"), body: Buffer.from(await r.arrayBuffer()) }));
+  const type = Object.entries(headers ?? {}).find(([k]) => k.toLowerCase() === "content-type")?.[1];
+  return fetch(`http://127.0.0.1:${PORT}${u.pathname}${u.search}`, { method, headers: type ? { "content-type": type } : {}, body: method === "GET" ? undefined : body }).then(async (r) => ({ status: r.status, type: r.headers.get("content-type"), body: Buffer.from(await r.arrayBuffer()) }));
 };
-const c = await openChrome({ width: 1280, height: 900, stubs: Object.fromEntries(["history", "file", "calls", "threads", "intake"].map((p) => [`/api/eval/${p}`, proxy])) });
+const c = await openChrome({ width: 1280, height: 900, stubs: Object.fromEntries(["history", "file", "calls", "threads", "intake", "prod"].map((p) => [`/api/eval/${p}`, proxy])) });
 const { page } = c;
 await page.goto("about:blank");
 const jpeg = await page.shot({ format: "jpeg", quality: 80, clip: { x: 0, y: 0, width: 640, height: 400, scale: 1 } });
 for (const f of ["cases/c-b1-s01-1/A/after.jpg", "cases/c-b1-s01-1/B/after.jpg"]) put(join(run, f), jpeg);
 put(join(home, "bank/cases/c-b1-s01-1/before-ink.jpg"), jpeg);
 
-const PANELS = ["status", "decisions", "quality", "latency", "health", "cost", "playgrounds"];
+const PANELS = ["status", "decisions", "quality", "real", "latency", "health", "cost", "playgrounds"];
 const CHARTS = ["quality", "latency", "health", "cost"];
 const waitFor = async (expr, what, ms = 8000) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if (await page.eval(expr)) return;
@@ -110,7 +116,7 @@ const verify = (w) => {
     `${w} px: the HQ header's views ${JSON.stringify(r.nav)}`);
   check(JSON.stringify(r.views) === JSON.stringify(["loop", "benchmarks", "playgrounds"]), `${w} px: the page's view headings ${JSON.stringify(r.views)}`);
   // No pull yet (intake's endpoint on an empty real/): every stage still shows, in the pipeline's order.
-  check(JSON.stringify(r.stages.map((x) => x.split(" ")[0])) === JSON.stringify(["Pull", "Intake", "Review", "Bank", "Loop", "Prod"]) && /^Pull never 0 new sends/.test(r.stages[0]) && /^Loop running/.test(r.stages[4]) && /^Prod v2-aaaaaaaaaaaa shipped/.test(r.stages[5]),
+  check(JSON.stringify(r.stages.map((x) => x.split(" ")[0])) === JSON.stringify(["Pull", "Intake", "Review", "Bank", "Loop", "Prod"]) && /^Pull live never local never · 0 new sends/.test(r.stages[0]) && /^Intake 0 being labeled last pass 10 min ago, 2 failed · 0 skipped/.test(r.stages[1]) && /^Loop running/.test(r.stages[4]) && /^Prod v2-aaaaaaaaaaaa shipped/.test(r.stages[5]),
     `${w} px: the overview reads ${JSON.stringify(r.stages)}`);
   check(r.playgrounds.length === 17 && r.playgrounds.every((h) => /^http:\/\/localhost:5173\/playgrounds\/[a-z]+\/$/.test(h)), `${w} px: the playgrounds' links ${JSON.stringify(r.playgrounds.slice(0, 3))}`);
   check(r.scroll <= 0 && r.wideSvg === 0, `${w} px: horizontal scroll (${r.scroll} px over, ${r.wideSvg} charts wider than their card)`);
@@ -158,30 +164,31 @@ const notesFile = join(home, "notes/threads.jsonl");
 const noteLines = () => readFileSync(notesFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const NEEDS = `(() => ({ items: [...document.querySelectorAll("#needs [data-items] > li")].map((l) => [l.dataset.item, l.classList.contains("held")]), chats: document.querySelectorAll("#needs [data-chats] > li").length,
   title: document.title, badge: document.querySelector("#needs [data-count]")?.textContent, first: document.body.querySelector(".needs-wrap, main") === document.querySelector(".needs-wrap"),
-  settled: document.querySelector("#needs details")?.textContent ?? "", e20: document.querySelector('#needs [data-item="e20-h2"]')?.innerText ?? "" }))()`;
+  settled: document.querySelector("#needs details")?.textContent ?? "", pipeline: document.querySelector("#needs [data-pipeline]")?.innerText ?? "", ck07: document.querySelector('#needs [data-item="ck-07"]')?.innerText ?? "" }))()`;
 let nv = await page.eval(NEEDS);
 const DRY = "2026-10-20-dry-well-6-reverts-in-a-row-on-draw";
-check(JSON.stringify(nv.items) === JSON.stringify([["e19-h3", true], ["e20-h2", false], ["e18-h3", false], [DRY, false]]) && nv.chats === 1 && nv.first, `Needs you lists ${JSON.stringify(nv.items)} and ${nv.chats} side chats${nv.first ? "" : ", not above the panels"}`);
-check(nv.title.startsWith("(5) ") && nv.badge === "5" && /e15-h3/.test(nv.settled), `the count reads "${nv.title}" / ${nv.badge}, or e15-h3 isn't under resolved (${nv.settled})`);
+check(JSON.stringify(nv.items) === JSON.stringify([["e19-h3", true], ["ck-07", false], ["ck-05", false], [DRY, false]]) && nv.chats === 1 && nv.first, `Needs you lists ${JSON.stringify(nv.items)} and ${nv.chats} side chats${nv.first ? "" : ", not above the panels"}`);
+check(/^Intake failed in 3 passes in a row\n+2 of its steps failed in the last one, 10 min ago\./.test(nv.pipeline), `Needs you's intake item reads ${JSON.stringify(nv.pipeline)}`);
+check(nv.title.startsWith("(6) ") && nv.badge === "6" && /e15-h3/.test(nv.settled), `the count reads "${nv.title}" / ${nv.badge}, or e15-h3 isn't under resolved (${nv.settled})`);
 const type = (key, text) => page.eval(`(() => { document.querySelector('#needs [data-open="${key}"]').click(); const t = document.querySelector('#needs textarea[data-key="${key}"]'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event("input", { bubbles: true })); })()`);
 const before = noteLines().length;
-await type("e20-h2", "Is the over-use real?");
-await page.eval(`document.querySelector('#needs [data-to="e20-h2"]').click()`);
-await waitFor(`document.title.startsWith("(4) ") && /waiting for Claude/.test(document.querySelector('#needs [data-item="e20-h2"]').innerText)`, "the owner's note on e20-h2");
+await type("ck-07", "Is the slowdown real?");
+await page.eval(`document.querySelector('#needs [data-to="ck-07"]').click()`);
+await waitFor(`document.title.startsWith("(5) ") && /waiting for Claude/.test(document.querySelector('#needs [data-item="ck-07"]').innerText)`, "the owner's note on ck-07");
 const sent = noteLines().at(-1);
-check(noteLines().length === before + 1 && sent.thread === "e20-h2" && sent.who === "owner" && sent.text === "Is the over-use real?", `the page wrote ${JSON.stringify(sent)}`);
-// Half an answer on e18-h3 while Claude replies on e20-h2: the reply lands at the 20 s poll, the draft and caret stay.
-await type("e18-h3", "half an answer");
-await page.eval(`document.querySelector('#needs textarea[data-key="e18-h3"]').focus()`);
+check(noteLines().length === before + 1 && sent.thread === "ck-07" && sent.who === "owner" && sent.text === "Is the slowdown real?", `the page wrote ${JSON.stringify(sent)}`);
+// Half an answer on ck-05 while Claude replies on ck-07: the reply lands at the 20 s poll, the draft and caret stay.
+await type("ck-05", "half an answer");
+await page.eval(`document.querySelector('#needs textarea[data-key="ck-05"]').focus()`);
 const { addNote } = await import("../pages/plugin.ts");
-addNote({ thread: "e20-h2", who: "claude", text: "Real: the next card scopes snaps to the shapes touched." });
-await waitFor(`/the next card scopes snaps/.test(document.querySelector('#needs [data-item="e20-h2"]').innerText)`, "Claude's reply without a reload", 25_000);
+addNote({ thread: "ck-07", who: "claude", text: "Real: the next card scopes the new layer to the shapes touched." });
+await waitFor(`/the next card scopes the new layer/.test(document.querySelector('#needs [data-item="ck-07"]').innerText)`, "Claude's reply without a reload", 25_000);
 nv = await page.eval(NEEDS);
-const kept = await page.eval(`({ v: document.querySelector('#needs textarea[data-key="e18-h3"]').value, focus: document.activeElement?.dataset.key })`);
-check(nv.title.startsWith("(5) ") && /Claude replied/.test(nv.e20) && kept.v === "half an answer" && kept.focus === "e18-h3", `after Claude's reply: "${nv.title}", draft ${JSON.stringify(kept)}`);
-await page.eval(`document.querySelector('#needs [data-resolve="e18-h3"]').click()`);
-await waitFor(`!document.querySelector('#needs [data-items] [data-item="e18-h3"]') && /e18-h3/.test(document.querySelector("#needs details").textContent)`, "e18-h3 resolved");
-check(noteLines().at(-1).resolved === true && noteLines().at(-1).text === "half an answer" && (await page.eval("document.title")).startsWith("(4) "), `resolving e18-h3 wrote ${JSON.stringify(noteLines().at(-1))}`);
+const kept = await page.eval(`({ v: document.querySelector('#needs textarea[data-key="ck-05"]').value, focus: document.activeElement?.dataset.key })`);
+check(nv.title.startsWith("(6) ") && /Claude replied/.test(nv.ck07) && kept.v === "half an answer" && kept.focus === "ck-05", `after Claude's reply: "${nv.title}", draft ${JSON.stringify(kept)}`);
+await page.eval(`document.querySelector('#needs [data-resolve="ck-05"]').click()`);
+await waitFor(`!document.querySelector('#needs [data-items] [data-item="ck-05"]') && /ck-05/.test(document.querySelector("#needs details").textContent)`, "ck-05 resolved");
+check(noteLines().at(-1).resolved === true && noteLines().at(-1).text === "half an answer" && (await page.eval("document.title")).startsWith("(5) "), `resolving ck-05 wrote ${JSON.stringify(noteLines().at(-1))}`);
 
 const n = c.counts();
 check(n.seen === n.stubbed && n["/api/eval/history"] >= 1 && n["/api/eval/calls"] === 1 && n["/api/eval/threads"] >= 4 && !n["/api/model"], `seen ${n.seen} != stubbed ${n.stubbed}: ${JSON.stringify(n)}`);

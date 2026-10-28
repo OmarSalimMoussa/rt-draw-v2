@@ -8,9 +8,9 @@ import type { Word } from "../../src/core/link.ts";
 import { paths } from "../loop/paths.ts";
 import { caseDir } from "../loop/record.ts";
 import type { SceneJSON } from "../loop/types.ts";
-import { type Card, type CardState, LOOK_DAYS, REJECT_REASONS, type Reason, type ReviewRow, type Rubric, addReview, bankInfo, cards, labelsOf } from "./cases.ts";
+import { type Card, type CardState, LOOK_DAYS, NOT_DRAWING, REJECT_REASONS, type Reason, type ReviewRow, type Rubric, addReview, bankInfo, cards as allCards, labelsOf } from "./cases.ts";
 import { runChecks } from "./checks.ts";
-import { goldCaseDir, imagesOf, maybe, realHome } from "./real.ts";
+import { type IntakePass, goldCaseDir, imagesOf, maybe, passFile, realHome } from "./real.ts";
 import { type RealSend, type Source, beforeOf } from "./sessions.ts";
 
 const said = (x: RealSend) => (typeof x.words === "string" ? x.words : x.words.map((w) => w.word).join(" ")) || x.label;
@@ -20,6 +20,13 @@ const week = (iso: string) => {
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
   return d.toISOString().slice(0, 10);
 };
+
+/**
+ * The cards, read once for a burst of requests (a card opened asks for it and four images at once): every send and board
+ * is read and hashed for them. A verdict posted here reads them again.
+ */
+let read: { at: number; all: Card[] } | undefined;
+const cards = () => (read && Date.now() - read.at < 2000 ? read.all : (read = { at: Date.now(), all: allCards() }).all);
 
 /** A source's last pull: when it last ran, and the snapshot it holds (evals/real/pull.sh). */
 function pullOf(src: Source) {
@@ -40,8 +47,8 @@ const rowOf = (c: Card): CardRow => ({
 });
 
 /**
- * GET /api/eval/intake: each source's pull, the cards by state and skipped ones by reason, the owner's edit and reject
- * rates per week (the labeling's quality), and every card past triage.
+ * GET /api/eval/intake: each source's pull and intake's last pass, the cards by state and skipped ones by reason, the
+ * owner's edit and reject rates per week (the labeling's quality), and every card past triage or skipped.
  */
 export function intakeView() {
   const all = cards();
@@ -54,13 +61,13 @@ export function intakeView() {
   const done = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done"))).length : 0);
   return {
     lookDays: LOOK_DAYS, reasons: REJECT_REASONS,
-    pull: { live: pullOf("live"), local: pullOf("local") },
+    pull: { live: pullOf("live"), local: pullOf("local") }, pass: maybe<IntakePass>(passFile()),
     bank: { driver: done(paths().bankCases), real: done(paths().realBank) },
     states: Object.fromEntries(count(all.map((c) => c.state))),
     skipped: Object.fromEntries(count(all.flatMap((c) => (c.skip ? [c.skip] : [])))),
     rejected: Object.fromEntries(count(all.flatMap((c) => (c.state === "rejected" && c.review.reason ? [c.review.reason] : [])))),
     quality,
-    cards: all.filter((c) => c.state !== "pulled" && c.state !== "skipped").map(rowOf),
+    cards: all.filter((c) => c.state !== "pulled").map(rowOf),
   };
 }
 
@@ -89,7 +96,14 @@ export function cardView(key: string) {
   if (!c || c.state === "pulled") return undefined;
   const { s } = c.ss;
   const l = labelsOf(c);
-  const before = beforeOf(c.ss.dir, c.x);
+  // A skipped send's board may be unreadable (its boards couldn't be drawn): the card shows without checks then.
+  const before = (() => {
+    try {
+      return beforeOf(c.ss.dir, c.x);
+    } catch {
+      return undefined;
+    }
+  })();
   const info = c.bank ? bankInfo(c.bank) : undefined;
   const champion = info?.recordedRun ? maybe<SceneJSON>(join(caseDir(info.recordedRun, c.bank!), "A", "after.scene.json")) : undefined;
   const g = c.gold?.gold;
@@ -106,19 +120,24 @@ export function cardView(key: string) {
     meant: { now: l.meant, drafted: c.triage?.meant ?? "", pinned: l.pinned.meant },
     expectation: { now: l.expectation, from: l.pinned.expectation ? "owner" : g ? "gold" : drafted ? "judge" : undefined, pinned: l.pinned.expectation },
     gold: c.gold && {
-      why: g?.why, error: c.gold.error, problems: c.gold.problems,
-      checks: (g?.checks ?? []).map((check, k) => ({ check, then: c.gold!.appChecks[k], now: champion ? runChecks([check], champion, before)[0] : undefined, gold: c.gold!.goldChecks[k] })),
+      why: g?.why, error: c.gold.error, problems: [...c.gold.problems, ...(c.gold.shotTries ? [`the bridge couldn't draw gold's board (${c.gold.shotTries} tries)`] : [])],
+      checks: (g?.checks ?? []).map((check, k) => ({ check, then: c.gold!.appChecks[k], now: champion && before ? runChecks([check], champion, before)[0] : undefined, gold: c.gold!.goldChecks[k] })),
     },
     champion: info?.recordedRun ? { sha: info.championSha, run: info.recordedRun } : undefined,
     review: c.review,
   };
 }
 
-/** POST /api/eval/verdict: the owner's verdict on a proposed or decided card, with edits; or a note alone (autosaved). */
+/**
+ * POST /api/eval/verdict: the owner's verdict on a proposed or decided card, with edits; or a note alone (autosaved).
+ * Approving a send triage called not a drawing request reopens it: it's labeled and proposed as any other.
+ */
 export function postReview(b: Record<string, unknown>): ReviewRow | { error: string } {
   const key = typeof b.key === "string" ? b.key : "";
   const c = cards().find((x) => x.key === key);
-  if (!c || !["proposed", "admitted", "rejected", "labeled"].includes(c.state)) return { error: `no card ${key} to judge` };
+  const reopens = c?.state === "skipped" && c.skip === NOT_DRAWING;
+  if (!c || !(["proposed", "admitted", "rejected", "labeled"].includes(c.state) || reopens)) return { error: `no card ${key} to judge` };
+  if (reopens && b.verdict !== undefined && b.verdict !== "approve") return { error: `${key} is skipped: approve reopens it` };
   const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : undefined);
   const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => text(x, 400)).filter((x): x is string => !!x) : undefined);
   const row: ReviewRow = { key, at: new Date().toISOString() };
@@ -142,5 +161,6 @@ export function postReview(b: Record<string, unknown>): ReviewRow | { error: str
     }
   }
   addReview(row);
+  read = undefined;
   return row;
 }

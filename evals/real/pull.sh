@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Testers' work into the PGX for intake (evals/real/README.md), as snapshots in $RT_EVAL_HOME/real/raw/<source>/<stamp>/,
 # the newest named in raw/<source>/latest:
-#   bash evals/real/pull.sh live            # on the PGX, before each intake (rt-intake.service): the hosted app's /data
+#   bash evals/real/pull.sh live            # on the PGX, every 30 min (rt-intake.service, before its intake): the hosted app's /data
 #   bash evals/real/pull.sh local           # on the laptop (its rt-pull-local.timer): its dev server's .data, to the PGX
 #   bash evals/real/pull.sh receive <src>   # on the PGX: one snapshot as a tar on stdin (what the two above end in)
 # live reaches the box as the ssh host RTDRAW_BOX (default rt-box), whose key on the box may only run the export: people,
 # feedback, projects, the send log and model calls, never claude-config/ (evals/ops/box-key.sh sets it up). local reads
-# the main checkout's .data and sends it to RT_PGX (~/.config/rt-eval/hosts.env). A snapshot the same as the last is
-# dropped, and each source keeps its newest 8: ingest keeps every session it has seen, so nothing is lost with them.
+# the main checkout's .data and sends it to RT_PGX (~/.config/rt-eval/hosts.env), and with it the owner's sends recorded
+# on the dev server (/playgrounds/draw/?record=1, this laptop's $RT_EVAL_HOME/human/) for the Judge view and U1: new ones
+# only, so what the owner wrote on the PGX about a send stays. A snapshot the same as the last is dropped, and each
+# source keeps its newest 8: ingest keeps every session it has seen, so nothing is lost with them.
 set -euo pipefail
 KEEP=8
 
@@ -28,6 +30,10 @@ case "${1:-}" in
     [ -f "$LOCAL/model-calls.jsonl" ] && files+=(model-calls.jsonl)
     # shellcheck disable=SC2029
     tar -C "$LOCAL" -cf - "${files[@]}" | ssh -o BatchMode=yes -o ConnectTimeout=20 "$PGX" 'bash "${RT_EVAL_HOME:-$HOME/rt-eval}/repo/evals/real/pull.sh" receive local'
+    HOME_HERE=${RT_EVAL_HOME:-$HOME/rt-eval}
+    if [ -d "$HOME_HERE/human" ]; then
+      tar -C "$HOME_HERE" -cf - human | ssh -o BatchMode=yes -o ConnectTimeout=20 "$PGX" 'd=${RT_EVAL_HOME:-$HOME/rt-eval}; mkdir -p "$d/human" && tar -C "$d" --skip-old-files -xf -'
+    fi
     ;;
   receive)
     src=${2:?receive live or local}
@@ -38,8 +44,9 @@ case "${1:-}" in
     mkdir -p "$dir"
     stamp=$(date -u +%Y%m%dT%H%M%SZ)
     tmp=$dir/.$stamp
-    trap 'rm -rf "$tmp"' EXIT
+    # Ours once made: a second pull in the same second fails here and leaves the first's alone.
     mkdir "$tmp"
+    trap 'rm -rf "$tmp"' EXIT
     tar -C "$tmp" -xf -
     [ -n "$(ls -A "$tmp")" ] || { echo "pull $src: nothing came" >&2; exit 1; }
     sum=$(cd "$tmp" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-64)
@@ -49,7 +56,7 @@ case "${1:-}" in
       echo "pull $src: the same as $last"
       exit 0
     fi
-    # -T: a second pull in the same second fails here rather than land inside the first.
+    # -T: a pull in the same second as one that finished fails here rather than land inside it.
     mv -T "$tmp" "$dir/$stamp"
     echo "$sum" > "$dir/$stamp.sum"
     # Renamed over, so intake reads the old name or the new one, never half of one.

@@ -191,14 +191,19 @@ check(cks.join() === "ck-00,ck-01", `checkpoints after the loop: ${cks.join(", "
 check(lines(join(H, "epochs.jsonl")).map((e) => e.epoch).join() === "1,2" && lines(join(H, "budget.jsonl")).length === 6, "epochs.jsonl or budget.jsonl isn't one row per epoch (per slot)");
 check(!git("-C", H, "status", "--porcelain"), "the history worktree has uncommitted files");
 
-// ---- The owner's stop-after: asked while no loop runs, the next start drops it; asked while one runs, it stops before its
-// next step, says so, records the stop in state.json and spends nothing more; the epoch and the lock are as they were.
+// ---- The owner's stop-after: asked while no loop runs (its unit starting it, or waiting to restart it), the next start
+// stops at once, and rte run (wanted --set) takes a stop back; asked while one runs, it stops before its next step, says
+// so, records the stop in state.json and spends nothing more; the epoch and the lock are as they were.
 const asked = await rte(["stop-after", ...FLAGS]).done;
 check(asked.code === 0 && /no loop is running/.test(asked.out) && existsSync(join(p.home, "stop.request")), `stop-after with no loop: ${short(asked.out)}`);
 const r0 = api.requests.length;
+const early = await rte(["loop", "--epochs", "1", ...FLAGS]).done;
+check(early.code === 0 && /STOP \(asked\)/.test(early.out) && !existsSync(join(p.home, "stop.request")) && api.requests.length === r0, `a start after a stop-after didn't stop at once (exit ${early.code}): ${short(early.out)}`);
+writeFileSync(join(p.home, "stop.request"), "{}");
+await rte(["wanted", "--set", ...FLAGS]).done;
+check(!existsSync(join(p.home, "stop.request")), "rte run (wanted --set) didn't take the stop-after back");
 const running = rte(["loop", "--epochs", "1", ...FLAGS]);
 await until(() => running.out().includes("loop: starting") || running.child.exitCode !== null, 120_000, "the loop to start");
-check(/an old stop-after request was dropped/.test(running.out()), "the start didn't drop the old stop-after request");
 writeFileSync(join(p.home, "stop.request"), "{}"); // what stop-after writes, the moment the loop is up
 const stopped = await running.done;
 check(stopped.code === 0 && /STOP \(asked\): stopped as asked \(rte stop-after\)/.test(stopped.out) && !/STOP \(done\)/.test(stopped.out) && !existsSync(join(p.home, "stop.request")) && !existsSync(p.lock),
@@ -214,7 +219,7 @@ const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, limited: fal
 writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.8, sevenDayAt: wNow - 3600_000 })]));
 const w0 = api.requests.length;
 const wk = await rte(["week", "--cap", "5", ...FLAGS]).done;
-check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(the loop pauses past 70%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
+check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(paid calls pause past 70%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
   `week (exit ${wk.code}, ${api.requests.length - w0} requests): ${short(wk.out)}`);
 const wb = lines(join(H, "budget.jsonl")).slice(-3);
 check(wb.map((b) => b.slot).join() === "1,2,3" && wb[1].sevenDay === 0.11 && wb[1].sevenDayAt >= wNow && /^(ok|allowed)$/.test(wb[1].status) && wb[2].status === "weekly allowance" && wb[2].sevenDayAt === wNow - 3600_000,
@@ -234,7 +239,7 @@ const s2 = await rte(["sync", "--cap", "300", ...FLAGS]).done;
 check(s2.code !== 0 && /PAUSED/.test(s2.out) && /conflicts with the champion in src\/core\/tuning\.ts/.test(readFileSync(join(H, "owner-list.md"), "utf8")) && state().blocked
   && git("-C", repo, "rev-parse", "loop/champion") === champ1, `a conflicting master didn't pause sync with an owner item (exit ${s2.code}): ${short(s2.out)}`);
 const blockedLoop = await rte(["loop", "--epochs", "1", ...FLAGS]).done;
-check(/STOP: paused for the owner: sync/.test(blockedLoop.out), `the loop ran while sync was paused: ${short(blockedLoop.out)}`);
+check(/STOP \(blocked\): merging the owner's master is blocked/.test(blockedLoop.out) && !/conflicts with the champion/.test(json(p.state).run?.why ?? ""), `the loop ran while sync was paused, or its stop carries the conflict's text: ${short(blockedLoop.out)}`);
 git("-C", owner, "reset", "-q", "--hard", "HEAD~1");
 const live = () => readdirSync(p.bankCases).filter((d) => !d.includes(".void"));
 const toyBefore = live().filter((id) => !blank(id)).sort().join();
@@ -297,8 +302,8 @@ const fires = {
   "no passed calibration → stop": [{ calib: "more" }, "stop", /isn't calibrated/],
   "never calibrated → stop": [{ calib: undefined }, "stop", /never checked/],
   "--cap reached → stop": [{ capped: true, error: "the call cap is reached" }, "stop", /--cap/],
-  "a sync conflict → stop for the owner": [{ blocked: "sync: master conflicts" }, "stop", /paused for the owner/],
-  "/api/tts → abort": [{ error: "run x aborted: a page requested http://127.0.0.1:5334/api/tts" }, "stop", /aborted/],
+  "a sync conflict → stop for the owner": [{ blocked: "sync: master conflicts" }, "stop", /^merging the owner's master is blocked/],
+  "/api/tts → abort": [{ error: "run x aborted: a page requested http://127.0.0.1:5334/api/tts" }, "stop", /^a request the harness never makes/],
   // The dry well scales with the cards an epoch (LOOP-V2.md D3): 2 epochs' worth in a row, one epoch's on a component.
   [`${RULES.revertsInRow} reverts → owner`]: [{ recent: Array.from({ length: RULES.revertsInRow }, (_, i) => d("revert", { component: "abc"[i % 3] })) }, "owner", new RegExp(`dry well: ${RULES.revertsInRow}`)],
   [`${RULES.componentRevertsInRow} reverts on one component → skip it`]: [{ recent: [d("revert"), d("keep", { component: "picture" }), ...Array.from({ length: RULES.componentRevertsInRow - 1 }, () => d("revert"))] }, "skip", new RegExp(`${RULES.componentRevertsInRow} reverts in a row on draw`)],

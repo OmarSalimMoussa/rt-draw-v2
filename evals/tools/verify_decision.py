@@ -3,7 +3,9 @@
 # Usage: python3 -I evals/tools/verify_decision.py ~/rt-eval/runs <run> [<run> ...]   Prints numbers only, never case content.
 import json, math, os, random, sys
 
-LOOKS, KEEPZ, REVZ, MIND = [16, 32, 48, 80], [math.inf, 2.3, 1.8, 1.4], [-0.2, 0.3, 0.7, 1.4], [10, 20, 30, 0]
+# Rule F as evals/loop/config.ts has it (LOOP.looks, keepZ, revertZ, minDecisive, rareMin).
+LOOKS, KEEPZ, REVZ, MIND = [16, 32, 48, 80, 160], [math.inf, 2.3, 1.9, 1.8, 1.7], [-1, -0.5, 0, 0.6, 1.7], [10, 20, 30, 0, 0]
+RARE_MIN = 32
 
 
 def rows_of(d):
@@ -30,8 +32,13 @@ def z_of(rows, key="s"):
 def rule_f(rows, shift=0.0):
     looks = []
     for i, n in enumerate(LOOKS):
-        if len(rows) < n:
+        if len(rows) < n and len(rows) < RARE_MIN:
             return looks, None, None
+        if len(rows) < n:
+            # Out of cases short of look n: one last look on them all at n's keep line.
+            z, dec = z_of(rows)
+            looks.append({"n": len(rows), "decisive": dec, "z": z})
+            return looks, z >= KEEPZ[i] + shift, len(rows)
         z, dec = z_of(rows[:n])
         looks.append({"n": n, "decisive": dec, "z": z})
         if dec < MIND[i] and i < len(LOOKS) - 1:

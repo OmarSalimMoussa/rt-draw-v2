@@ -11,7 +11,7 @@
 // Ports 5640–5641.
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertLocalOnly, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
@@ -296,7 +296,7 @@ check((await R.renderSession(L, stubShot)) === 0, "a second render shot again wh
 const state = () => Object.fromEntries(C.cards().map((c) => [c.key, c.skip ? `skipped: ${c.skip}` : c.state]));
 {
   const s0 = state();
-  check(s0[k(LIVE, "v2")] === "skipped: its ink was lost (sent before the send log)" && s0[k(Q1, "v1")] === "skipped: a repeat of an earlier send" && [k(LIVE, "v1"), k(LIVE, "s3"), k(LIVE, "s4"), k(Q1, "v2")].every((x) => s0[x] === "pulled") && !(k(Q0, "v1") in s0),
+  check(s0[k(LIVE, "v2")] === "skipped: its ink was lost (sent before the send log)" && s0[k(Q1, "v1")] === "skipped: a repeat of another send" && [k(LIVE, "v1"), k(LIVE, "s3"), k(LIVE, "s4"), k(Q1, "v2")].every((x) => s0[x] === "pulled") && !(k(Q0, "v1") in s0),
     `cards before triage: ${js(s0)} (want the ink-lost send and the owner's repeat of tess's first send skipped, the rest pulled)`);
 }
 const fence = (o) => `Here is my read.\n\`\`\`json\n${js(o)}\n\`\`\``;
@@ -505,7 +505,7 @@ const bankOf = (key) => cs[key]?.bank;
 // ===== 6. Review: Eval HQ's data (review.ts), the owner's verdicts and edits, and admission.
 {
   const v = V.intakeView();
-  check(v.states.proposed === 4 && v.states.skipped === 2 && v.skipped["a repeat of an earlier send"] === 1 && v.cards.length === 4 && v.pull.live.pulledAt === undefined && v.bank.real === 0,
+  check(v.states.proposed === 4 && v.states.skipped === 2 && v.skipped["a repeat of another send"] === 1 && v.cards.length === 6 && v.cards.filter((x) => x.state === "skipped").every((x) => x.skip) && v.pull.live.pulledAt === undefined && v.bank.real === 0,
     `intakeView: ${js({ states: v.states, skipped: v.skipped, cards: v.cards.length, bank: v.bank })}`);
   const c = V.cardView(k(LIVE, "s3"));
   check(c && c.state === "proposed" && c.images.before && c.images.then && c.images.champion && c.images.gold && c.meant.now === "a cat beside the duck" && c.expectation.from === "gold" && c.gold.checks.length === 2 && c.gold.checks.every((x) => x.then && x.now && x.gold) && c.send.n === 3 && c.previous?.said,
@@ -696,6 +696,63 @@ check(!unexpected.length, `the fake rig's page was asked what it doesn't answer:
   check(/"void":"V7"/.test(row) && /"why":"failed"/.test(row), `a real case's row keeps its words: ${row.slice(0, 200)}`);
   const s1 = missSection("champ");
   check(s1.includes(`Also measured: ${admitted.length} real sends`) && !admitted.some((id) => s1.includes(id)) && !/duck|cat/i.test(s1), `the digest shows a real send, or not its count: ${s1.slice(0, 400)}`);
+}
+
+// ===== 12. What a pass must not get wrong when a pull or a stage goes badly.
+{
+  // A version saved within 10 minutes of the snapshot, with no send log yet, waits for the next pull (its log would move
+  // its key); a send that changed nothing, from a version the snapshot doesn't hold, is drawn on its own before board.
+  const taken = Date.parse("2026-10-27T12:00:00Z"), raw3 = join(work, "raw3", "20261027T120000Z"), out3 = join(work, "out3");
+  put(join(raw3, "access", "access.json"), { people: [{ id: "u-lou", email: "lou@example.test", owner: "own-lou" }] });
+  put(join(raw3, "app", "owners", "own-lou", "index.json"), [{ id: "l1", name: "Settling" }]);
+  lines(join(raw3, "app", "owners", "own-lou", "l1.ndjson"), [
+    { n: 1, doc: B1, at: taken - 20 * 60_000, label: "add a duck" },
+    { n: 2, doc: B2, at: taken - 5 * 60_000, label: "make this bigger" },
+  ]);
+  lines(join(raw3, "app", "sends", "own-lou", "l1.ndjson"), [
+    { id: "l-zoom", project: "l1", at: new Date(taken - 60 * 60_000).toISOString(), label: "zoom out", spoken: false, kind: "send", camera: CAM, words: "zoom out", strokes: [], enterAtMs: 0, before: B5, beforeVersion: 9, afterVersion: 9, status: "done", landed: 0 },
+  ]);
+  const [lou] = S.ingest(raw3, "live", out3);
+  const dir3 = join(out3, lou?.id ?? "none"), zoom = lou?.sends[0];
+  check(js(lou?.sends.map((x) => x.key.split("#")[1])) === js(["l-zoom", "v1"]), `ingest near the snapshot: ${js(lou?.sends.map((x) => x.key))} (want the version saved 5 minutes before it left for the next pull)`);
+  check(zoom && !existsSync(join(dir3, "v9.json")) && js(S.afterOf(dir3, zoom).shapes) === js(B5.shapes) && (await R.renderSession({ dir: dir3, s: lou }, stubShot)) === 3 && R.imagesOf(dir3)[zoom.key],
+    "a send that changed nothing, from a version the snapshot lacks, has no after board to draw");
+
+  // A later pull bringing an earlier copy of a send whose bank case exists: the case stays with the send that holds it.
+  const local2 = snap("local", "20261027T120000Z"), Q2 = `local-${sha("local:own-me").slice(0, 8)}-q2`;
+  cpSync(snap("local", "20261024T120000Z"), local2, { recursive: true });
+  put(join(local2, "app", "owners", "own-me", "index.json"), [{ id: "q1", name: "Owner duck" }, { id: "q0", name: "Old test" }, { id: "q2", name: "Owner duck again" }]);
+  lines(join(local2, "app", "owners", "own-me", "q2.ndjson"), [{ n: 1, doc: B1, at: T0 + 10_000, label: "add a duck" }]);
+  latest("local", "20261027T120000Z");
+  R.ingestAll();
+  cs = byKey();
+  check(sessionsNow()[Q2]?.s.sends[0].at < L.s.sends[0].at && state()[k(Q2, "v1")] === "skipped: a repeat of another send" && cs[k(LIVE, "v1")].state === "admitted" && cs[k(LIVE, "v1")].bank === idV1,
+    `an earlier copy took a held case: ${js({ q2: state()[k(Q2, "v1")], v1: cs[k(LIVE, "v1")].state })}`);
+
+  // Triage's "not a drawing request" skips a send; the owner's approval (and nothing else) reopens it.
+  const tf = join(L.dir, "triage.json"), tj = json(tf);
+  tj.sends.find((r) => r.key === k(LIVE, "s5")).drawing = false;
+  put(tf, tj);
+  check(state()[k(LIVE, "s5")] === `skipped: ${C.NOT_DRAWING}` && V.intakeView().skipped[C.NOT_DRAWING] === 1, `a send triage says isn't a drawing request: ${state()[k(LIVE, "s5")]}`);
+  check(review({ key: k(LIVE, "s5"), verdict: "reject", reason: "fixed" }).error && !review({ key: k(LIVE, "s5"), verdict: "approve" }).error && state()[k(LIVE, "s5")] === "admitted",
+    `the owner's approval didn't reopen a skipped send, or a rejection was taken for one: ${state()[k(LIVE, "s5")]}`);
+  const s5done = join(p.realBank, byKey()[k(LIVE, "s5")].bank, "done");
+
+  // A stage that fails is said (its error in real/logs/ only), counted and left to the next pass; admission runs anyway.
+  const said3 = [];
+  const brokenRte = { say: (l) => said3.push(l), withRig: async () => { throw new Error("chrome is gone: draw a cat next to the duck"); } };
+  check(!existsSync(s5done) && (await intake(brokenRte, gw.url)) === 1 && existsSync(s5done), `a failing stage kept admission from running: ${said3.filter((l) => /failed/.test(l)).join("; ")}`);
+  const log = join(p.real, "logs", "intake.log"), pass = json(join(p.real, "intake.json"));
+  check(said3.includes("intake: images of new sends failed (real/logs/intake.log has why)") && !said3.some((l) => l.includes("draw a cat")) && readFileSync(log, "utf8").includes("chrome is gone") && (statSync(log).mode & 0o777) === 0o600,
+    `a stage's failure: ${js(said3.filter((l) => /failed/.test(l)))}`);
+  check(pass.failed === 1 && pass.failedPasses === 1 && !pass.ended, `intake.json after a failed stage: ${js(pass)}`);
+
+  // A send whose boards can't be drawn is tried SHOT_TRIES times over passes, then skipped and never tried again.
+  const q2 = sessionsNow()[Q2];
+  let tried = 0, heard = 0;
+  const broken = async () => (tried++, Promise.reject(new Error("no")));
+  for (let i = 0; i <= R.SHOT_TRIES; i++) await R.renderSession(q2, broken, () => heard++);
+  check(tried === R.SHOT_TRIES && heard === R.SHOT_TRIES && R.rendered(q2) && state()[k(Q2, "v1")] === "skipped: its boards couldn't be drawn", `a send whose boards fail: tried ${tried}, ${state()[k(Q2, "v1")]}`);
 }
 
 // ---- Privacy: testers' words, project names and emails stay under real/ (runs/, cache/, the meter and history are shown or

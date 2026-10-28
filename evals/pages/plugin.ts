@@ -12,10 +12,10 @@ import type { Plugin } from "vite";
 import { LOOP } from "../loop/config.ts";
 import { paths } from "../loop/paths.ts";
 import { championStatus } from "../loop/state.ts";
-import type { Arm, Packet } from "../loop/types.ts";
+import type { Arm, Packet, ShipRow } from "../loop/types.ts";
 import { type Note, THREAD_ID, chatId, isChat, threadsOf, waiting } from "../progress/attention.ts";
 import { cardImage, cardView, intakeView, postReview } from "../real/review.ts";
-import { saveRecord, sendFile } from "./record.ts";
+import { ownPost, saveRecord, sendFile } from "./record.ts";
 
 /** The tracked files the progress page reads (§5.3), plus the owner list for its open count. */
 export const HISTORY_FILES = ["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "health.jsonl", "anchors.json", "eras.json", "markers.jsonl", "smoke.jsonl", "ships.jsonl", "owner-list.md"];
@@ -109,7 +109,6 @@ function disk(home: string) {
   return { freeGb, weekGrowthGb: growth.bytes / 1e9, daysLeft: perDayGb > 0 ? Math.max(0, (freeGb - LOOP.diskPauseGb) / perDayGb) : null, ownerGb: LOOP.diskOwnerGb, pauseGb: LOOP.diskPauseGb };
 }
 
-/** The champion, and how many of its keeps the owner's branch doesn't have yet (what a ship would take), from the loop's clone. */
 /** GET /api/eval/history: every §5.3 file's text (null when absent) and the loop's live status; ?f=<file> one tracked file. */
 function history(repo: string): Handler {
   return (q) => {
@@ -134,6 +133,32 @@ function history(repo: string): Handler {
       status = { error: (err as Error).message };
     }
     return json({ source, files, status: { ...status, now: Date.now() } });
+  };
+}
+
+/** Whether prod answers: the last ship's address (ships.jsonl), and how it answered. */
+type Health = { url?: string; ok?: boolean; status?: number; ms?: number; error?: string };
+const PROD_EVERY_MS = 60_000;
+let prodSeen: { at: number; health: Health } | undefined;
+/** GET /api/eval/prod: the last ship's address asked at most once a minute, however many pages poll. */
+function prod(repo: string): Handler {
+  return async () => {
+    const last = (historyFile("ships.jsonl", repo).text ?? "").split("\n").filter(Boolean).at(-1);
+    const url = last ? (JSON.parse(last) as ShipRow).url : undefined;
+    if (!url) return json({});
+    if (prodSeen?.health.url === url && Date.now() - prodSeen.at < PROD_EVERY_MS) return json(prodSeen.health);
+    const t0 = Date.now();
+    let health: Health;
+    try {
+      // Its own answer, not where it sends a visitor (the sign-in page): any status under 400 is up.
+      const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
+      await r.body?.cancel();
+      health = { url, ok: r.status < 400, status: r.status, ms: Date.now() - t0 };
+    } catch (err) {
+      health = { url, ok: false, error: (err as Error).name === "TimeoutError" ? "no answer in 10 s" : "unreachable" };
+    }
+    prodSeen = { at: Date.now(), health };
+    return json(health);
   };
 }
 
@@ -346,7 +371,7 @@ function serve(name: string, routes: Record<string, Handler>): Plugin {
         if (!route) return next();
         let r: Reply;
         try {
-          r = await route(u.searchParams, req);
+          r = req.method === "POST" && !ownPost(req) ? refuse(403, "a JSON POST from this server's own pages only") : await route(u.searchParams, req);
         } catch (err) {
           r = refuse(500, (err as Error).message);
         }
@@ -362,7 +387,7 @@ function serve(name: string, routes: Record<string, Handler>): Plugin {
 /** Eval HQ's /api/eval/* endpoints. `git show` reads the branch from the repo this server serves. */
 export function evalPages(repo: string): Plugin {
   return serve("eval-pages", {
-    "GET /history": history(repo), "GET /file": file, "GET /calls": calls, "GET /pairs": pairs, "POST /label": label, "POST /record": record,
+    "GET /history": history(repo), "GET /prod": prod(repo), "GET /file": file, "GET /calls": calls, "GET /pairs": pairs, "POST /label": label, "POST /record": record,
     "GET /human": human, "POST /human": human, "GET /threads": threads, "POST /threads": threads,
     "GET /intake": intake, "GET /card": card, "GET /card-image": cardImg, "POST /verdict": verdict,
   });

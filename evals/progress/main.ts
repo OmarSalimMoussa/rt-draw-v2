@@ -1,12 +1,12 @@
-// Eval HQ's home (§5.4, frozen measuring side): the pipeline at a glance (pull, intake, review, bank, loop, champion),
+// Eval HQ's home (§5.4, frozen measuring side): the pipeline at a glance (pull, intake, review, bank, loop, champion, prod),
 // "Needs you" (attention.ts: what waits for the owner, each with a thread they write in and Claude answers through
 // `rte note`, $RT_EVAL_HOME/notes/threads.jsonl outside git, read every 20 s), the loop (its status and the decisions
 // with every case and call behind them), the benchmarks (quality against A0, checkpoint 0's champion, which never moves,
-// each era of the yardstick charted apart; latency against A0 in the same run; cost and speed against v1; health), and
-// the playgrounds. Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the eval/history branch) and
-// /api/eval/intake; the page holds no state and polls every 60 s while the loop's heartbeat is fresh. ?sample=1 draws
-// the fake history in ./sample/ (its threads kept in memory). Rows written before 2026-10-26 may carry Q, anchor moves,
-// chained ratios and debts: the page ignores them, and skips their "anchor" markers.
+// each era of the yardstick charted apart; R1 on testers' sends; latency against A0 in the same run; cost and speed
+// against v1; health), and the playgrounds. Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the
+// eval/history branch) and /api/eval/intake; the page holds no state and polls every 60 s, and again when its tab comes
+// back. ?sample=1 draws the fake history in ./sample/ (its threads kept in memory). Rows written before 2026-10-26 may
+// carry Q, anchor moves, chained ratios and debts: the page ignores them, and skips their "anchor" markers.
 import { openModal } from "../../src/modal.ts";
 import { $, PLAYGROUNDS } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
@@ -19,9 +19,17 @@ import { hq } from "./hq.ts";
 hq("home", "The eval's pipeline: testers' sends become cases you review, the loop tries changes on them and keeps what wins, and the champion waits for you to ship it. Read from the eval/history branch and the PGX's files; no model call.");
 
 type Disk = { freeGb: number; weekGrowthGb: number; daysLeft: number | null; ownerGb: number; pauseGb: number };
-type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; champion?: { sha: string; unshipped?: number }; now: number; error?: string };
+type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; champion?: { sha: string; unshipped?: number; since?: "prod" | "master" }; now: number; error?: string };
+/** GET /api/eval/prod: whether the last ship's address answers (empty before a ship with one). */
+type ProdHealth = { url?: string; ok?: boolean; status?: number; error?: string };
 /** What the overview takes of GET /api/eval/intake (evals/real/review.ts); absent where intake isn't served (the sample). */
-type Intake = { lookDays: number; pull: Record<"live" | "local", { pulledAt?: string }>; states: Record<string, number>; bank: { driver: number; real: number }; cards: { state: string; admitAt?: string }[] };
+type Intake = {
+  lookDays: number; pull: Record<"live" | "local", { pulledAt?: string }>; states: Record<string, number>; bank: { driver: number; real: number }; cards: { state: string; admitAt?: string }[];
+  /** Intake's last pass (real.ts IntakePass). */
+  pass?: { at: string; failed: number; failedPasses: number };
+};
+/** Passes in a row with a failing stage before it's the owner's to look at: one is a box down or a page that timed out. */
+const INTAKE_FAILS = 3;
 type History = { source: string; files: Record<string, string | null>; status: Status };
 type Data = ReturnType<typeof parse>;
 
@@ -172,6 +180,28 @@ function quality(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   voids(host, d.checkpoints);
 }
 
+/** Bench R1 (testers' sends with gold) at each checkpoint, A0 against the champion: it reports and never decides. */
+function realBench(d: Data, x: ReturnType<typeof xAxis>) {
+  const host = card("real", true);
+  const cks = d.checkpoints.filter((c) => c.trust !== "void" && c.real);
+  const f = frame(host, { title: "R1, testers' sends with gold: the champion's share against A0, and the checks each passes", height: 240, x: x.range, y: [0, 1], xTicks: x.ticks, yFormat: (v) => v.toFixed(2) });
+  f.hline(0.5, "0.5: as good as A0");
+  type R = NonNullable<CheckpointRow["real"]>;
+  const lines: [string, (r: R) => number | undefined, string, boolean?][] = [["share", (r) => r.share, INK], ["share on R-hold", (r) => r.shareHold, "#1971c2"], ["checks passed, champion", (r) => r.checks[1], "#2b8a3e", true], ["checks passed, A0", (r) => r.checks[0], "#868e96", true]];
+  // R1 frozen again (new cases admitted) is another bench: no line joins two freezes.
+  const freezes = cks.reduce<CheckpointRow[][]>((runs, c) => (runs.at(-1)?.[0].real!.hash === c.real!.hash ? runs.at(-1)!.push(c) : runs.push([c]), runs), []);
+  for (const run of freezes) for (const [name, get, color, dash] of lines) {
+    const pts = run.flatMap((c): XY[] => { const y = get(c.real!); return y === undefined || Number.isNaN(y) ? [] : [[x.at(c.at), y]]; });
+    f.line(pts, { color, width: name === "share" ? 2.5 : 1.5, dash, data: { series: name } });
+  }
+  f.dots(cks.flatMap((c) => (c.real!.share === undefined ? [] : [{ x: x.at(c.at), y: c.real!.share, id: c.id, hollow: c.trust === "amber" }])), INK);
+  ticks(f, d, x);
+  legend(host, lines.map(([n, , c, dash]) => [n, c, dash]));
+  const last = cks.at(-1);
+  const r = last?.real;
+  host.insertAdjacentHTML("beforeend", `<div class="stat muted">${r ? `At ${esc(last!.id)}: ${r.cases} cases (${r.void} void) of R1 ${esc(r.hash.slice(0, 12))}; every check passed on ${pct(r.casesPassing[1])} of cases for the champion, ${pct(r.casesPassing[0])} for A0.` : "No checkpoint has run R1 yet."} R1 reports beside every keep and never decides.</div>`);
+}
+
 function latency(d: Data, x: ReturnType<typeof xAxis>, evs: Ev[]) {
   const host = card("latency", true);
   const cks = d.checkpoints.filter((c) => c.trust !== "void");
@@ -291,9 +321,9 @@ function decisions(d: Data) {
   // Keyed by place, not id: a card decided again (rte decide --card) has a row per run under one id.
   const rows = [...d.decisions].map((r, i) => [r, i] as const).reverse().map(([r, i]) => {
     const n = r.counts.wins + r.counts.losses + r.counts.ties;
-    return `<tr data-decision="${esc(r.id)}" data-i="${i}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
+    return `<tr data-decision="${esc(r.id)}" data-i="${i}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>${r.real?.share === undefined ? "-" : r.real.share.toFixed(2)}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
   });
-  host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="12" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
+  host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th title="R1 at a keep: the candidate's share against the champion on testers' sends (reported, never deciding)">R1</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="13" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
   host.addEventListener("click", (e) => {
     const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-decision]");
     if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions[Number(tr.dataset.i)]);
@@ -314,16 +344,21 @@ function health(d: Data, x: ReturnType<typeof xAxis>) {
   host.insertAdjacentHTML("beforeend", `<div class="stat muted">Ticks: = A/A, C canary, L calibration, R readiness.${last ? ` Latest thinking share by role: ${Object.entries(last.thinking).map(([r, v]) => `${esc(r)} ${pct(v)}`).join(", ")}.` : ""}</div>`);
 }
 
-function status(d: Data) {
-  const host = card("status", true);
-  const s = d.status;
+/** The loop as state.json says it is, unless its heartbeat says otherwise: one that died without a word (a kill, an OOM, a reboot) still says running. */
+function loopNow(s: Status) {
   const hb = timeOf(s.heartbeat?.wall ?? s.heartbeat?.at);
   const age = Number.isNaN(hb) ? undefined : s.now - hb;
   const st = (s.state?.run ?? {}) as Partial<Run>;
   const running = age !== undefined && age < STALE_MS;
   const said = st.status ?? (running ? "running" : "stopped");
-  // A loop that died without a word (a kill, a reboot) still says running: its heartbeat says otherwise.
   const state = running || said === "stopped" ? `${said}${st.code ? ` (${st.code})` : ""}` : "stopped (no heartbeat)";
+  return { st, age, state };
+}
+
+function status(d: Data) {
+  const host = card("status", true);
+  const s = d.status;
+  const { st, age, state } = loopNow(s);
   const slot = st.slot ?? d.epochs.at(-1)?.slots.find((x) => x.status === "active")?.slot;
   const use = d.epochs.at(-1)?.slots.find((x) => x.slot === slot);
   const disk = s.disk;
@@ -332,7 +367,6 @@ function status(d: Data) {
     <span>heartbeat ${age === undefined ? "none" : ago(age)}</span><span>owner list: ${d.ownerOpen} open</span>
     <span class="${disk && disk.freeGb < disk.ownerGb ? "bad" : ""}">${disk ? `disk ${disk.freeGb.toFixed(0)} GB free · ${disk.daysLeft === null || disk.daysLeft > 365 ? "days left: plenty" : `~${disk.daysLeft.toFixed(0)} days left`} (to the ${disk.pauseGb} GB pause at last week's ${disk.weekGrowthGb.toFixed(1)} GB)` : "free disk: unknown here"}</span>
     <span class="muted">history: ${esc(d.source)}${s.error ? ` · ${esc(s.error)}` : ""}</span></div>`;
-  return running;
 }
 
 // ---- A decision's cases and every call behind them (the eval's call inspector)
@@ -430,9 +464,16 @@ function pipelineNeeds(): string[] {
     out.push(`<li class="item held"><p class="what">The loop stopped (${esc(st.code)})</p><p class="why">${esc(st.why ?? "")} Once it's dealt with, <code>bin/rte run</code> on the PGX starts it again.</p></li>`);
   const proposed = intakeData?.cards.filter((c) => c.state === "proposed") ?? [];
   if (proposed.length) {
-    const next = proposed.map((c) => c.admitAt ?? "").sort()[0];
-    out.push(`<li class="item"><p class="what">${proposed.length} card${proposed.length > 1 ? "s wait" : " waits"} for your look</p><p class="why">The next joins ${esc(day(next))} unless you reject it. <a href="/evals/review/">Intake and review</a></p></li>`);
+    // When each joins the bank unless rejected, a count per day.
+    const byDay = new Map<string, number>();
+    for (const c of [...proposed].sort((a, b) => (a.admitAt ?? "").localeCompare(b.admitAt ?? ""))) byDay.set(day(c.admitAt), (byDay.get(day(c.admitAt)) ?? 0) + 1);
+    const joins = [...byDay].map(([d, k]) => `${k} join${k > 1 ? "" : "s"} ${d || "when looked at"}`).join(", ");
+    out.push(`<li class="item"><p class="what">${proposed.length} card${proposed.length > 1 ? "s wait" : " waits"} for your look</p><p class="why">${esc(joins)}, unless you reject ${proposed.length > 1 ? "them" : "it"}. <a href="/evals/review/">Intake and review</a></p></li>`);
   }
+  const pass = intakeData?.pass;
+  if (pass && pass.failedPasses >= INTAKE_FAILS)
+    out.push(`<li class="item"><p class="what">Intake failed in ${pass.failedPasses} passes in a row</p><p class="why">${pass.failed} of its steps failed in the last one, ${ago(now() - Date.parse(pass.at))}. Each pass tries them again; <code>real/logs/intake.log</code> on the PGX says why.</p></li>`);
+  if (intakeError) out.push(`<li class="item"><p class="what">Eval HQ can't read intake</p><p class="why">${esc(intakeError)}. Cards waiting for you aren't counted here until it can.</p></li>`);
   return out;
 }
 
@@ -453,7 +494,8 @@ function needs() {
   const settled = [...n.settled.map((x) => [x.id, x.what] as const), ...n.closed.map((t) => [t.id, t.last?.text ?? ""] as const)];
   host.hidden = false;
   host.classList.toggle("quiet", quiet);
-  host.innerHTML = `<div class="row"><h2>${quiet ? "Nothing needs you" : "Needs you"}${count ? ` <span class="badge" data-count>${count}</span>` : ""}</h2><span class="muted">${parts.filter(Boolean).join(" · ")}</span><span class="grow"></span><button data-open="new">New side chat</button></div>${form("new", false)}` +
+  host.innerHTML = `<div class="row"><h2>${quiet ? "Nothing needs you" : "Needs you"}${count ? ` <span class="badge" data-count>${count}</span>` : ""}</h2><span class="muted">${parts.filter(Boolean).join(" · ")}</span><span class="grow"></span><button data-open="new">New side chat</button></div>` +
+    `<p class="muted blurb">Everything that waits for you: decisions the loop holds for your call, the owner list, cards waiting for your look, a stop that's yours. Answer in an item's thread and Claude replies there; resolve settles it.</p>${form("new", false)}` +
     `${pipe.length ? `<ol data-pipeline>${pipe.join("")}</ol>` : ""}${n.items.length ? `<ol data-items>${n.items.map(itemHtml).join("")}</ol>` : ""}${n.chats.length ? `<h3>Side chats</h3><ol data-chats>${n.chats.map(chatHtml).join("")}</ol>` : ""}` +
     `${settled.length ? `<details${settledOpen ? " open" : ""}><summary class="muted">Resolved here (${settled.length})${n.settled.length ? ": owner-list.md keeps them open until Claude ticks them there" : ""}</summary><ol>${settled.map(([id, what]) => `<li class="row"><b>${esc(id)}</b><span class="muted">${esc(what.slice(0, 140))}</span><button data-resolve="${esc(id)}" data-reopen>reopen</button></li>`).join("")}</ol></details>` : ""}` +
     `${notesError || sendError ? `<div class="stat bad">${esc(sendError ? `Not sent: ${sendError}` : `Threads unavailable here: ${notesError}`)}</div>` : ""}`;
@@ -535,8 +577,8 @@ async function pollNotes() {
       if (d) void drill(d);
     }
   });
-  // Back on the tab: the replies now, not at the next poll.
-  window.addEventListener("focus", () => void pollNotes());
+  // Back on the tab: the replies and the pipeline now, not at the next poll.
+  window.addEventListener("focus", () => void refresh().then(pollNotes));
 }
 
 // ---- The pipeline at a glance, and the playgrounds
@@ -544,42 +586,53 @@ async function pollNotes() {
 const day = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) : "");
 function overview(d: Data, i?: Intake) {
   const host = $("#overview");
-  const st = (d.status.state?.run ?? {}) as Partial<Run>;
+  const loop = loopNow(d.status);
+  const champ = { unshipped: d.status.champion?.unshipped, since: d.status.champion?.since ?? "master" };
   const n = (k: string) => i?.states[k] ?? 0;
   const next = i?.cards.filter((c) => c.state === "proposed").map((c) => c.admitAt ?? "").sort()[0];
-  const pulled = i && [i.pull.live.pulledAt, i.pull.local.pulledAt].filter(Boolean).sort().at(-1);
+  // Each pull apart: the laptop's every 30 min must not hide a live pull that stopped.
+  const pulled = (at?: string) => (at ? ago(now() - Date.parse(at)) : "never");
   const stage = (name: string, href: string, main: string, sub: string) => `<a class="stage-link" href="${href}"><span class="muted">${name}</span><b>${esc(main)}</b><span class="muted">${esc(sub)}</span></a>`;
   host.innerHTML = `<div class="pipeline">${[
-    i ? stage("Pull", "/evals/review/", pulled ? ago(now() - Date.parse(pulled)) : "never", `${n("pulled")} new sends`) : "",
-    i ? stage("Intake", "/evals/review/?state=labeled", `${n("labeled")} being labeled`, `${n("skipped")} skipped`) : "",
+    i ? stage("Pull", "/evals/review/", `live ${pulled(i.pull.live.pulledAt)}`, `local ${pulled(i.pull.local.pulledAt)} · ${n("pulled")} new sends`) : "",
+    i ? stage("Intake", "/evals/review/?state=labeled", `${n("labeled")} being labeled`, [i.pass && `last pass ${ago(now() - Date.parse(i.pass.at))}${i.pass.failed ? `, ${i.pass.failed} failed` : ""}`, `${n("skipped")} skipped`].filter(Boolean).join(" · ")) : "",
     i ? stage("Review", "/evals/review/", `${n("proposed")} waiting for you`, next ? `next joins ${day(next)}` : "none waiting") : "",
     i ? stage("Bank", "/evals/review/?state=admitted", `${i.bank.driver} driver · ${i.bank.real} real`, "cases decisions measure") : "",
-    stage("Loop", "#loop", `${st.status ?? "stopped"}${st.code ? ` (${st.code})` : ""}`, st.phase ?? st.why ?? ""),
-    d.status.champion ? stage("Champion", "#loop", d.status.champion.sha.slice(0, 7), d.status.champion.unshipped === undefined ? "" : `${d.status.champion.unshipped} keeps not on master`) : "",
-    d.ships.length ? stage("Prod", "#loop", d.ships.at(-1)!.tag, `shipped ${day(d.ships.at(-1)!.at)}`) : "",
+    intakeError ? stage("Intake", "/evals/review/", "can't be read", intakeError) : "",
+    stage("Loop", "#loop", loop.state, loop.st.phase ?? loop.st.why ?? ""),
+    d.status.champion ? stage("Champion", "#loop", d.status.champion.sha.slice(0, 7), champ.unshipped === undefined ? "" : `${champ.unshipped} keep${champ.unshipped === 1 ? "" : "s"} not on ${champ.since}`) : "",
+    d.ships.length ? stage("Prod", "#loop", d.ships.at(-1)!.tag, [prodHealth?.url && (prodHealth.ok ? "health ok" : `down: ${prodHealth.error ?? `HTTP ${prodHealth.status}`}`), `shipped ${day(d.ships.at(-1)!.at)}`].filter(Boolean).join(" · ")) : "",
   ].join("")}</div>`;
 }
 
-/** What each product playground is for, in the order they feed a send. They run on the dev server, where the product's API is. */
-const PLAYGROUND_USE: Record<string, string> = {
-  speech: "words with their times: a spoken send's input",
-  ink: "strokes with their times, the ink a case replays on the person's clock",
-  hittest: "what a stroke touches or encloses: the first reading of the ink",
-  marks: "each mark's reading (a loop, an arrow, a tap), as the drawing model is told it",
-  link: "ink tied to the words said while drawing it: a send's [ink n] markers",
-  describe: "shape descriptions good enough for \"that button\": what words are resolved against",
-  resolve: "words and ink to the shapes they mean: the resolver, and Jev's guess",
-  router: "the fast lane or the full one, per send",
-  board: "which pictures of the board are worth a model's look",
-  shot: "the screenshot the drawing model gets",
-  coords: "how the model writes places on the board",
-  draw: "the product's send end to end; ?record=1 records your sends for the human set U1",
-  ops: "the drawing model's op lines, applied as they stream: the engine every arm runs",
-  tidy: "the tidy pass after the ops: sizes, edges and gaps evened out",
-  picture: "a few words to a doodle: the picture model gold is drawn against",
-  camera: "camera moves the way a person means them",
-  render: "the board's renderer: what render time measures",
-};
+/** Each product playground and what it's for, under the step of a send it feeds, in a send's order. */
+const PLAYGROUND_USE: [string, [string, string][]][] = [
+  ["what the person gives", [
+    ["speech", "words with their times: a spoken send's input"],
+    ["ink", "strokes with their times, the ink a case replays on the person's clock"],
+  ]],
+  ["reading the ink", [
+    ["hittest", "what a stroke touches or encloses: the first reading of the ink"],
+    ["marks", "each mark's reading (a loop, an arrow, a tap), as the drawing model is told it"],
+    ["link", "ink tied to the words said while drawing it: a send's [ink n] markers"],
+    ["describe", "shape descriptions good enough for \"that button\": what words are resolved against"],
+  ]],
+  ["working out what was meant", [
+    ["resolve", "words and ink to the shapes they mean: the resolver, and Jev's guess"],
+    ["router", "the fast lane or the full one, per send"],
+    ["board", "which pictures of the board are worth a model's look"],
+    ["shot", "the screenshot the drawing model gets"],
+    ["coords", "how the model writes places on the board"],
+  ]],
+  ["drawing", [
+    ["draw", "the product's send end to end; ?record=1 records your sends for U1, the Judge view's \"your sends\""],
+    ["ops", "the drawing model's op lines, applied as they stream: the engine every arm runs"],
+    ["tidy", "the tidy pass after the ops: sizes, edges and gaps evened out"],
+    ["picture", "a few words to a doodle: the picture model gold is drawn against"],
+    ["camera", "camera moves the way a person means them"],
+  ]],
+  ["on screen", [["render", "the board's renderer: what render time measures"]]],
+];
 function playgrounds() {
   const host = card("playgrounds", true);
   let origin = "http://localhost:5173";
@@ -587,7 +640,7 @@ function playgrounds() {
     origin = localStorage.getItem("hq.dev") ?? origin;
   } catch {} // no storage here: the default
   const names = new Map<string, string>(PLAYGROUNDS);
-  const list = () => Object.entries(PLAYGROUND_USE).map(([p, use]) => `<li><a href="${esc(origin)}/playgrounds/${p}/" target="_blank" rel="noopener">${esc(names.get(p) ?? p)}</a> <span class="muted">${esc(use)}</span></li>`).join("");
+  const list = () => PLAYGROUND_USE.map(([step, ps]) => `<li><b>${esc(step)}</b><ul>${ps.map(([p, use]) => `<li><a href="${esc(origin)}/playgrounds/${p}/" target="_blank" rel="noopener">${esc(names.get(p) ?? p)}</a> <span class="muted">${esc(use)}</span></li>`).join("")}</ul></li>`).join("");
   host.innerHTML = `<h2>The product's playgrounds</h2><p class="muted">Each tries one part of a send by hand. They open on the laptop's dev server (npm run dev), where the product's model API runs: <label>at <input data-origin value="${esc(origin)}" size="28"></label></p><ul data-list>${list()}</ul>`;
   host.querySelector<HTMLInputElement>("[data-origin]")!.addEventListener("change", (e) => {
     origin = (e.target as HTMLInputElement).value.replace(/\/$/, "");
@@ -611,6 +664,8 @@ function view(id: string, title: string, blurb: string) {
 
 let data: Data | undefined;
 let intakeData: Intake | undefined;
+let intakeError: string | undefined;
+let prodHealth: ProdHealth | undefined;
 function draw() {
   if (!data) return;
   $("#panels").replaceChildren();
@@ -618,33 +673,54 @@ function draw() {
   const x = xAxis(data);
   const evs = ownerSteps(data, x);
   view("loop", "Loop", "The loop tries changes the analyst and critic propose, measures each against the champion on the bank's cases, and keeps what is faster with nothing worse. It needs you only for what it holds (Needs you).");
-  const running = status(data);
+  status(data);
   decisions(data);
-  view("benchmarks", "Benchmarks", "Every few keeps, the champion against A0 on the frozen benches: B1 (the driver's held-out cases), U1 (your recorded sends) and R1 (testers' sends with gold, a report beside every keep).");
+  view("benchmarks", "Benchmarks", "Every few keeps a checkpoint measures the champion against A0 on the frozen benches: B1 (the driver's held-out and tuning cases), U1 (your recorded sends) and R1 (testers' sends with gold). They only report: a champion surely slower than A0, or overfitting, comes to you in Needs you.");
   quality(data, x, evs);
+  realBench(data, x);
   latency(data, x, evs);
   health(data, x);
   cost(data, x);
-  view("playgrounds", "Playgrounds", "The product's parts, one at a time, for trying a change by hand before the loop measures it.");
+  view("playgrounds", "Playgrounds", "The product's parts one at a time, under the step of a send each feeds, for trying a change by hand before the loop measures it. Nothing here waits for you.");
   playgrounds();
-  return running;
+}
+
+/** GET /api/eval/prod, or nothing where it isn't served (the sample). */
+async function readProd(): Promise<ProdHealth | undefined> {
+  if (SAMPLE) return undefined;
+  const r = await fetch("/api/eval/prod").catch(() => undefined);
+  return r?.ok ? ((await r.json()) as ProdHealth) : undefined;
+}
+
+/** GET /api/eval/intake: absent (404) where intake isn't served, as on the laptop; any other failure is said. */
+async function readIntake() {
+  intakeError = undefined;
+  if (SAMPLE) return undefined;
+  const r = await fetch("/api/eval/intake").catch((err: Error) => ((intakeError = err.message), undefined));
+  if (r?.ok) return (await r.json()) as Intake;
+  if (r && r.status !== 404) intakeError = (await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`;
+  return undefined;
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
+let first = true;
 async function refresh() {
+  clearTimeout(timer);
   try {
     const h: History = SAMPLE ? await sample() : await (await fetch("/api/eval/history")).json();
     if (SAMPLE) sampleNotes ??= rowsOf<Note>(h.files["threads.jsonl"]);
-    // Intake is served on the PGX only: elsewhere the overview leaves it out.
-    intakeData = SAMPLE ? undefined : await fetch("/api/eval/intake").then((r) => (r.ok ? r.json() : undefined), () => undefined);
+    [intakeData, prodHealth] = await Promise.all([readIntake(), readProd()]);
     data = parse(h);
-    const running = draw();
+    draw();
     needs();
-    clearTimeout(timer);
-    if (running) timer = setTimeout(refresh, POLL_MS);
+    // The views are drawn after the page loaded, so the browser never found #loop and the like: go there now.
+    if (first && location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+    first = false;
   } catch (err) {
     $("#panels").innerHTML = `<section class="card wide" data-panel="status"><h2>Can't read the eval history</h2><p class="muted">${esc((err as Error).message)}</p></section>`;
   }
+  // Always again: a stopped loop's page still has intake's cards and the next start to show.
+  timer = setTimeout(refresh, POLL_MS);
 }
 
 let resizing = 0;

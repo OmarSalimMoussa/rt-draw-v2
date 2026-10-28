@@ -40,15 +40,15 @@ export type Decision = Omit<Verdict, "verdict"> & {
   /** ttfd and render decide, ttfc and ttd are reported; tails: "ttfd p90" … "render p95" (LOOP.latTails). */
   latency: { ttfc?: Ratio; ttd?: Ratio; ttfd?: Ratio; render?: Ratio; byThinking: Record<string, Ratio>; tails: Record<string, Ratio> };
   work: number; emptyRise: number; failedPicRise: number; usdRatio: number;
-  /** Bench R1 on both arms at a keep (evals/real/shadow.ts): reported, decides nothing until the judge is calibrated on illustrations. */
+  /** Bench R1 on both arms at a keep (evals/real/shadow.ts): reported beside it, deciding nothing (held out by design). */
   real?: Shadow;
 };
 
 type Look = { n: number; decisive: number; z: number };
 
 /**
- * How many decisions share this card's error: a sweep's values (LOOP-V2.md D3), or the near-wins a combo puts together
- * (each already tried once), else 1.
+ * How many decisions share this card's error: a sweep's values (LOOP-V2.md D3), or the tried cards a combo puts
+ * together (each already decided once), else 1.
  */
 const familyOf = (card: HypothesisCard) => Math.max(1, card.sweep?.values.length ?? card.combines?.length ?? 1);
 /** The z a family of k tries adds to Rule F's keep line, so the family keeps a no-op about as often as one card does. */

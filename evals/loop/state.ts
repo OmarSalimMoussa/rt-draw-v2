@@ -3,7 +3,7 @@
 // stop and pause rules as one pure function, so each rule can be checked on a crafted condition. Cases keep no state
 // here: every case is file-done (§3.3), and rerunning a run id carries on at its next undone case.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { LOOP } from "./config.ts";
@@ -69,33 +69,59 @@ export const newState = (epoch: number): State => ({
 });
 export const stampNow = () => new Date().toISOString().slice(0, 16).replace(/:/g, "-");
 
-const alive = (pid: number) => {
+/** A process's start, in clock ticks since boot (Linux): with its pid, it names the process, since a pid is reused. */
+const startOf = (pid: number): string | undefined => {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")[19];
+  } catch {
+    return undefined;
   }
 };
+const alive = (pid: number, since?: string) => {
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EPERM") return false;
+  }
+  const now = since === undefined ? undefined : startOf(pid);
+  return now === undefined || now === since;
+};
+/** Unlinks a file only while it still holds `text`, and never minds its being gone already. */
+function unlinkIf(f: string, text: string) {
+  try {
+    if (readFileSync(f, "utf8") === text) unlinkSync(f);
+  } catch {}
+}
 
-/** Who holds loop.lock: its process, host, start and command (`loop`, `ready`, `real`, …). */
-export type Holder = { pid: number; host: string; start: string; cmd: string };
-/** The lock's holder, whether it lives (always false for another host's: this host can't tell). */
-export function holder(): (Holder & { live: boolean }) | undefined {
+/** Who holds loop.lock: its process (pid, and its start in ticks), host, start and command (`loop`, `intake`, `ready`, …). */
+export type Holder = { pid: number; since?: string; host: string; start: string; cmd: string };
+/** The lock's holder, whether it lives (always true for another host's: this host can't tell). */
+export function holder(): (Holder & { live: boolean; text: string }) | undefined {
   const f = paths().lock;
-  if (!existsSync(f)) return undefined;
-  const h = JSON.parse(readFileSync(f, "utf8")) as Holder;
-  return { ...h, live: h.host !== hostname() || alive(h.pid) };
+  let text: string;
+  try {
+    text = readFileSync(f, "utf8");
+  } catch {
+    return undefined;
+  }
+  try {
+    const h = JSON.parse(text) as Holder;
+    return { ...h, text, live: h.host !== hostname() || alive(h.pid, h.since) };
+  } catch {
+    // Never written by lock(), which links a whole file in: a hand edit or a torn disk. Stale once a minute old.
+    const at = statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0;
+    return { pid: 0, host: hostname(), start: new Date(at).toISOString(), cmd: "an unreadable lock", text, live: Date.now() - at < 60_000 };
+  }
 }
 
 let mine: { text: string; depth: number } | undefined;
 const LOCK_POLL_MS = 10_000;
 /**
- * loop.lock: one command at a time that starts arm servers and Chrome or changes the bank (the loop, readiness, the
- * real-use steps), since they share ports and the bank. Taken again inside the process that holds it, it nests. Held by
- * another live process: refused, or with `wait` (the loop's unit, which a running intake or readiness must not fail)
- * waited for. A dead holder's lock is stale and taken over; `stale` is true only when that holder was a loop, which the
- * caller then resumes (§7.7): another command's crash says nothing about the loop.
+ * loop.lock: one command at a time that starts arm servers and Chrome or changes the bank (the loop, readiness, intake,
+ * the bank's and the judge's steps), since they share ports and the bank. Taken again inside the process that holds it,
+ * it nests. Held by another live process: refused, or with `wait` (the loop's unit, which a running intake or readiness
+ * must not fail) waited for. A dead holder's lock is stale and taken over; `stale` is true only when that holder was a
+ * loop, which the caller then resumes (§7.7): another command's crash says nothing about the loop.
  */
 export async function lock(cmd: string, o: { wait?: boolean; say?: (line: string) => void } = {}): Promise<{ stale: boolean; release(): void }> {
   if (mine) {
@@ -104,30 +130,39 @@ export async function lock(cmd: string, o: { wait?: boolean; say?: (line: string
   }
   const f = paths().lock;
   mkdirSync(paths().home, { recursive: true });
-  const text = JSON.stringify({ pid: process.pid, host: hostname(), start: new Date().toISOString(), cmd } satisfies Holder);
-  let stale = false, said = false;
-  for (;;) {
+  const text = JSON.stringify({ pid: process.pid, since: startOf(process.pid), host: hostname(), start: new Date().toISOString(), cmd } satisfies Holder);
+  // Written whole beside it and linked in: a reader never sees a half-written lock, and the link fails if one exists.
+  const taken = () => {
+    const mineFile = `${f}.${process.pid}`;
+    writeFileSync(mineFile, text);
     try {
-      writeFileSync(f, text, { flag: "wx" });
-      break;
+      linkSync(mineFile, f);
+      return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const h = holder();
-      if (!h) continue; // freed between the two reads
-      if (!h.live) {
-        unlinkSync(f);
-        stale ||= h.cmd === "loop";
-        continue;
-      }
-      const why = `${f} is held by ${h.cmd} (pid ${h.pid} on ${h.host}, since ${h.start})`;
-      if (!o.wait || h.cmd === "loop") throw new Error(why);
-      if (!said) o.say?.(`${cmd}: waiting: ${why}`), (said = true);
-      await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+      return false;
+    } finally {
+      unlinkSync(mineFile);
     }
+  };
+  let stale = false, said = false;
+  while (!taken()) {
+    const h = holder();
+    if (!h) continue; // freed between the two reads
+    if (!h.live) {
+      // Only the dead holder's own lock: another process taking it over at the same moment may have linked its own in.
+      unlinkIf(f, h.text);
+      stale ||= h.cmd === "loop";
+      continue;
+    }
+    const why = `${f} is held by ${h.cmd} (pid ${h.pid} on ${h.host}, since ${h.start})`;
+    if (!o.wait || h.cmd === "loop") throw new Error(why);
+    if (!said) o.say?.(`${cmd}: waiting: ${why}`), (said = true);
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
   }
   mine = { text, depth: 1 };
   const free = () => {
-    if (existsSync(f) && readFileSync(f, "utf8") === text) unlinkSync(f);
+    unlinkIf(f, text);
     mine = undefined;
   };
   return { stale, release: () => void (mine && --mine.depth === 0 && free()) };
@@ -140,23 +175,32 @@ export function loopUnit(): string {
   const r = spawnSync("systemctl", ["--user", "is-active", `${process.env.RT_UNIT_PREFIX ?? "rt"}-loop.service`], { encoding: "utf8" });
   return r.error ? "none" : r.stdout.trim() || "none";
 }
-/** The champion, and how many of its commits (the loop's keeps) the branch it follows doesn't have; undefined before init. */
-export function championStatus(): { sha: string; unshipped?: number } | undefined {
-  const { home, repo } = paths();
+/**
+ * The champion, and how many of its commits (the loop's keeps) aren't on prod: past the last ship (history's
+ * ships.jsonl), or before any, past the branch the loop follows. Undefined before init.
+ */
+export function championStatus(): { sha: string; unshipped?: number; since?: "prod" | "master" } | undefined {
+  const { home, repo, history } = paths();
   const git = (...a: string[]) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const keepsSince = (ref: string) => {
+    try {
+      return Number(git("rev-list", "--count", "--no-merges", `${ref}..loop/champion`));
+    } catch {
+      return undefined; // a ship the clone hasn't fetched yet
+    }
+  };
   try {
+    const sha = git("rev-parse", "--short=12", "loop/champion");
+    const ships = existsSync(join(history, "ships.jsonl")) ? readFileSync(join(history, "ships.jsonl"), "utf8").split("\n").filter(Boolean) : [];
+    const shipped = ships.length ? keepsSince((JSON.parse(ships.at(-1)!) as { sha: string }).sha) : undefined;
+    if (shipped !== undefined) return { sha, unshipped: shipped, since: "prod" };
     const f = join(home, "init.json");
     const branch = existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")) as { branch?: string }).branch : undefined;
-    return { sha: git("rev-parse", "--short=12", "loop/champion"), unshipped: branch ? Number(git("rev-list", "--count", "--no-merges", `origin/${branch}..loop/champion`)) : undefined };
+    const behind = branch ? keepsSince(`origin/${branch}`) : undefined;
+    return behind === undefined ? { sha } : { sha, unshipped: behind, since: "master" };
   } catch {
     return undefined; // no loop clone here, or no champion yet
   }
-}
-
-/** Refuses while a live process holds the lock (`what` can't change under it); a dead holder's stale lock doesn't block. */
-export function notLocked(what: string) {
-  const h = holder();
-  if (h?.live && mine === undefined) throw new Error(`${paths().lock} is held by ${h.cmd} (pid ${h.pid}): ${what} can't change under it`);
 }
 
 // ---- §6.7's stop and pause rules
@@ -198,10 +242,11 @@ export type Facts = {
 /** tokens.ts' pace, as the gateway serves it. */
 export type Pace = { ok: true } | { ok: false; pauseUntil: number; week: boolean };
 /**
- * Why the loop stopped: `asked` (rte stop-after) and `done` (its --epochs ran) are the owner's own; `crashed` is the unit's
- * (a step threw past its restarts); the rest are §6.7's stops, each the owner's to look at.
+ * Why the loop stopped: `asked` (rte stop-after) and `done` (its --epochs ran) are the owner's own; `crashed` is a step
+ * that threw (its unit restarts it); `gave-up` is the unit past its restarts; the rest are §6.7's stops. All but
+ * `crashed` wait for the owner's rte run.
  */
-export const STOP_CODES = ["asked", "done", "crashed", "voids", "v9", "ready", "calib", "cap", "aborted", "blocked", "empty"] as const;
+export const STOP_CODES = ["asked", "done", "crashed", "gave-up", "voids", "v9", "ready", "calib", "cap", "aborted", "blocked", "empty"] as const;
 export type StopCode = (typeof STOP_CODES)[number];
 export type Action = { do: "stop" | "pause" | "owner" | "skip"; why: string; code?: StopCode; until?: number; component?: string };
 
@@ -220,7 +265,8 @@ export function rules(f: Facts): Action[] {
   else if (!["pass", "pass-no-craft", "dry"].includes(f.calib ?? "")) out.push({ do: "stop", code: "calib", why: `the judge isn't calibrated (${f.calib ?? "never checked"}): label in Eval HQ's Judge view, then rte calib --check must pass` });
   if (f.capped) out.push({ do: "stop", code: "cap", why: "the step's --cap is reached" });
   if (f.error && /requested|\/api\/(tts|stt)/.test(f.error)) out.push({ do: "stop", code: "aborted", why: "a request the harness never makes was asked for (the log has which)" });
-  if (f.blocked) out.push({ do: "stop", code: "blocked", why: `paused for the owner: ${f.blocked}` });
+  // What blocked it (a conflict, a type error, a lockfile) is on the owner list; state.json and mail get the code.
+  if (f.blocked) out.push({ do: "stop", code: "blocked", why: "merging the owner's master is blocked (rte sync): the owner list says what to fix, then rte sync and rte run" });
   if ((f.emptyEpochs ?? 0) >= RULES.emptyEpochs) out.push({ do: "stop", code: "empty", why: `${f.emptyEpochs} epochs in a row decided nothing: the critic's cards were missing or all dropped (paused, --quality-only, owner-only)` });
   // A dry well: the optimizer keeps proposing what doesn't work. A sweep's values are one try: kept if any value kept.
   const since = f.recent.filter((d) => Date.parse(d.at) >= (f.checkpointAt ?? 0)).reduce<Decided[]>((acc, d) => {

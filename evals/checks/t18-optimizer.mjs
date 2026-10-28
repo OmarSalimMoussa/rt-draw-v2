@@ -286,7 +286,7 @@ for (const k of ["picture.model", "draw.model", "describe.model", "router.fastMo
   check(!cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true }).length, `a card on ${k} is owner-listed: ${cardOwnerReasons({ ...seeds[0], knobs: { [k]: 0 } }, { u1: true })}`);
 check(cardOwnerReasons({ ...seeds[0], knobs: { "render.pictureBox": 0 } }, { u1: true }).some((r) => /owner's knob/.test(r)), "render.pictureBox isn't the owner's");
 
-// ---- The search (LOOP-V2.md D1, D3, D4): sweep and combo cards, knob literals, pruning, near wins.
+// ---- The search (LOOP-V2.md D1, D3, D4): sweep and combo cards, knob literals, pruning, combos of tried patches.
 const search = await import("../loop/search.ts");
 const kc = (o) => ({ id: "s", component: "draw", change: "c", goal: "fidelity", classGuess: "Q", dialogue: false, isPatch: false, touchesFrozen: false, risk: "r", files: [], ...o });
 const faults = (o) => readCards(JSON.stringify([kc(o)])).dropped.join();
@@ -387,7 +387,7 @@ const card = (id, kind, o = {}) => ({ id, component: "draw", kind, change: "c", 
 const cards = [card("h1", "code"), card("h2", "knob"), card("h3", "bogus"), card("h4", "code"), card("h5", "knob"), card("h6", "code"), card("h7", "code"), card("h8", "sweep", { sweep: { knob: "draw.mapWords", values: [20, 40] } })];
 const sessions = [];
 const run = async (api, o) => {
-  const r = await critic({ run: "e1", token, mockApi: mockOf(api), analysis: "{}", digest: "d", tried: [], tree, ...o });
+  const r = await critic({ run: "e1", token, mockApi: mockOf(api), analysis: "{}", digest: "d", tree, ...o });
   sessions.push({ api, turns: r.result.turns });
   return r;
 };
@@ -417,8 +417,8 @@ check(eng.denied.length === 3 && /^Read .*hostname/.test(eng.denied[0]) && /^Wri
 await apiD.close();
 // The analyst: a read-only session that may search the web and read public pages, never this machine or its network.
 const web = toolRule(tree, { root: tree, edit: false });
-check(!web("WebSearch", { query: "model routing cascades" }) && !web("WebFetch", { url: "https://arxiv.org/abs/2404.14618", prompt: "p" }) && ["http://127.0.0.1:5400/status", "http://100.94.227.92:5182/", "http://localhost:5182/", "https://pgx.tail1a2b.ts.net/", "http://[::1]/", "file:///etc/passwd"].every((url) => web("WebFetch", { url, prompt: "p" })), "the web rule: search and public pages open, this machine and its network shut");
-const apiF = await startFakeApi({ port: PORTS.fakeA, script: script("analyst.json", [tool("WebFetch", { url: "http://100.94.227.92:5182/", prompt: "the sends" }, 0), { content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "draw"}]}' }] }]) });
+check(!web("WebSearch", { query: "model routing cascades" }) && !web("WebFetch", { url: "https://arxiv.org/abs/2404.14618", prompt: "p" }) && ["http://127.0.0.1:5400/status", "http://100.94.227.92:5181/", "http://localhost:5181/", "https://pgx.tail1a2b.ts.net/", "http://[::1]/", "file:///etc/passwd"].every((url) => web("WebFetch", { url, prompt: "p" })), "the web rule: search and public pages open, this machine and its network shut");
+const apiF = await startFakeApi({ port: PORTS.fakeA, script: script("analyst.json", [tool("WebFetch", { url: "http://100.94.227.92:5181/", prompt: "the sends" }, 0), { content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "draw"}]}' }] }]) });
 const agentsBefore = readMeter(p.calls).filter((l) => l.agent).length;
 const an = await analyst({ run: "e1", token, mockApi: mockOf(apiF), digest: "d", tree });
 // An agent's replies get the eval roles' output, not the product's 4096 tokens (e86's analyst ran out thinking).

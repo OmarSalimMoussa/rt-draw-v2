@@ -2,8 +2,9 @@
 // at: proposed once it's labeled and replayed on the champion, admitted when the look window ends unless they reject it
 // (sooner when they approve), with their edits to its meaning and expectation pinned. A tune person's card is a bank case
 // (real/bank/<id>/, set "real"), measured by every decision; an R-hold person's reaches only R1, through its gold. Every
-// state is read from files: the session, its triage, gold, the bank case (its replies.json, its done) and the owner's
-// review/verdicts.jsonl. Stored and never recomputed: each person's split (splits.json) and the owner's edits.
+// state is read from files: the session, its images and triage, gold, the bank case (its case.json's proposedAt and
+// tries, its done) and the owner's review/verdicts.jsonl. Stored and never recomputed: each person's split (splits.json)
+// and the owner's edits.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import { historyWrite } from "../loop/history.ts";
 import type { Shot } from "../loop/human.ts";
 import { paths } from "../loop/paths.ts";
 import type { CaseInfo, CaseInput, Expectation, Meant, SceneJSON } from "../loop/types.ts";
-import { type GoldCase, GOLD_TRIES, type Labeled, type TriageRow, cameraOf, chosen, goldCaseDir, goldOf, imagesOf, json, maybe, put, realHome, triageOf } from "./real.ts";
+import { type GoldCase, GOLD_TRIES, type Labeled, SHOT_TRIES, type TriageRow, cameraOf, chosen, goldCaseDir, goldOf, imagesOf, json, maybe, put, realHome, renderFailures, triageOf } from "./real.ts";
 import { type RealSend, type Session, beforeOf } from "./sessions.ts";
 
 /** Days a proposed card waits for the owner's look before it's admitted (their choice, 2026-10-28). */
@@ -23,6 +24,10 @@ const DAY_MS = 86_400_000;
 const HOLD_SHARE = 1 / 3;
 /** Champion replays a case gets before it's skipped as one the champion can't replay. */
 const RECORD_TRIES = 3;
+/** Tries at drafting a tune card's expectation (where gold drew none) before it's skipped. */
+const EXPECT_TRIES = 3;
+/** Triage's word that a send asked for nothing drawn; the owner's approve reopens it. */
+export const NOT_DRAWING = "not a drawing request";
 
 /** Why the owner rejects a card: counted, so the next revision of the triage and expectation prompts starts from them. */
 export const REJECT_REASONS = {
@@ -142,14 +147,15 @@ export type Card = {
   proposedAt?: string; admitAt?: string;
   review: Review;
 };
-type BankInfo = CaseInfo & { key: string; proposedAt?: string; recordedRun?: string; recordTries?: number };
+type BankInfo = CaseInfo & { key: string; proposedAt?: string; recordedRun?: string; recordTries?: number; expectTries?: number };
 export const bankInfo = (id: string) => maybe<BankInfo>(join(paths().bankCase(id), "case.json"));
 
-/** Gold that's done: drawn and shot, or unreadable GOLD_TRIES times. Undefined while it's still to come. */
+/** Gold that's done: drawn and shot, or unreadable GOLD_TRIES times, or its board undrawable SHOT_TRIES times. Undefined while it's still to come. */
 function goldSettled(g: GoldCase | undefined): "ok" | "failed" | undefined {
   if (!g) return undefined;
   if (g.error) return g.attempts >= GOLD_TRIES ? "failed" : undefined;
-  return existsSync(join(goldCaseDir(g.key), "gold.jpg")) ? "ok" : undefined;
+  if (existsSync(join(goldCaseDir(g.key), "gold.jpg"))) return "ok";
+  return (g.shotTries ?? 0) >= SHOT_TRIES ? "failed" : undefined;
 }
 
 /** Every send intake labels, as a card in its state (oldest first). */
@@ -157,20 +163,41 @@ export function cards(now = Date.now()): Card[] {
   const sp = splits(), rv = reviews(), sessions = chosen();
   const voided = new Set((existsSync(paths().realBank) ? readdirSync(paths().realBank) : []).filter((d) => d.includes(".void")).map((d) => d.replace(/\.void.*$/, "")));
   const all = sessions.flatMap((ss) => ss.s.sends.map((x, i) => ({ ss, x, n: i + 1 }))).sort((a, b) => a.x.at.localeCompare(b.x.at));
-  const triage = new Map(sessions.map(({ dir, s }) => [s.id, triageOf(dir)]));
-  const seen = new Set<string>();
+  const triage = new Map(sessions.flatMap(({ dir }) => [...triageOf(dir)]));
+  const undrawn = new Map(sessions.flatMap(({ dir }) => Object.entries(renderFailures(dir))));
+  const gold = new Map(all.map(({ x }) => [x.key, goldOf(x.key)]));
+  const banks = new Map<string, BankInfo | undefined>();
+  const bank = (id: string) => (banks.has(id) ? banks.get(id) : banks.set(id, bankInfo(id)).get(id));
+  // What each replayable send asks: its words and ink on its board, one case per input.
+  const asks = new Map<string, { before: SceneJSON; input: string; id?: string }>();
+  for (const { ss, x } of all) {
+    if (x.replay === "ink") continue;
+    try {
+      const before = beforeOf(ss.dir, x), input = inputKey(x, before);
+      asks.set(x.key, { before, input, id: realId(input) });
+    } catch {} // a board that can't be read: skipped below
+  }
+  // The send an input belongs to: the one already holding its case (the bank case made from it, then a look window or
+  // the owner's word, then triage), else the earliest. A later pull bringing an earlier copy never moves it.
+  const holds = (key: string, id?: string) => (id && bank(id)?.key === key ? 3 : gold.get(key)?.proposedAt || rv.get(key)?.verdict ? 2 : triage.has(key) ? 1 : 0);
+  const holder = new Map<string, string>();
+  for (const { x } of all) {
+    const a = asks.get(x.key);
+    const was = a && holder.get(a.input);
+    if (a && (was === undefined || holds(x.key, a.id) > holds(was, a.id))) holder.set(a.input, x.key);
+  }
   return all.map(({ ss, x, n }): Card => {
     const who = whoOf(ss.s);
-    const c: Card = { key: x.key, ss, x, n, who, split: sp[who] ?? "tune", state: "pulled", review: rv.get(x.key) ?? { edits: {} }, triage: triage.get(ss.s.id)?.get(x.key), gold: goldOf(x.key) };
+    const c: Card = { key: x.key, ss, x, n, who, split: sp[who] ?? "tune", state: "pulled", review: rv.get(x.key) ?? { edits: {} }, triage: triage.get(x.key), gold: gold.get(x.key) };
     const skip = (why: string) => Object.assign(c, { state: "skipped", skip: why });
     if (x.replay === "ink") return skip("its ink was lost (sent before the send log)");
-    const before = beforeOf(ss.dir, x);
-    if (before.shapes.some(needsPicture)) return skip("its board still waits for a picture, which both arms would draw");
-    const k = inputKey(x, before);
-    if (seen.has(k)) return skip("a repeat of an earlier send");
-    seen.add(k);
-    c.id = realId(k);
+    const a = asks.get(x.key);
+    if (!a || (undrawn.get(x.key) ?? 0) >= SHOT_TRIES) return skip("its boards couldn't be drawn");
+    if (a.before.shapes.some(needsPicture)) return skip("its board still waits for a picture, which both arms would draw");
+    if (holder.get(a.input) !== x.key) return skip("a repeat of another send");
+    c.id = a.id;
     if (!c.triage) return c;
+    if (c.triage.drawing === false && c.review.verdict !== "approve") return skip(NOT_DRAWING);
     c.state = "labeled";
     const g = c.triage.gold ? goldSettled(c.gold) : "none";
     if (!g) return c;
@@ -180,8 +207,9 @@ export function cards(now = Date.now()): Card[] {
       opened = c.gold!.proposedAt;
     } else if (c.id) {
       if (voided.has(c.id)) return skip("its bank case was voided by a sync");
-      const info = bankInfo(c.id);
+      const info = bank(c.id);
       if (info && (info.recordTries ?? 0) >= RECORD_TRIES && !info.proposedAt) return skip("the champion couldn't replay it");
+      if (info && (info.expectTries ?? 0) >= EXPECT_TRIES && !existsSync(join(paths().bankCase(c.id), "expectation.json"))) return skip("no expectation could be drafted for it");
       c.bank = c.id;
       opened = info?.proposedAt;
     }
@@ -245,6 +273,11 @@ export function recorded(id: string, run: string, championSha: string) {
 export function unrecorded(id: string) {
   const info = bankInfo(id)!;
   put(join(paths().bankCase(id), "case.json"), { ...info, recordTries: (info.recordTries ?? 0) + 1 } satisfies BankInfo);
+}
+/** A drafted expectation that came back unreadable: counted, so the judge isn't paid for it forever (EXPECT_TRIES). */
+export function undrafted(id: string) {
+  const info = bankInfo(id)!;
+  put(join(paths().bankCase(id), "case.json"), { ...info, expectTries: (info.expectTries ?? 0) + 1 } satisfies BankInfo);
 }
 /** R-hold cards open their look window once their gold is shot (they have no replay to wait for). */
 export function openHoldCards(): number {

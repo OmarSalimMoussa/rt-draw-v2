@@ -22,8 +22,15 @@ import { type RealSend, type Session, type Source, afterOf, beforeOf, ingest } f
 export const OPUS = { model: "opus", effort: "high" } as const;
 /** Sends judged per triage call: two images each. */
 const TRIAGE_WINDOW = 11;
-/** Gold drawn this many times at most: a send whose gold stays unreadable is proposed with a drafted expectation. */
+/** Gold drawn this many times at most: a tune card whose gold stays unreadable is proposed with a drafted expectation, an R-hold card skipped. */
 export const GOLD_TRIES = 2;
+/** Tries at a send's images, or at gold's, before the send is skipped as one whose boards can't be drawn. */
+export const SHOT_TRIES = 3;
+/**
+ * A session's sends are triaged once its last send is this old: what the person did next is triage's best evidence of
+ * what they meant, and a send is judged only once.
+ */
+export const TRIAGE_SETTLE_MS = 60 * 60_000;
 /** Local (the owner's dev server) sessions before this aren't labeled: the hosted app's testers started then. */
 export const REAL_SINCE = "2026-10-22";
 const ASPECT = SCREEN.w / SCREEN.h;
@@ -40,11 +47,15 @@ export type TriageRow = {
   categories: string[];
   evidence: string;
   gold: boolean;
+  /** Whether they asked for something drawn or changed (absent in rows judged before 2026-10-28: taken as yes). */
+  drawing?: boolean;
 };
 export type GoldCase = {
   key: string; session: string; at: string; prompt: string;
   /** How many times gold was drawn for the send (GOLD_TRIES at most). */
   attempts: number;
+  /** Tries at the gold board's image that failed (SHOT_TRIES at most); a rebuilt board starts again. */
+  shotTries?: number;
   /** When the owner's look window opened, for a send in no bank case (an R-hold person's): cases.ts. */
   proposedAt?: string;
   meant: string; categories: string[]; evidence: string;
@@ -68,6 +79,11 @@ export const put = (f: string, v: unknown) => {
 };
 
 export const realHome = () => join(paths().home, "real");
+/** Intake's last pass (real/intake.json, intake.ts): when, what failed, and how many passes in a row had a failure. */
+export type IntakePass = { at: string; failed: number; failedPasses: number; ended?: "week" | "stop" };
+export const passFile = () => join(realHome(), "intake.json");
+/** `rte intake --regold` while the loop runs: the loop's next intake redraws gold (real/regold.request). */
+export const regoldFile = () => join(realHome(), "regold.request");
 const sessionsDir = () => join(realHome(), "sessions");
 const goldDir = () => join(realHome(), "gold");
 /** A send's gold folder: its key with "#" as "-". */
@@ -154,15 +170,21 @@ export const realShot = (page: Page): Shot => async (scene, view, strokes) => {
 
 type Images = Record<string, { before: string; after: string }>;
 export const imagesOf = (dir: string) => maybe<Images>(join(dir, "img", "index.json")) ?? {};
-/** Whether every send of a session has its images. */
+/** Failed tries at each send's images (img/failed.json): SHOT_TRIES of them, and the send is skipped. */
+export const renderFailures = (dir: string) => maybe<Record<string, number>>(join(dir, "img", "failed.json")) ?? {};
+/** Whether every send of a session has its images, or has failed at them SHOT_TRIES times. */
 export const rendered = ({ dir, s }: Labeled) => {
-  const img = imagesOf(dir);
-  return s.sends.every((x) => img[x.key]);
+  const img = imagesOf(dir), failed = renderFailures(dir);
+  return s.sends.every((x) => img[x.key] || (failed[x.key] ?? 0) >= SHOT_TRIES);
 };
 
-/** Each send's before (with the person's ink) and after, on one frame (frameOf), as JPEGs named by what they show; ones already shot are kept. */
-export async function renderSession({ dir, s }: Labeled, shot: Shot): Promise<number> {
-  const index: Images = {};
+/**
+ * Each send's before (with the person's ink) and after, on one frame (frameOf), as JPEGs named by what they show; ones
+ * already shot are kept. A send whose boards can't be built or drawn is counted and left (the rest go on), `failed`
+ * hearing its key and error; the next pass tries it again.
+ */
+export async function renderSession({ dir, s }: Labeled, shot: Shot, failed: (key: string, err: unknown) => void = () => {}): Promise<number> {
+  const index: Images = {}, fails = renderFailures(dir);
   let made = 0;
   const shoot = async (scene: SceneJSON, view: View, strokes: RealSend["strokes"]) => {
     const name = `${sha(js([scene, view, strokes])).slice(0, 16)}.jpg`;
@@ -175,11 +197,19 @@ export async function renderSession({ dir, s }: Labeled, shot: Shot): Promise<nu
     return name;
   };
   for (const x of s.sends) {
-    const before = beforeOf(dir, x), after = afterOf(dir, x);
-    const frame = frameOf(before, after, cameraOf(x, before), x.strokes);
-    index[x.key] = { before: await shoot(before, frame, x.strokes), after: await shoot(after, frame, []) };
+    if ((fails[x.key] ?? 0) >= SHOT_TRIES) continue;
+    try {
+      const before = beforeOf(dir, x), after = afterOf(dir, x);
+      const frame = frameOf(before, after, cameraOf(x, before), x.strokes);
+      index[x.key] = { before: await shoot(before, frame, x.strokes), after: await shoot(after, frame, []) };
+      delete fails[x.key];
+    } catch (err) {
+      fails[x.key] = (fails[x.key] ?? 0) + 1;
+      failed(x.key, err);
+    }
   }
   put(join(dir, "img", "index.json"), index);
+  put(join(dir, "img", "failed.json"), fails);
   return made;
 }
 
@@ -196,20 +226,17 @@ const jsonIn = (text: string) => {
 /** A session's triage rows by send key (triage.json). */
 export const triageOf = (dir: string) => new Map((maybe<{ sends: TriageRow[] }>(join(dir, "triage.json"))?.sends ?? []).map((r) => [r.key, r]));
 /**
- * Triage of a session's sends at `keys` that have no row: Opus, a window of them per call, with every send of the
- * session as context. A send judged once keeps its row (a new prompt judges new sends only). Returns how many it judged.
+ * Triage of a session's sends at `keys` that have images and no row: Opus, a window of them per call, with every send
+ * of the session as context. A send judged once keeps its row (a new prompt judges new sends only). Returns how many it
+ * judged.
  */
 export async function triageSession({ dir, s }: Labeled, keys: string[], run: string, gate: Gate): Promise<number> {
   const rows = triageOf(dir);
-  const todo = s.sends.flatMap((x, i) => (keys.includes(x.key) && !rows.has(x.key) ? [i] : []));
   const img = imagesOf(dir);
+  const todo = s.sends.flatMap((x, i) => (keys.includes(x.key) && !rows.has(x.key) && img[x.key] ? [i] : []));
   for (let k = 0; k < todo.length; k += TRIAGE_WINDOW) {
     const win = todo.slice(k, k + TRIAGE_WINDOW);
-    const images = win.flatMap((i) => {
-      const x = s.sends[i];
-      if (!img[x.key]) throw new Error(`${x.key} has no images yet`);
-      return [dataUrl(join(dir, "img", img[x.key].before)), dataUrl(join(dir, "img", img[x.key].after))];
-    });
+    const images = win.flatMap((i) => [dataUrl(join(dir, "img", img[s.sends[i].key].before)), dataUrl(join(dir, "img", img[s.sends[i].key].after))]);
     await gate();
     const { text } = await ask({ role: "real-triage", ...OPUS, system: TRIAGE_SYSTEM, turns: triageTurns(s, win), images, run, case: s.id });
     const got = (jsonIn(text)?.sends ?? []) as Partial<TriageRow & { n: number }>[];
@@ -220,7 +247,7 @@ export async function triageSession({ dir, s }: Labeled, keys: string[], run: st
       if (!r) throw new Error(`triage of ${s.id} left out send ${i + 1} (${text.length} characters of reply)`);
       const landed = (["yes", "partly", "no"] as const).find((l) => l === r.landed) ?? "no";
       const x = s.sends[i];
-      rows.set(x.key, { key: x.key, prompt: sha12(TRIAGE_SYSTEM), at, meant: String(r.meant ?? ""), landed, categories: Array.isArray(r.categories) ? r.categories.map(String) : [], evidence: String(r.evidence ?? ""), gold: r.gold === true && landed !== "yes" });
+      rows.set(x.key, { key: x.key, prompt: sha12(TRIAGE_SYSTEM), at, meant: String(r.meant ?? ""), landed, categories: Array.isArray(r.categories) ? r.categories.map(String) : [], evidence: String(r.evidence ?? ""), gold: r.gold === true && landed !== "yes", drawing: r.drawing !== false });
     }
     // After each window: a later window's failure keeps what this one paid for.
     put(join(dir, "triage.json"), { sends: s.sends.flatMap((x) => rows.get(x.key) ?? []) });
@@ -314,9 +341,10 @@ export function rebuildGold(): number {
     const read = readGold(readFileSync(join(out, "reply.txt"), "utf8"));
     if ("error" in read) continue;
     const b = built(read, beforeOf(ss.dir, x), afterOf(ss.dir, x));
-    const now: GoldCase = { ...g, gold: b.gold, problems: b.problems, appChecks: b.appChecks, goldChecks: b.goldChecks };
+    const moved = js(maybe(join(out, "gold.scene.json"))) !== js(b.board);
+    const now: GoldCase = { ...g, gold: b.gold, problems: b.problems, appChecks: b.appChecks, goldChecks: b.goldChecks, ...(moved ? { shotTries: 0 } : {}) };
     if (js(now) !== js(g)) put(join(out, "gold.json"), now);
-    if (js(maybe(join(out, "gold.scene.json"))) !== js(b.board)) {
+    if (moved) {
       put(join(out, "gold.scene.json"), b.board);
       rmSync(join(out, "gold.jpg"), { force: true });
       changed++;
@@ -325,9 +353,10 @@ export function rebuildGold(): number {
   return changed;
 }
 
-/** Gold boards without an image, each the app's result's frame widened to what gold reached. */
-export const unshotGold = () => goldCases().filter((g) => g.gold && !existsSync(join(goldCaseDir(g.key), "gold.jpg")) && existsSync(join(goldCaseDir(g.key), "gold.scene.json")));
-export async function shootGold(shot: Shot): Promise<number> {
+/** Gold boards without an image that are still worth a try (SHOT_TRIES), each the app's result's frame widened to what gold reached. */
+export const unshotGold = () => goldCases().filter((g) => g.gold && (g.shotTries ?? 0) < SHOT_TRIES && !existsSync(join(goldCaseDir(g.key), "gold.jpg")) && existsSync(join(goldCaseDir(g.key), "gold.scene.json")));
+/** Each unshot gold board's image; a board the bridge can't draw is counted (shotTries) and left. Returns the images made. */
+export async function shootGold(shot: Shot, failed: (key: string, err: unknown) => void = () => {}): Promise<number> {
   let made = 0;
   for (const g of unshotGold()) {
     const { ss, x } = g;
@@ -337,9 +366,10 @@ export async function shootGold(shot: Shot): Promise<number> {
     try {
       writeFileSync(join(out, "gold.jpg"), await shot(after, fit(unite(app, frameOf(before, after, cameraOf(x, before), x.strokes))), []));
       made++;
-    } catch (e) {
+    } catch (err) {
       const { ss: _, x: __, ...stored } = g;
-      put(join(out, "gold.json"), { ...stored, problems: [...g.problems, `the bridge couldn't draw gold: ${(e as Error).message.split("\n")[0]}`] } satisfies GoldCase);
+      put(join(out, "gold.json"), { ...stored, shotTries: (g.shotTries ?? 0) + 1 } satisfies GoldCase);
+      failed(g.key, err);
     }
   }
   return made;

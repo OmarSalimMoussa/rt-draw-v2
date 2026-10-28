@@ -39,7 +39,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   note [<thread> "<text>" [--resolve] | <thread> --resolve | new "<text>"]   (the owner's threads in Eval HQ: no thread lists
        those where they wrote last; a reply is Claude's, in $RT_EVAL_HOME/notes/threads.jsonl)
   api status | needs_you [--thread <id> --text "<words>" [--resolve]] | run | stop | intake_now   (JSON: Claude's tools, evals/ops/mcp.ts)
-  shipped --sha <commit> --tag <image tag>   (evals/ops/ship.sh's record of what's on prod)`;
+  shipped --sha <commit> --tag <image tag> [--url <prod's address>]   (evals/ops/ship.sh's record of what's on prod)`;
 
 /** Each command, given the command line (rte.ts' Rte): the commands are in commands/, decide.ts and coordinator.ts. */
 const COMMANDS: Record<string, (rte: Rte) => Promise<number | void>> = {

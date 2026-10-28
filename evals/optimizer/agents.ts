@@ -108,10 +108,16 @@ export const canUseToolOf = (rule: Rule): CanUseTool => async (tool, input) => {
 export const engineerCanUseTool = (wt: string) => canUseToolOf(toolRule(wt, { root: join(wt, "src/core"), edit: true }));
 
 /** The gateway's current token slot (or the next one not spent): agents rotate with the eval's calls. */
+/** No token slot is free for an agent session (each is paused or parked): the loop's pause comes next, never a crash. */
+export class NoSlot extends Error {
+  constructor() {
+    super("every token slot is spent: no agent session now");
+  }
+}
 export async function slotToken(tokens: Token[], url?: string): Promise<Token> {
   const { slots } = (await gatewayStatus(url)) as { slots: { slot: number; current: boolean; why?: string }[] };
   const s = [...slots.filter((x) => x.current), ...slots.filter((x) => !x.current)].find((x) => !x.why && tokens.some((t) => t.slot === x.slot));
-  if (!s) throw new Error("every token slot is spent: no agent session now");
+  if (!s) throw new NoSlot();
   return tokens.find((t) => t.slot === s.slot)!;
 }
 
@@ -300,7 +306,8 @@ export function readCards(text: string): { cards: HypothesisCard[]; dropped: str
   if (!Array.isArray(all)) return { cards: [], dropped: ["no JSON array of cards in the critic's answer"] };
   const dropped = all.flatMap((c) => (cardFault(c) ? [`${c.id ?? "?"}: ${cardFault(c)}`] : []));
   const ok = all.filter((c) => !cardFault(c)) as HypothesisCard[];
-  // Free cards first (knobs and sweeps, no engineer) made up 26 of era 3's decisions, none kept, and none the analyst's.
+  // The critic's own order, never free cards (knobs and sweeps, no engineer) first: that rule made 26 of era 3's
+  // decisions, none kept and none the analyst's.
   const cards = ok.slice(0, LOOP.search.cards);
   return { cards, dropped: [...dropped, ...ok.filter((c) => !cards.includes(c)).map((c) => `${c.id}: over the ${LOOP.search.cards}-card limit`)] };
 }
@@ -314,9 +321,9 @@ export async function analyst(o: Session & { digest: string; tree: string }): Pr
   return result.text || `none: the analyst's session ended (${result.stop}) before it answered. Propose from the digest yourself.`;
 }
 
-/** The critic: a read-only session in the champion's tree on the analyst's output, the digest and the tried index. */
-export async function critic(o: Session & { analysis: string; digest: string; tried: string[]; tree: string }) {
-  const prompt = `# The analyst's hypotheses\n${o.analysis}\n\n# The digest\n${o.digest}\n\n# Tried\n${o.tried.join("\n") || "none yet"}`;
+/** The critic: a read-only session in the champion's tree on the analyst's output and its digest, whose decisions are every one so far. */
+export async function critic(o: Session & { analysis: string; digest: string; tree: string }) {
+  const prompt = `# The analyst's hypotheses\n${o.analysis}\n\n# The digest\n${o.digest}`;
   const result = await runAgent({ role: "critic", run: o.run, cwd: o.tree, system: CRITIC_SYSTEM, prompt, rule: toolRule(o.tree, { root: o.tree, edit: false }), caps: o.caps ?? CAPS.critic, token: o.token, mockApi: o.mockApi });
   return { ...readCards(result.text), result };
 }

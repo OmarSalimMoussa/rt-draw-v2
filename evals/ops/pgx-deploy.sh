@@ -4,26 +4,30 @@
 # on), re-pins the loop clone's harness (init --refresh: fast-forward, tag eval-harness-<n>), reinstalls the units and
 # restarts Eval HQ, and starts the loop again if it was running (its unit checks readiness at 0 calls first; a stopped
 # loop gets the check here). The harness never changes under a running loop or intake.
+# t25 rehearses it on units of its own: RT_UNIT_PREFIX (default rt, as the units' env file sets it) and RT_RTE.
 set -euo pipefail
 export RT_EVAL_HOME=${RT_EVAL_HOME:-$HOME/rt-eval}
 cd "$RT_EVAL_HOME/repo"
-was=$(systemctl --user is-active rt-loop.service || true)
+prefix=${RT_UNIT_PREFIX:-rt}
+rte=${RT_RTE:-bin/rte}
+was=$(systemctl --user is-active "$prefix-loop.service" || true)
 case "$was" in
   active)
     echo "deploy: the loop stops after its card"
-    bin/rte stop-after
-    while systemctl --user is-active -q rt-loop.service; do sleep 30; done ;;
+    "$rte" stop-after
+    # Until it's down for good: a crash restart (activating) or its way out (deactivating) is not yet stopped.
+    until [[ $(systemctl --user is-active "$prefix-loop.service" || true) =~ ^(inactive|failed)$ ]]; do sleep 5; done ;;
   # Still in its readiness check: nothing in flight to finish.
-  activating) systemctl --user stop rt-loop.service ;;
+  activating) systemctl --user stop "$prefix-loop.service" ;;
 esac
-systemctl --user stop rt-intake.service 2>/dev/null || true
-bin/rte init --refresh
+systemctl --user stop "$prefix-intake.service" 2>/dev/null || true
+"$rte" init --refresh
 bash evals/ops/units.sh
-systemctl --user restart rt-pages.service 2>/dev/null || true
+systemctl --user restart "$prefix-pages.service" 2>/dev/null || true
 # The loop's unit checks readiness before it starts; a stopped loop gets the check here.
 if [ "$was" = active ] || [ "$was" = activating ]; then
-  bin/rte run
+  "$rte" run
 else
-  bin/rte ready --stub --mock-api
+  "$rte" ready --stub --mock-api
   echo "deploy: done; the loop wasn't running, so it stays stopped (bin/rte run starts it)"
 fi

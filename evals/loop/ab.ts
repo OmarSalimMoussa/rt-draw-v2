@@ -18,8 +18,8 @@ import { draw, positionsFor } from "../judge/judge.ts";
 import { type Positions, caseFile } from "../judge/packet.ts";
 import { OVERUSE } from "../optimizer/patterns.ts";
 import { type Chrome, type Page, capture, launchChrome, paintedCapture } from "./chrome.ts";
-import { CapReached, endCase, gatewayStatus, setMode } from "./client.ts";
-import { LOOP, configId } from "./config.ts";
+import { CapReached, ask, endCase, gatewayStatus, setMode } from "./client.ts";
+import { LOOP, WEEK_CHECK, configId } from "./config.ts";
 import { eachSlot } from "./drive.ts";
 import type { RunMode } from "./gateway.ts";
 import { type Machine, beforeWave, sampleLoad } from "./load.ts";
@@ -28,6 +28,7 @@ import { isRealCase, paths } from "./paths.ts";
 import { appendLine, caseDir, isDone, put, putImage, runCaseDone, runFile, writeArm, writeRun } from "./record.ts";
 import type { Pace } from "./state.ts";
 import { ARM_PORT, type ArmServer, serveArm } from "./servers.ts";
+import type { SlotN } from "./tokens.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { type Decision, decide } from "./verdict.ts";
 import type {
@@ -49,13 +50,26 @@ export class WeekSpent extends Error {
     super(`budget: every token is past ${Math.round(LOOP.weekSevenDayMax * 100)}% of its week`);
   }
 }
+/** The owner's stop, asked for while a step waited out the budget: the step ends (what it paid is cached) and the loop stops. */
+export class StopAsked extends Error {
+  constructor() {
+    super("a stop was asked for during the budget's pause");
+  }
+}
+
+/**
+ * The loop's ears on a pause inside a step (a decision's case, an engineer's build, intake's calls): it says paused in
+ * state.json while one waits, and running again after, and a stop asked for ends the wait. Unset elsewhere (rte intake
+ * from its timer, the checks): a pause only waits.
+ */
+export const budgetHooks: { paused?: (until?: string) => void; resumed?: () => void; stopAsked?: () => boolean } = {};
 
 /**
  * The budget before each paying step (LOOP-V2.md A4), not only between steps: a case sent live or judged, a top-up
- * session, a continuation send, a real-use triage or gold call. Every token slot past LOOP.fiveHourPauseAt of its
- * five-hour window waits here for the earliest reset, so a decision started at 59% can't run on to 95%. Every token past
- * its week ends the step (WeekSpent): only the loop's pause reads the week again, and calls paid so far are cached.
- * True when it waited.
+ * session, a continuation send, a real-use triage or gold call, an engineer's session. Every token slot past
+ * LOOP.fiveHourPauseAt of its five-hour window waits here for the earliest reset, so a decision started at 59% can't run
+ * on to 95%. Every token past its week ends the step (WeekSpent): recheckWeeks reads the week again, and calls paid so far
+ * are cached. True when it waited.
  */
 export async function budgetGate(gateway: string, runId: string): Promise<boolean> {
   let waited = false;
@@ -64,15 +78,41 @@ export async function budgetGate(gateway: string, runId: string): Promise<boolea
       const { pace } = (await gatewayStatus(gateway)) as { pace: Pace };
       if (pace.ok) return waited;
       if (pace.week) throw new WeekSpent();
+      if (budgetHooks.stopAsked?.()) throw new StopAsked();
       if (!waited) {
-        appendLine(runFile(runId, "budget-pause.jsonl"), { at: new Date().toISOString(), until: pace.pauseUntil ? new Date(pace.pauseUntil).toISOString() : undefined });
-        if (!waiters++) pauseStart = Date.now();
+        const until = pace.pauseUntil ? new Date(pace.pauseUntil).toISOString() : undefined;
+        appendLine(runFile(runId, "budget-pause.jsonl"), { at: new Date().toISOString(), until });
+        if (!waiters++) (pauseStart = Date.now()), budgetHooks.paused?.(until);
         waited = true;
       }
-      await new Promise((r) => setTimeout(r, Math.min(PACE_POLL_MS, Math.max(1000, pace.pauseUntil - Date.now()))));
+      // Looked at again often enough for a stop to end the wait within a minute.
+      await new Promise((r) => setTimeout(r, Math.min(budgetHooks.stopAsked ? 60_000 : PACE_POLL_MS, Math.max(1000, pace.pauseUntil - Date.now()))));
     }
   } finally {
-    if (waited && !--waiters) pausedMs += Date.now() - pauseStart;
+    if (waited && !--waiters) (pausedMs += Date.now() - pauseStart), budgetHooks.resumed?.();
+  }
+}
+
+type WeekSlot = { slot: SlotN; sevenDay?: number; why?: string };
+/** When each slot's week was last checked in this process (ms): a check the server answers without a reading waits WEEK_CHECK.afterH too. */
+const weekChecked = new Map<SlotN, number>();
+export const weekOf = (x?: { sevenDay?: number }) => (x?.sevenDay === undefined ? "unknown" : `${Math.round(x.sevenDay * 100)}%`);
+
+/**
+ * WEEK_CHECK: one one-word call on each token parked for its week on an old reading (or none), so its week is read
+ * again: the loop's pause, rte week and rte intake call it, and a week that reset frees its token.
+ */
+export async function recheckWeeks(gw: string, say: (line: string) => void) {
+  const s = (await gatewayStatus(gw)) as { stale?: SlotN[]; slots: WeekSlot[] };
+  for (const slot of s.stale ?? []) {
+    if (Date.now() - (weekChecked.get(slot) ?? 0) < WEEK_CHECK.afterH * 3_600_000) continue;
+    weekChecked.set(slot, Date.now());
+    // Its own request each time: the run's cache would serve a repeat.
+    const at = new Date().toISOString();
+    const req = { role: "probe", model: "haiku", system: "Answer with one word.", user: `Week check, slot ${slot}, ${at}?`, run: `week-${at.replace(/[:.]/g, "-")}`, token: slot } as const;
+    const error = await ask(req, gw).then(() => "", (e: Error) => e.message);
+    const now = ((await gatewayStatus(gw)) as { slots: WeekSlot[] }).slots.find((x) => x.slot === slot);
+    say(`token ${slot}'s week read again: ${weekOf(s.slots.find((x) => x.slot === slot))} to ${weekOf(now)} of its weekly limit (paid calls pause past ${Math.round(LOOP.weekSevenDayMax * 100)}%)${error ? `; the call failed: ${error}` : ""}; ${now?.why ? `still parked: ${now.why}` : "back in use"}`);
   }
 }
 

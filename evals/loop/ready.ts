@@ -30,6 +30,7 @@ import { inFactorySlice, managedSettingsHash, onAC, quiet, sampleLoad } from "./
 import { type MeterCall, readMeter } from "./meter.ts";
 import { type Paths, isRealCase, ownerCheckout, paths } from "./paths.ts";
 import { ARM_PORT, serveArm } from "./servers.ts";
+import { lock } from "./state.ts";
 import { DRAW_DELAY_MS, type Stubs, fakeApiReplies, serveStubs, stubPictures, stubReply } from "./stubs.ts";
 import { type SlotN, Slots } from "./tokens.ts";
 import { evalsHash, treeOf } from "./trees.ts";
@@ -533,7 +534,14 @@ if (import.meta.main) {
   const argv = process.argv.slice(2);
   const arg = (k: string) => (argv.includes(`--${k}`) ? argv[argv.indexOf(`--${k}`) + 1] : undefined);
   try {
-    const results = await ready({ stub: argv.includes("--stub"), mockApi: argv.includes("--mock-api"), only: arg("only")?.split(","), repo: arg("repo"), port: arg("port") ? Number(arg("port")) : undefined, pageHook: arg("page-hook") });
+    // Its arm servers and Chrome take the ports a loop's rig uses, as rte ready's do: refused while another command runs.
+    const held = await lock("ready");
+    let results: Awaited<ReturnType<typeof ready>>;
+    try {
+      results = await ready({ stub: argv.includes("--stub"), mockApi: argv.includes("--mock-api"), only: arg("only")?.split(","), repo: arg("repo"), port: arg("port") ? Number(arg("port")) : undefined, pageHook: arg("page-hook") });
+    } finally {
+      held.release();
+    }
     const failed = results.filter((r) => !r.ok).map((r) => r.id);
     console.log(failed.length ? `ready: FAIL ${failed.join(" ")}` : `ready: ok (${results.filter((r) => !r.skipped).length} passed, ${results.filter((r) => r.skipped).length} skipped)`);
     process.exit(failed.length ? 1 : 0);

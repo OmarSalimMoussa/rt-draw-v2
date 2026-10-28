@@ -61,7 +61,7 @@ process.env.RT_EVAL_HOME = home;
 // any run: a latency keep's fidelity floor by look), then the owner's v2 rules (2026-10-25, evals/LOOP-V2.md: first drawing
 // and render decide with no allowance, no cost cap, the 60% / 50% budget, the search's numbers), then the cleanup's
 // deletions (2026-10-26: the debts, the night cap, the window share, the over-use and cost thresholds, sampled craft,
-// the void rerun's knobs; one pooled latency test), then the illustrations round's bars (2026-10-26, RUNBOOK 7b), then the
+// the void rerun's knobs; one pooled latency test), then the illustrations round's bars (2026-10-26, RUNBOOK: the judge on pictures alone), then the
 // audit's search (2026-10-27: 4 to 8 hypotheses, no near-wins list), then the funnel audit's (2026-10-27: Rule F to 160
 // with looser early reverts, G3's veto at −1.645 and its direction from 16 cases), then the owner's week at 70% (2026-10-27),
 // then V9's event-loop limit at 100 ms (2026-10-28: the PGX's own 21–95 ms lags voided whole decisions).

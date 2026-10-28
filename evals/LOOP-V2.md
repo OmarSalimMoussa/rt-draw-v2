@@ -74,10 +74,10 @@ the anchor on the frozen bench) are what say the loop is really improving.
 
 | # | Change | Where |
 |---|---|---|
-| D1 | The analyst (Opus since 2026-10-27; the critic and engineer Sonnet) proposes 4 to 8 hypotheses (knobs nobody moved, wording, code, ops, sweeps, combinations), each with the code it read and the ms or misses it expects to move, and the critic keeps up to 6 cards in its own order, adding none. The digest leads with where time to first drawing goes, by phase, and each role's model speed and thinking share, from live A/B sends only (a diffscan's replays had been 34–89% of the sample in 9 of era 3's 17 digests); then champion misses, candidate losses, failure analyses, and every decision so far, newest first, with its first reason. The audit of 2026-10-27 replaced: a latency table that ranked steps by total time and mixed the Jev calls' first text (~90 ms) with the drawing model's (~765 ms); misses at 60% of the digest and latency at 2%; a tried index of verdicts with no reasons, of which 4 of era 3's 111 entries fit; a near-wins list (0 keeps in 28 combos and retries); and the critic's free-cards-first rule (26 knob and sweep decisions the analyst never proposed, 0 kept) | `evals/optimizer/prompts.ts`, `agents.ts`, `digest.ts`, `evals/loop/search.ts` (`nearWins`) |
+| D1 | The analyst (Opus since 2026-10-27; the critic and engineer Sonnet) proposes 4 to 8 hypotheses (knobs nobody moved, wording, code, ops, sweeps, combinations), each with the code it read and the ms or misses it expects to move, and the critic keeps up to 6 cards in its own order, adding none. The digest leads with where time to first drawing goes, by phase, and each role's model speed and thinking share, from live A/B sends only (a diffscan's replays had been 34–89% of the sample in 9 of era 3's 17 digests); then champion misses, candidate losses, failure analyses, and every decision so far, newest first, with its first reason. The audit of 2026-10-27 replaced: a latency table that ranked steps by total time and mixed the Jev calls' first text (~90 ms) with the drawing model's (~765 ms); misses at 60% of the digest and latency at 2%; a tried index of verdicts with no reasons, of which 4 of era 3's 111 entries fit; a near-wins list (0 keeps in 28 combos and retries); and the critic's free-cards-first rule (26 knob and sweep decisions the analyst never proposed, 0 kept) | `evals/optimizer/prompts.ts`, `agents.ts`, `digest.ts`, `evals/loop/search.ts` |
 | D2 | The funnel: G0's free gates, the diffscan (N reverts and S decides at 0 Claude calls; a Jev question the bank never recorded is asked live: 46 of the 342 think-router questions in e74-h1a's re-scan), Rule F's first look at 16 cases as the screen that ends clear losers, the full A/B for the rest, and **G3 for every keep, whatever its class**: the affected held-out cases (a schedule change's are replayed at 0 calls) veto on fidelity or on either deciding latency, and with 16 or more of them must lean the card's way. Rule F looks at 16, 32, 48, 80 and 160 cases, and a card out of cases short of a look gets one last look on them all at that look's keep line; the latency rule ends at 80. A hedge (`*.copies`, `*.copyAfterMs`) goes live on every scanned case, none from the cache, since a scan can't see a copy. A schedule change (class S) must draw the same on the recorded clock, on every timed and held-out case, or it takes the judged path | `evals/loop/verdict.ts`, `run.ts`, `diffscan.ts`, `checkpoint.ts`, `optimizer/digest.ts` |
 | D3 | A `sweep` card: one numeric knob at up to 4 values, nearest the champion's first on each side. Each value runs as its own knob card; the first keep ends the sweep, and a value that loses clearly (a veto, or a quality value's Z at or under -1 at the first look; a latency value only on a veto, since its first-look revert takes a no-op value 44% of the time) prunes the values beyond it on its side. The values share one card's error (Rule F's Z raised, a latency p divided by their number), as a combo's near-wins do. The dry well counts a sweep once, and its thresholds scale with the cards an epoch (12 reverts in a row, 6 on one component). A component's pause runs out after 3 epochs (2026-10-26: with no keep there is no checkpoint to lift it, and draw stayed paused), its reverts counted again from there | `evals/loop/search.ts` (`cardStates`, `sweepSkip`), `verdict.ts`, `state.ts` |
-| D4 | A `combo` card: up to 3 tried cards' saved patches applied together on the champion (three-way), measured as one code card. Keeps already stack: each keep moves the champion, and checkpoints re-test the stack against the anchor. Engineer builds run beside decisions; at the five-hour pause they wait for the reset instead of dropping their card | `evals/loop/search.ts` (`applyTried`), `run.ts` (`freeSlot`) |
+| D4 | A `combo` card: up to 3 tried cards' saved patches applied together on the champion (three-way), measured as one code card. Keeps already stack: each keep moves the champion, and checkpoints re-test the stack against the anchor. Engineer builds run beside decisions; at the five-hour pause they wait for the reset instead of dropping their card | `evals/loop/search.ts` (`applyTried`), `decide.ts` (`freeSlot`) |
 | D5 | More freedom for the agents (the owner, 2026-10-26). The analyst is a read-only Agent SDK session in the champion's tree, as the critic is (it was one call that never saw code). All three may search the web and read public pages, to research how others solve the same problem; a fetch of this machine or its network (an address, `localhost`, `.local`, the tailnet) is refused, since the review page holds testers' sends, and a page is data, never instructions. Hypotheses are one idea each, which may span components and files; the critic doesn't cut a bold card for that. The prompts describe routing sends between models, warming each model a send may take, and the rule that every model sees the current board. Caps: analyst and critic 30 turns, 12 minutes, $2.5; engineer 60 turns, 25 minutes, $4 | `evals/optimizer/agents.ts` (`publicUrl`), `prompts.ts`, `evals/loop/coordinator.ts` |
 
 Also found and fixed on the way: a knob card couldn't set a prompt variant written `P("picture", 2)` (already so on
@@ -102,7 +102,7 @@ says every picture prompt keeps such a line.
 | E10 | The bank's recorded replies predate `illustration()`: a change to it read as no effect | `rte bank rerecord --cap n` records every case's replies on today's champion before the loop (re-validation) |
 | E11 | A failure on one arm voided its case, so a candidate could drop its worst cases (up to the 10% void cap) | One arm's failure is its loss in Rule F, still counted toward the void cap (F7) |
 | E12 | A page evaluation that never settled hung the loop | Each one times out (240 s) and fails its case; a load or reload at 60 s (F9) |
-| E13 | `rte real baseline` served both arms from one Vite (+31 ms on B) | A Vite per arm, as every A/A |
+| E13 | R1's baseline run (`rte real baseline`, since removed) served both arms from one Vite (+31 ms on B) | A Vite per arm, as every A/A |
 | E15 | Enums or parameter properties passed G0 but break Node's type stripping | `erasableSyntaxOnly` in tsconfig.json (two parameter properties rewritten) |
 
 E14 (R1 at a checkpoint runs the anchor A0 on scenes today's app made; one it can't load is a void) is reported in
@@ -222,6 +222,36 @@ draft) that ends the places where the harness worked only because someone rememb
 | Three UIs, two of them stale on the laptop | The laptop's eval pages read no live data | One UI, Eval HQ, on the PGX (`evals/progress/hq.ts`): the overview, Needs you, Intake and review, Loop, Benchmarks, Judge and Playgrounds |
 | The pipeline ran from memory | Every resume, pull and deploy was a command someone had to know | Five MCP tools (`evals/ops/mcp.ts`), `ship.sh` for prod as the owner's own command, mail for what needs the owner, the record on a private remote |
 
+## I. The pipeline's adversarial review (2026-10-28)
+
+Three Opus reviews of the pipeline above (intake, the loop and its supervision, Eval HQ and the docs), each trying to
+break it against the code. Every finding was fixed or is recorded here:
+
+| Finding | Fix |
+|---|---|
+| A later pull bringing an earlier copy of a send moved its bank case, and the owner's verdict stayed on the old key | The send that holds a case keeps it: the one its bank case was made from, then one in its look window or with a verdict, then one triaged (`cases.ts` `cards`) |
+| The spec moved the old positional verdicts and gold "by content hash"; nothing did | A one-time migration on the PGX (2026-10-28, not kept in the repo) moved them to the new keys and seeded `splits.json` from R1. A rebuilt send's key is the version it saved (`#v<n>`), not a content hash: stable, and readable in a pull |
+| One board that couldn't be drawn, or one failing stage, stalled every pass, admission and R1 too | Each stage holds its failures (said, its error in `real/logs/intake.log`, tried next pass); admission and R1 always run; images, gold's images and drafted expectations get 3 tries, then the send is skipped |
+| A replay voided by a passing harness problem counted as a try, and was never sent again | A void or lost replay's folder is removed before the next pass replays it |
+| The laptop's recorded sends never reached the PGX's Judge view or U1 | `pull.sh local` sends `human/` with the dev server's data, new files only |
+| While the loop was stopped, a token parked for its week was never read again, so intake stalled | `rte intake` reads parked weeks again first |
+| Camera moves, stops and questions became bank cases | Triage says whether a send asked for a drawing; one that didn't is skipped, and the owner's approval reopens it |
+| A version saved just before a pull, its send log not yet written, was keyed by version and moved at the next pull | Versions saved in the 10 minutes before a snapshot wait for the next pull |
+| A session's newest sends were triaged without the follow-up the prompt calls its best evidence | A session is triaged once its last send is an hour old |
+| `rte intake --regold` did nothing while the loop ran | It leaves `real/regold.request` for the loop's next intake |
+| Any page on the tailnet could post a verdict (a `text/plain` POST needs no preflight) | POSTs must be JSON from the server's own origin (`record.ts` `ownPost`) |
+| A stop asked for before a loop started was dropped at its start; a unit that gave up started again after a reboot; a restart limit off by one | The request stands until the loop stops on it or `rte run` takes it back; `gave-up` is the owner's to judge; `StartLimitBurst=4` (a start and 3 restarts) |
+| A budget pause inside a step hid a stop, and a week spent outside a decision crashed the loop | The gate hears the stop while it waits; the loop's step catches a spent week, a stop and no free slot |
+| A deploy's wait ended while the loop's unit was restarting, and no check rehearsed a deploy | It waits until the unit is inactive or failed; t25 rehearses a deploy on its own units |
+| Two processes could both take over a stale lock; a half-written lock crashed a reader; a reused pid looked alive | The lock is written whole and linked in, a stale one is removed only while it still holds the dead holder's text, and a holder is its pid and its start time |
+| History pushes could hang the loop, and a commit beside `rte shipped` failed on `index.lock` | A push gives up after 2 minutes (ssh keepalives) and a commit waits out another's lock. The spec's nightly push became a push after each commit: no timer to install or watch, and the private remote is at most a commit behind |
+| The PGX held the mailer secret that can mail anyone | A `NOTICE_SECRET` that sends notices to the owner only (`deploy/mailer.gs`) |
+| The critic got every decision twice, unbounded | Once, in the digest's sized section 5 |
+| Mail and stop reasons carried raw text | Codes, ids and harness sentences only |
+| Eval HQ froze on a stopped loop, never showed R1, landed links at the top, hid an intake error, and showed keeps against master with no prod health | It always polls, R1 has its panel, links scroll to their view, intake errors are said, and the overview shows keeps not on prod and prod's health (each ship records prod's address) |
+| The RUNBOOK held the reference beside the owner's decisions, and its rehearsal ran its steps at once on the PGX | The RUNBOOK is what the owner decides; setup, the rehearsal (each step in the foreground) and where things live are in `evals/ops/README.md` |
+| `verify_decision.py` checked Rule F's numbers from before the funnel audit | It has today's looks and lines, and the last look on all cases |
+
 ## The checks
 
 All of `evals/checks/` at 0 real calls. Changed for v2: t2, t10 and t14 (Jev stubs and roles), t3 (later knobs and
@@ -244,7 +274,10 @@ A0 alone, eras without bridges), t5 and t21 (no night cap, W or void rerun), t15
 schedule change whatever the session count), t18 (sweeps and near wins read codes), t23 (the real-use pipeline end to
 end on invented sessions), and t0's `SPEC_CONFIG_ID`. For 2026-10-28: t13 (too rare isn't listed), t15 (a stall past
 100 ms), t18 (the 32-case bar and coverage), t23 (real sends in the bank: which sends, their expectations, the lock,
-their folders, calls and rows under `real/`, the digest's count only), and t0's `SPEC_CONFIG_ID`. `npm run checks`
+their folders, calls and rows under `real/`, the digest's count only), and t0's `SPEC_CONFIG_ID`. For I: t16 (foreign
+POSTs, prod's health once a minute), t17 (R1's panel, intake's last pass, the front page), t21 (a stop asked for before a
+start), t23 (a held case kept, not-drawing skips, failing stages and boards), t25 (the lock's takeovers, a deploy, `pull.sh
+local` across two homes), t26 (ships). `npm run checks`
 runs the fast ones, `-- --slow` all.
 
 ## Re-validation (before any run)

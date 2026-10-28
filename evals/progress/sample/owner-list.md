@@ -9,6 +9,6 @@
 - [x] 2026-10-20: e15-h2: patch to src/core/render.ts (ticked 2026-10-20: declined)
 - [ ] 2026-10-20: e15-h3: patch to src/core/render.ts
 - [ ] 2026-10-20: dry well: 6 reverts in a row on draw; paused for 3 epochs or until the next checkpoint
-- [ ] 2026-10-20: e18-h3: too rare to measure: 12 affected cases, ~2 more from 48 top-up sends (< 32)
+- [ ] 2026-10-20: ck-05: the champion is surely slower than A0: render p50
 - [ ] 2026-10-20: e19-h3: patch to src/core/render.ts
-- [ ] 2026-10-20: e20-h2: over-use: snap fired on 41% of B's non-target cases (A 12%)
+- [ ] 2026-10-20: ck-07: the champion is surely slower than A0: first drawing p75

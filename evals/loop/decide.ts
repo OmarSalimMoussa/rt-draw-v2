@@ -8,7 +8,7 @@ import { caseFile } from "../judge/packet.ts";
 import * as agents from "../optimizer/agents.ts";
 import { failureDigest, writeLossDigest } from "../optimizer/digest.ts";
 import { OWNER_KNOBS, cardOwnerReasons, diffOf, g0 } from "../optimizer/gates.ts";
-import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, budgetGate, budgetPausedMs, harnessTag, judgedOnce, product, runAB } from "./ab.ts";
+import { type ABResult, type ArmSpec, type Arms, type Judge, type Rig, StopAsked, WeekSpent, budgetGate, budgetPausedMs, harnessTag, judgedOnce, product, runAB } from "./ab.ts";
 import { nextTopUp, topUp } from "./bank.ts";
 import { gatewayStatus } from "./client.ts";
 import { LOOP, configId } from "./config.ts";
@@ -19,7 +19,7 @@ import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
 import { isRealCase, paths } from "./paths.ts";
 import { caseDir, put, runFile } from "./record.ts";
 import { TriedConflict, applyKnobs, applyTried, triedPatch } from "./search.ts";
-import { type CardState, type Decided, type Facts, RULES, type State, newState, overrun, readState, saveState } from "./state.ts";
+import { type CardState, type Decided, RULES, type State, newState, overrun, readState, saveState } from "./state.ts";
 import type { Token } from "./tokens.ts";
 import { LockfileDiffers, treeOf, worktreeOf } from "./trees.ts";
 import type { Arm, CaseInfo, DecisionRow, Fork, HypothesisCard, Row, SceneJSON } from "./types.ts";
@@ -246,7 +246,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     if (over && !result.overrun) d = { ...d, verdict: "void", reasons: [...d.reasons, over] };
     // Testers' real sends beside a keep (LOOP-V2.md A5): reported, never deciding, so a failure here never loses the keep.
     // After the budget check and under a run name outside the decision's ($ and minutes are R1's own, not the class's).
-    if (d.verdict === "keep" && !rte.fakes.judge && !((await gatewayStatus(gw)) as { pace: { ok: boolean } }).pace.ok) rte.say(`${id}: R1 skipped: the budget is paused or stopped`);
+    if (d.verdict === "keep" && !rte.fakes.judge && !((await gatewayStatus(gw)) as { pace: { ok: boolean } }).pace.ok) rte.say(`${id}: R1 skipped: the budget is pausing paid calls`);
     else if (d.verdict === "keep" && !rte.fakes.judge) {
       const r1 = `real-r1-${st.stamp}-${id}`;
       const shadow = await realShadow(rig, { run: r1, arms, seed: r1, judge: judging(r1, { seed: r1, craft: "none" }) }).catch((err) => (rte.say(`${id}: R1 failed: ${err instanceof Error ? err.message : String(err)}`), undefined));
@@ -264,17 +264,23 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
 /** A knob card's commit: the defaults in tuning.ts set to the card's values, within each knob's range. */
 /**
  * A token for an engineer session once a slot is under the five-hour pause (LOOP.fiveHourPauseAt): builds run beside
- * the decisions, so a pause waits here for the reset instead of dropping the card. Undefined when every token is past
- * its week: the card stays unbuilt, and the loop pauses until a week is read again.
+ * the decisions, so a pause waits here (budgetGate: the loop says paused, and a stop ends the wait) instead of dropping
+ * the card. Undefined when every token is past its week: the card stays unbuilt, and the loop pauses until a week is read
+ * again.
  */
-async function freeSlot(rte: Rte, gw: string): Promise<Token | undefined> {
+async function freeSlot(rte: Rte, gw: string, run: string): Promise<Token | undefined> {
   for (;;) {
-    const { pace } = (await gatewayStatus(gw)) as { pace: Facts["pace"] };
-    if (!pace.ok && pace.week) return undefined;
+    try {
+      await budgetGate(gw, run);
+    } catch (err) {
+      if (err instanceof WeekSpent) return undefined;
+      throw err;
+    }
     try {
       return await agents.slotToken(rte.tokens(), gw);
-    } catch {
-      await sleep(Math.max(60_000, (pace.ok ? 0 : pace.pauseUntil) - Date.now()));
+    } catch (err) {
+      if (!(err instanceof agents.NoSlot)) throw err;
+      await sleep(60_000); // a slot parked for another reason (a failed reading): looked at again
     }
   }
 }
@@ -300,8 +306,8 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
     if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
     if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
       const engineer = async (note?: string, role = "engineer") => {
-        const token = await freeSlot(rte, gw);
-        // The budget stopped the loop: the card stays to build when it resumes.
+        const token = await freeSlot(rte, gw, `${st.stamp}-${c.id}-${role}`);
+        // Every token is past its week: the card stays to build after the loop's pause.
         if (!token) return false;
         await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-${role}`, token, mockApi: await rte.agentMock(), note });
         return true;
@@ -329,19 +335,20 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
           built = await engineer(`The gate rejects this change as built. Fix what it names and keep the change's intent:\n- ${g.reasons.join("\n- ")}`, "engineer-fix");
         }
       }
-      if (!built) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
+      if (!built) return void rte.say(`${c.id}: not built yet: every token is past its week; it's built after the pause`);
     }
     if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     knobbed(c);
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
   } catch (err) {
+    // A stop asked for while it waited on the budget: still to build when the loop starts again.
+    if (err instanceof StopAsked) return void rte.say(`${c.id}: not built yet: ${err.message}`);
     rte.say(`${c.id}: not built: ${msg(err)}`);
     c.status = "dropped";
   }
   saveState(st);
 }
 
-/** The candidate on top of today's champion (a keep moved it); a conflict rebuilds it once (the engineer once more). */
 /**
  * A card's knobs are what B runs, on a branch built now or before (a resumed card, `rte decide --card`): an engineer
  * that wrote prompt variant 3 but left its default (e83-h4's {"draw.prompt": 3}), or a new knob at 0 (e83-h3's
@@ -356,6 +363,7 @@ function knobbed(c: CardState) {
   c.cand = git(wt, "rev-parse", "HEAD");
 }
 
+/** The candidate on top of today's champion (a keep moved it); a conflict rebuilds it once (the engineer once more). */
 export async function rebased(rte: Rte, gw: string, st: State, c: CardState): Promise<boolean> {
   try {
     knobbed(c);

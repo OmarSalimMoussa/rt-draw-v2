@@ -8,6 +8,7 @@
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t16-pages.mjs
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as httpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer } from "vite";
@@ -17,6 +18,7 @@ import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
 const PORT = 5250; // this task's ports are 5250–5259
 const GIT_PORT = 5251;
 const DEV_PORT = 5252;
+const PROD_PORT = 5253;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const put = (f, text) => (mkdirSync(dirname(f), { recursive: true }), writeFileSync(f, text));
 const lineCount = (f) => {
@@ -43,7 +45,7 @@ const viteConfig = readFileSync(join(ROOT, "vite.config.ts"), "utf8");
 check(/plugins: \[[^\]]*recordApi\(\)/.test(viteConfig) && !viteConfig.includes("evalPages") && /\["driver", "bridge"\]/.test(viteConfig) && !/"label"|"progress"|"review"/.test(viteConfig),
   "vite.config.ts doesn't take recordApi() alone, or builds an Eval HQ page");
 const pagesConfig = readFileSync(join(ROOT, "evals/pages.vite.config.ts"), "utf8");
-check(/plugins: \[evalPages\(root\), noVoice\]/.test(pagesConfig), "evals/pages.vite.config.ts doesn't serve evalPages(root) with voice off");
+check(/plugins: \[hq, evalPages\(root\), noVoice\]/.test(pagesConfig), "evals/pages.vite.config.ts doesn't serve Eval HQ's front page and evalPages(root) with voice off");
 
 // ---- /api/eval/history from the worktree: every §5.3 file as written, absent ones as null.
 const fake = Object.fromEntries(HISTORY_FILES.map((f) => [f, f.endsWith(".jsonl") ? `${JSON.stringify({ file: f, n: 1 })}\n${JSON.stringify({ file: f, n: 2 })}\n` : f.endsWith(".json") ? JSON.stringify([{ file: f }]) : `# ${f}\n- [ ] one open item\n`]));
@@ -56,6 +58,16 @@ check(["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "
 check(typeof h.status?.disk?.freeGb === "number" && "daysLeft" in h.status.disk, `no free disk / days left in the status: ${JSON.stringify(h.status)}`);
 check((await (await get("/api/eval/history?f=ledger.md")).text()) === "# ledger\n", "?f=ledger.md isn't the ledger");
 check((await get("/api/eval/history?f=../state.json")).status === 403, "?f=../state.json wasn't refused");
+
+// ---- /api/eval/prod: the last ship's address asked once a minute at most; nothing to ask before a ship with one.
+check(JSON.stringify(await (await get("/api/eval/prod")).json()) === "{}", "/api/eval/prod asked something with no ship address");
+let prodAsked = 0;
+const prodServer = httpServer((_req, res) => (prodAsked++, res.writeHead(503).end("down"))).listen(PROD_PORT, "127.0.0.1");
+put(join(home, "history", "ships.jsonl"), `${JSON.stringify({ at: "2026-10-28T10:00:00Z", sha: "a".repeat(40), tag: "v2-aaaaaaaaaaaa", url: `http://127.0.0.1:${PROD_PORT}/` })}\n`);
+const p1 = await (await get("/api/eval/prod")).json(), p2 = await (await get("/api/eval/prod")).json();
+check(p1.ok === false && p1.status === 503 && JSON.stringify(p2) === JSON.stringify(p1) && prodAsked === 1, `/api/eval/prod: ${JSON.stringify(p1)}, asked ${prodAsked} times for two reads`);
+prodServer.close();
+put(join(home, "history", "ships.jsonl"), fake["ships.jsonl"]);
 
 // ---- No worktree: `git show eval/history:<file>` in the repo the server serves (a temp repo here).
 const repo = mkdtempSync(join(tmpdir(), "rt-eval-check-repo-"));
@@ -144,6 +156,13 @@ check(files.length === 1 && files[0] === `${rec.id}.json`, `POST /api/eval/recor
 const stored = JSON.parse(readFileSync(join(home, "human", files[0]), "utf8"));
 check(stored.input === sendBody.input && JSON.stringify(stored.scene) === JSON.stringify(scene) && stored.view.y === -60 && stored.strokes.length === 1, "the recorded send isn't what was posted");
 check((await postJson("/api/eval/record", { strokes: [] })).status === 400 && readdirSync(join(home, "human")).length === 1, "a send without input or scene was recorded");
+// What a page elsewhere can send (a form's text/plain, another origin's fetch) is refused and writes nothing.
+const foreign = (path, headers) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(sendBody) });
+const refused = [
+  await foreign("/api/eval/record", { "content-type": "text/plain" }), await foreign("/api/eval/record", { "content-type": "application/json", origin: "http://100.64.0.9:5173" }),
+  await foreign("/api/eval/label", { "content-type": "text/plain" }), await foreign("/api/eval/verdict", { "content-type": "application/json", origin: "null" }),
+].map((r) => r.status);
+check(refused.every((s) => s === 403) && readdirSync(join(home, "human")).length === 1 && lineCount(labels) === 1, `a text/plain or cross-origin POST was taken: ${refused.join(", ")}`);
 // The owner's dev server answers the draw playground's ?record=1 the same, and nothing else of Eval HQ.
 const devServer = await vite(ROOT, DEV_PORT, undefined, [recordApi()]);
 await devServer.listen();

@@ -210,7 +210,7 @@ export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: numb
   /** ttfd and render decide (absent before LOOP-V2); ttfc and ttd are reported. tails: "ttfd p90" … "render p95". */
   latency: { ttfc: Ratio; ttd: Ratio; ttfd?: Ratio; render?: Ratio; byThinking?: Record<string, Ratio>; tails?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;
   cost: { usdPerCaseRatio: number; listUsd: number; calls: number }; minutes: number; run: string; judgeId: string; configId: string;
-  /** Bench R1 at a keep (evals/real/shadow.ts' Shadow): reported, decides nothing yet. */
+  /** Bench R1 at a keep (evals/real/shadow.ts' Shadow): reported beside it, deciding nothing (held out by design). */
   real?: { run: string; hash: string; cases: number; void: number; lost?: number; checks: [number, number]; casesPassing: [number, number]; share?: number; shareHold?: number; ttfd?: Ratio; render?: Ratio } };
 export type CheckpointRow = { id: string; epoch: number;
   /** The yardstick's era: a new judgeId or bench starts the next, charted apart (nothing bridges two eras). */
@@ -229,7 +229,7 @@ export type CheckpointRow = { id: string; epoch: number;
   productUsdPerSend: { champion: number; anchor: number }; overfitGap: number;
   health: { voidPct: number; flipPct: number; hedgePct: number; beatCompliance: number; thinking: Record<string, number>; coldShare: number; psiMedian: number };
   realism?: Record<string, { driver: number; human: number }>;
-  /** Bench R1, A0 against the champion (evals/real/shadow.ts' Shadow): reported, decides nothing yet. */
+  /** Bench R1, A0 against the champion (evals/real/shadow.ts' Shadow): reported, deciding nothing. */
   real?: DecisionRow["real"] };
 /** markers.jsonl: what moved under the chart without being a decision ("anchor" in rows before 2026-10-26). */
 export type Marker = { at: string; era: number; kind: "harness" | "served-model" | "owner-step" | "era"; label: string; ref?: string };
@@ -239,9 +239,9 @@ export type BudgetRow = { at: string; epoch: number; slot: 1 | 2 | 3; usdThisWin
   status: string; resetsAt?: number; usd7d: number };
 /** health.jsonl: A/A, canary, readiness and calibration outcomes. */
 export type HealthRow = { at: string; kind: "aa" | "canary" | "ready" | "calib"; pass: boolean; detail: Record<string, unknown> };
+/** ships.jsonl: what evals/ops/ship.sh put on prod (rte shipped), and where it serves (Eval HQ checks it's up). */
+export type ShipRow = { at: string; sha: string; tag: string; url?: string };
 /** smoke.jsonl: §11 step 1, the page's first point before any epoch: its A/B's share and median latency, and its cost. */
-/** ships.jsonl: what evals/ops/ship.sh put on prod (rte shipped). */
-export type ShipRow = { at: string; sha: string; tag: string };
 export type SmokeRow = { at: string; run: string; pass: boolean; calls: number; listUsd: number; minutes: number; cases: number; share?: number; ttfcP50?: number; ttdP50?: number; ttfdP50?: number; renderP50?: number };
 /** bench/B1/manifest.json, bench/U1/manifest.json: file → sha256, and the hash over them (N7). */
 export type BenchManifest = { version: string; files: Record<string, string>; hash: string };

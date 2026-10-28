@@ -38,7 +38,7 @@ export const LOOP = {
   // (pooled with G2's, 1.50).
   heldoutVetoZ: -1.645, heldoutMax: 32, heldoutConfirmMin: 16,
   // The search (LOOP-V2.md D1, D3, D4): the analyst's hypotheses an epoch, the critic's cards (a sweep is one card of up
-  // to sweepMax values, a combo one card of up to comboMax tried patches), and the near wins the digest lists.
+  // to sweepMax values, a combo one card of up to comboMax tried patches).
   // A sweep's k values share one card's error (D3): each keeps past keepZ raised by z(1 − sweepAlpha/k) − z(1 − sweepAlpha),
   // sweepAlpha being Rule F's one-sided pass rate for a no-op at G2 (5.5% simulated), and a latency value on a p k times smaller.
   search: { hypotheses: [4, 8], cards: 6, sweepMax: 4, comboMax: 3, pruneZ: -1.0, sweepAlpha: 0.055 },

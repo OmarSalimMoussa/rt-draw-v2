@@ -5,7 +5,7 @@
 // of it ("loop around tail"), so those sends are context for triage and gold, not replayable cases.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SendRecord } from "../../app/src/board/capture.ts";
 import { type View, asPage } from "../../src/core/board.ts";
 import type { Stroke } from "../../src/core/ink.ts";
@@ -113,10 +113,23 @@ export function sameSend(label: string, request: string): boolean {
 const elements = (svg: string) => (svg.match(/<(path|circle|ellipse|rect|line|polyline|polygon)\b/g) ?? []).length;
 
 /**
+ * A version saved this close to the snapshot with no send log yet waits for the next pull: the app saves the version
+ * first and logs the send after, and a send rebuilt from its version (key #v<n>) would move to #<send id> once the log
+ * came, paying for its triage and gold twice.
+ */
+const LOG_SETTLE_MS = 10 * 60_000;
+/** When a snapshot was taken: its folder's name (pull.sh's stamp, 20261028T084005Z), else now. */
+function takenAt(raw: string): number {
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(basename(raw));
+  return m ? Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`) : Date.now();
+}
+
+/**
  * Every project of one snapshot (live: the box's /data; local: this laptop's .data) as sessions, written to
  * out/<session>/session.json with each version they use as v<n>.json (v0: the blank board).
  */
 export function ingest(raw: string, source: Source, out: string): Session[] {
+  const taken = takenAt(raw);
   const people = readJson<{ people: Person[] }>(join(raw, "access", "access.json"))?.people ?? [];
   const calls = readLines<Call>(join(raw, "model-calls.jsonl"));
   const feedback = readLines<Feedback>(join(raw, "access", "feedback.jsonl"));
@@ -156,6 +169,7 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
           own.set(x.key, exact.before);
           continue;
         }
+        if (v.at > taken - LOG_SETTLE_MS) continue;
         // The latest unused drawing call that ended by this version's save and asked for what it's labeled with.
         const d = draws.filter((x) => !used.has(x) && x.end <= v.at + 2000 && x.end >= prevAt - 2000 && sameSend(v.label, x.p.request)).sort((a, b) => b.end - a.end)[0];
         if (d) used.add(d);
@@ -200,4 +214,8 @@ export function beforeOf(dir: string, s: RealSend): SceneJSON {
   const own = join(dir, `before-${sendOf(s.key)}.json`);
   return JSON.parse(readFileSync(existsSync(own) ? own : join(dir, `v${s.before}.json`), "utf8"));
 }
-export const afterOf = (dir: string, s: RealSend): SceneJSON => JSON.parse(readFileSync(join(dir, `v${s.after}.json`), "utf8"));
+/** The after board of a send: its version's, or (a send that changed nothing, from a version the snapshot doesn't hold) its before. */
+export function afterOf(dir: string, s: RealSend): SceneJSON {
+  const f = join(dir, `v${s.after}.json`);
+  return !existsSync(f) && s.after === s.before ? beforeOf(dir, s) : JSON.parse(readFileSync(f, "utf8"));
+}

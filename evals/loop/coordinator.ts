@@ -10,11 +10,11 @@ import { calibrationFile, variants } from "../judge/judge.ts";
 import * as agents from "../optimizer/agents.ts";
 import { analystDigest, decisionLines } from "../optimizer/digest.ts";
 import { cardOwnerReasons } from "../optimizer/gates.ts";
-import { WeekSpent, harnessTag } from "./ab.ts";
+import { StopAsked, WeekSpent, budgetGate, budgetHooks, harnessTag, recheckWeeks, weekOf } from "./ab.ts";
 import { refresh } from "./bank.ts";
 import type { StoredCheckpoint } from "./checkpoint.ts";
-import { CapReached, ask, gatewayStatus } from "./client.ts";
-import { LOOP, WEEK_CHECK, configId } from "./config.ts";
+import { CapReached, gatewayStatus } from "./client.ts";
+import { LOOP, configId } from "./config.ts";
 import type { DriveCtx } from "./drive.ts";
 import { commitHistory, historyAdd, historyRows, openHistory, ownerItem, recordMachine } from "./history.ts";
 import { heartbeat, onAC, refuseFactorySlice } from "./load.ts";
@@ -23,7 +23,7 @@ import { tellOwner } from "./notify.ts";
 import { paths } from "./paths.ts";
 import { put, runFile } from "./record.ts";
 import { cardStates, sweepSkip } from "./search.ts";
-import { type Facts, RULES, type Run, type State, type StopCode, holder, lock, newState, readState, rules, saveState, stampNow } from "./state.ts";
+import { type Facts, RULES, type Run, type State, type StopCode, holder, lock, loopUnit, newState, readState, rules, saveState, stampNow } from "./state.ts";
 import type { SlotN } from "./tokens.ts";
 import { treeOf } from "./trees.ts";
 import type { AgentLog, Arm, DecisionRow, EpochRow, HypothesisCard } from "./types.ts";
@@ -32,6 +32,7 @@ import { probed, readyOk } from "./commands/setup.ts";
 import { intake } from "../real/intake.ts";
 import { build, decideCard, rebased } from "./decide.ts";
 import { DAY, HOUR, type Rte, championArm, championPages, championSha, hasU1, maybe, msg, needBank, nextEpoch, sleep, tuningIdOf } from "./rte.ts";
+import { NoSlot } from "../optimizer/agents.ts";
 
 let readyAtStart = false;
 let diskAtStart: { at: number; gb: number } | undefined;
@@ -45,11 +46,11 @@ function setRun(st: State, run: Omit<Run, "at">) {
 /** Running, at this phase: the slot and the rest kept from the last reading. */
 const phase = (st: State, what: string) => setRun(st, { status: "running", phase: what, slot: st.run?.slot });
 
-/** A stop: in state.json, the log, and (unless the owner asked for it) the owner's mail. */
+/** A stop: in state.json, the log, and (unless the owner asked for it) the owner's mail, which carries the code only. */
 async function stopped(rte: Rte, st: State, code: StopCode, why: string) {
   setRun(st, { status: "stopped", code, why, slot: st.run?.slot });
   rte.say(`loop: STOP (${code}): ${why}`);
-  if (code !== "asked" && code !== "done") await tellOwner(rte, `the loop stopped (${code})`, [why, "Eval HQ's Needs you has it; the loop starts again with rte run (or systemctl --user start rt-loop)."]);
+  if (code !== "asked" && code !== "done") await tellOwner(rte, `the loop stopped (${code})`, ["Eval HQ's Needs you says why; once it's dealt with, bin/rte run on the PGX starts the loop again."]);
 }
 
 type SlotStatus = { slot: SlotN; current: boolean; fiveHour?: number; sevenDay?: number; sevenDayAt?: number; resetsAt?: number; status?: string; usdThisWindow: number; usd7d: number; why?: string };
@@ -70,24 +71,6 @@ async function facts(rte: Rte, gw: string, st: State, err?: unknown): Promise<Fa
   };
 }
 
-/** When each slot's week was last checked (ms): a check the server answers without a reading waits WEEK_CHECK.afterH too. */
-const weekChecked = new Map<SlotN, number>();
-const weekOf = (x?: SlotStatus) => (x?.sevenDay === undefined ? "unknown" : `${Math.round(x.sevenDay * 100)}%`);
-
-/** WEEK_CHECK: one one-word call on each token parked for its week on an old reading (or none), so its week is read again. */
-async function recheckWeeks(rte: Rte, gw: string) {
-  const s = (await gatewayStatus(gw)) as { stale?: SlotN[]; slots: SlotStatus[] };
-  for (const slot of s.stale ?? []) {
-    if (Date.now() - (weekChecked.get(slot) ?? 0) < WEEK_CHECK.afterH * HOUR) continue;
-    weekChecked.set(slot, Date.now());
-    // Its own request each time: the run's cache would serve a repeat.
-    const req = { role: "probe", model: "haiku", system: "Answer with one word.", user: `Week check, slot ${slot}, ${new Date().toISOString()}?`, run: `week-${stampNow()}`, token: slot } as const;
-    const error = await ask(req, gw).then(() => "", (e: Error) => e.message);
-    const now = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots.find((x) => x.slot === slot);
-    rte.say(`loop: token ${slot}'s week read again: ${weekOf(s.slots.find((x) => x.slot === slot))} to ${weekOf(now)} of its weekly limit (the loop pauses past ${Math.round(LOOP.weekSevenDayMax * 100)}%)${error ? `; the call failed: ${error}` : ""}; ${now?.why ? `still parked: ${now.why}` : "back in use"}`);
-  }
-}
-
 /** How often a pause looks for the owner's stop-after. */
 const STOP_POLL_MS = 30_000;
 
@@ -100,7 +83,7 @@ async function halt(rte: Rte, gw: string, st: State, err?: unknown): Promise<boo
       await stopped(rte, st, "asked", "stopped as asked (rte stop-after); rte run goes on from here");
       return true;
     }
-    await recheckWeeks(rte, gw);
+    await recheckWeeks(gw, (l) => rte.say(`loop: ${l}`));
     // A dry well's pause runs out after RULES.pauseEpochs epochs: with no keep there is no checkpoint, and every component
     // would stay paused until the epochs came up empty. Its reverts count again from here.
     for (const c of st.paused.filter((x) => st.epoch - (st.pausedAt?.[x] ?? st.epoch) >= RULES.pauseEpochs)) {
@@ -122,7 +105,7 @@ async function halt(rte: Rte, gw: string, st: State, err?: unknown): Promise<boo
     }
     const pauses = acts.filter((a) => a.do === "pause");
     if (!pauses.length) {
-      if (st.run?.status !== "running") setRun(st, { status: "running", phase: st.run?.phase, slot: f.slot });
+      if (st.run?.status !== "running" || st.run.slot !== f.slot) setRun(st, { status: "running", phase: st.run?.phase, slot: f.slot });
       return false;
     }
     const until = Math.max(...pauses.map((a) => a.until!));
@@ -152,16 +135,15 @@ async function propose(rte: Rte, gw: string, st: State): Promise<HypothesisCard[
     "a deeper or earlier warm pool (more warmModel calls): every case is warmed before it's timed and both arms share identical calls, so the A/B can't see it; the owner's to try on prod",
     ...(!variants().illustrationsCalibrated ? ["a keep that switches the picture model (a picture.*Model knob): held for the owner until the judge is calibrated on illustrations"] : []),
   ];
-  const decisions = decisionLines(historyRows("decisions.jsonl") as DecisionRow[]);
   const digest = analystDigest({
     championSha: sha, checkpoint: ck, runs: st.lastRuns, wont, failures: notes.map((n) => `${n.case} · ${n.component} · ${n.tag}: ${n.evidence}`),
-    decisions,
+    decisions: decisionLines(historyRows("decisions.jsonl") as DecisionRow[]),
   });
   const tree = treeOf(sha);
   const analysis = await rte.engine().analyst({ run, token: await agents.slotToken(rte.tokens(), gw), digest, tree, mockApi: await rte.agentMock() });
   put(runFile(run, "analyst.json"), { text: analysis });
   const criticRun = `${st.stamp}-e${st.epoch}-critic`;
-  const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tried: decisions, tree, mockApi: await rte.agentMock() });
+  const r = await rte.engine().critic({ run: criticRun, token: await agents.slotToken(rte.tokens(), gw), analysis, digest, tree, mockApi: await rte.agentMock() });
   // Its answer as written, so a dropped or empty epoch can be read back.
   put(runFile(criticRun, "critic.json"), { text: r.result?.text ?? "", cards: r.cards.map((c) => c.id), dropped: r.dropped });
   if (r.dropped.length) rte.say(`critic: dropped ${r.dropped.join("; ")}`);
@@ -176,8 +158,8 @@ async function loopCheckpoint(rte: Rte, gw: string, st: State): Promise<string> 
 }
 
 /**
- * Between epochs: the owner's master (at most daily), testers' new sends (intake: a week spent ends it, and the pause
- * after this waits for the week), a bank refresh (5 keeps, weekly, or queued), the judge canary.
+ * Between epochs: the owner's master (at most daily), testers' new sends (intake: a week spent ends its paid stages, and
+ * the pause after this waits for the week), a bank refresh (5 keeps, weekly, or queued), the judge canary.
  */
 async function between(rte: Rte, gw: string, st: State) {
   if (Date.now() - Date.parse(st.lastOwnerStep ?? "1970-01-01") >= LOOP.sync.minHours * HOUR) await sync(rte, gw, st);
@@ -185,7 +167,7 @@ async function between(rte: Rte, gw: string, st: State) {
   try {
     await intake(rte, gw);
   } catch (err) {
-    rte.say(`intake: ${err instanceof WeekSpent ? "every token is past its week; it goes on after the pause" : `stopped: ${msg(err)}; the next epoch's tries again`}`);
+    rte.say(`intake: ${err instanceof WeekSpent || err instanceof StopAsked ? "the budget ended its paid stages; they go on after the pause" : `${msg(err)}; the next epoch's tries again`}`);
   }
   phase(st, "between epochs");
   const lastRefresh = st.lastRefresh ?? maybe<{ at: string }>(join(paths().home, "bank", "gates.json"))?.at;
@@ -195,13 +177,17 @@ async function between(rte: Rte, gw: string, st: State) {
     try {
       await rte.withRig(gw, [champ.tree], async (rig) => {
         const slots = await championPages(rig, champ.tree);
-        const ctx: DriveCtx = { run: `${st.stamp}-refresh${n}`, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag() };
+        const run = `${st.stamp}-refresh${n}`;
+        // Its driver and product calls wait on the budget like every paid step's.
+        const ctx: DriveCtx = { run, arms: { A: { sha: champ.sha, tuningId: await tuningIdOf(slots[0].A) } }, harnessTag: harnessTag(), hook: async () => void (await budgetGate(gw, run)) };
         const no = await probed(rte, ctx, slots[0].A);
         if (no) throw new Error(no);
         const r = await refresh(ctx, slots, n);
         rte.say(`refresh ${n}: ${r.cases.length} new cases ${r.fails.length ? `refused, to bank/archive (the bank with them failed ${r.fails.join("; ")})` : "added"}`);
       });
     } catch (err) {
+      // The budget's limit isn't a failure: the refresh runs again after the pause.
+      if (err instanceof WeekSpent || err instanceof StopAsked) throw err;
       ownerItem(`bank refresh ${n} failed: ${msg(err)}`);
       commitHistory(`owner list: bank refresh ${n} failed`);
     }
@@ -257,8 +243,8 @@ async function epoch(rte: Rte, gw: string, st: State): Promise<boolean> {
       try {
         await decideCard(rte, gw, st, c);
       } catch (err) {
-        if (err instanceof WeekSpent) {
-          rte.say(`${c.id}: ${err.message}: decided again after the pause`);
+        if (err instanceof WeekSpent || err instanceof StopAsked) {
+          rte.say(`${c.id}: ${err.message}: decided again when the loop goes on`);
           continue;
         }
         // A cap, a blocked request or a broken step: the rules say whether the loop goes on.
@@ -267,13 +253,19 @@ async function epoch(rte: Rte, gw: string, st: State): Promise<boolean> {
         throw err;
       }
       const d = st.recent.at(-1);
-      if (d?.id === c.id && d.verdict === "owner") await tellOwner(rte, `${c.id} is held for you`, [`${c.card.change}`, "Eval HQ's Needs you has its cases, ledger and patch."]);
+      if (d?.id === c.id && d.verdict === "owner") await tellOwner(rte, `${c.id} is held for you`, ["Eval HQ's Needs you has the change, its cases, ledger and patch."]);
     }
     // Here, not only after a decision: a resumed epoch owes the checkpoint a stop just before it skipped.
     if (!stopped && st.keepsSinceCheckpoint >= LOOP.checkpointEveryKeeps && !(stopped = await halt(rte, gw, st))) phase(st, "checkpoint"), (ck = await loopCheckpoint(rte, gw, st));
   }
   await Promise.allSettled(built);
   if (stopped) return false;
+  // Cards the budget left unbuilt (every token past its week) stay in this epoch: the loop's pause, then they're built.
+  if (st.cards.some((c) => c.status === "todo")) {
+    saveState(st);
+    rte.say(`epoch ${st.epoch}: ${st.cards.filter((c) => c.status === "todo").map((c) => c.id).join(", ")} not built yet: after the pause`);
+    return true;
+  }
   // An epoch that decided nothing (no well-formed card, or every one dropped) pays the analyst and critic again for the
   // same digest: §6.7's rules stop the loop after RULES.emptyEpochs of them in a row.
   st.emptyEpochs = st.cards.some((c) => c.status === "done" && c.verdict !== "deferred") ? 0 : (st.emptyEpochs ?? 0) + 1;
@@ -354,20 +346,34 @@ export async function loop(rte: Rte) {
       const seen = new Set([...historyRows("decisions.jsonl").map((d) => d.card?.id), ...st.queue.map((c) => c.id), ...st.cards.map((c) => c.card.id)]);
       st.queue.push(...(JSON.parse(readFileSync(rte.o.f["seed-cards"], "utf8")) as HypothesisCard[]).filter((c) => !seen.has(c.id)));
     }
-    // A stop asked for while no loop ran is stale: this start is the owner's newer word.
-    if (existsSync(stopFile())) rmSync(stopFile()), rte.say("loop: an old stop-after request was dropped (this start is newer)");
+    // A stop asked for before this start (while the unit ran readiness, or waited to restart) still holds: halt stops
+    // at once. Only the owner's rte run takes it back (wanted --set).
     readyAtStart = readyOk();
     phase(st, "starting");
     rte.say(`loop: ${resume ? "resuming" : "starting"} at epoch ${st.epoch}${st.until !== undefined ? ` (to ${st.until})` : ""}, champion ${championSha().slice(0, 12)}`);
     const run = st;
+    // A budget pause inside a step says so in state.json, and the owner's stop ends its wait.
+    Object.assign(budgetHooks, {
+      stopAsked: () => existsSync(stopFile()),
+      paused: (until?: string) => setRun(run, { status: "paused", why: `a token is past ${Math.round(LOOP.fiveHourPauseAt * 100)}% of its five-hour window: the step waits for its reset`, until, phase: run.run?.phase, slot: run.run?.slot }),
+      resumed: () => setRun(run, { status: "running", phase: run.run?.phase, slot: run.run?.slot }),
+    });
     await rte.withGateway(async (gw) => {
       while (run.until === undefined || run.epoch <= run.until) {
         if (await halt(rte, gw, run)) return;
-        // After intake, an owner step, a refresh or the canary: the rules again before the next epoch.
-        if (!run.cards.length && (phase(run, "between epochs"), await between(rte, gw, run), await halt(rte, gw, run))) return;
-        const moved = run.cards.length ? undefined : rotateMeter(paths().calls);
-        if (moved) rte.say(`loop: the meter moved aside to ${moved} (over ${METER_ROTATE_BYTES >> 20} MB)`);
-        if (!(await epoch(rte, gw, run))) return;
+        try {
+          // After intake, an owner step, a refresh or the canary: the rules again before the next epoch.
+          if (!run.cards.length && (phase(run, "between epochs"), await between(rte, gw, run), await halt(rte, gw, run))) return;
+          const moved = run.cards.length ? undefined : rotateMeter(paths().calls);
+          if (moved) rte.say(`loop: the meter moved aside to ${moved} (over ${METER_ROTATE_BYTES >> 20} MB)`);
+          if (!(await epoch(rte, gw, run))) return;
+        } catch (err) {
+          // The budget met outside a decision (a sync's or a checkpoint's runs, the analyst's sessions): a pause, never a
+          // crash. halt above waits it out, or stops as asked; what was paid is cached.
+          if (!(err instanceof WeekSpent || err instanceof StopAsked || err instanceof NoSlot)) throw err;
+          rte.say(`loop: ${err.message}: the budget's pause comes first`);
+          if (err instanceof NoSlot) await sleep(60_000);
+        }
       }
       if (run.keepsSinceCheckpoint > 0) phase(run, "checkpoint"), await loopCheckpoint(rte, gw, run);
       await stopped(rte, run, "done", `done at epoch ${run.epoch - 1}, champion ${championSha().slice(0, 12)}`);
@@ -377,6 +383,7 @@ export async function loop(rte: Rte) {
     if (st) setRun(st, { status: "stopped", code: "crashed", why: "a step threw (the log has the error); its unit restarts the loop", slot: st.run?.slot });
     throw err;
   } finally {
+    for (const k of Object.keys(budgetHooks) as (keyof typeof budgetHooks)[]) delete budgetHooks[k];
     stopBeat();
     held.release();
   }
@@ -395,7 +402,7 @@ export async function weekCmd(rte: Rte) {
   try {
     openHistory();
     await rte.withGateway(async (gw) => {
-      await recheckWeeks(rte, gw);
+      await recheckWeeks(gw, (l) => rte.say(`week: ${l}`));
       const slots = ((await gatewayStatus(gw)) as { slots: SlotStatus[] }).slots;
       for (const s of slots) rte.say(`week: token ${s.slot}: ${weekOf(s)} of its weekly limit${s.sevenDayAt ? `, read ${new Date(s.sevenDayAt).toISOString()}` : ""}; ${s.why ? `parked: ${s.why}` : "in use"}`);
       logBudget(slots, readState()?.epoch ?? 0, new Date().toISOString());
@@ -414,11 +421,16 @@ export async function stopAfterCmd(rte: Rte) {
   }
   rte.say(`stop-after: ${requestStop()}`);
 }
-/** Asks the running loop to stop before its next step; what that means now, in the owner's words. */
+/**
+ * Asks the loop to stop before its next step; what that means now, in the owner's words. The request stands until the
+ * loop stops on it or the owner's rte run takes it back, so a loop starting or restarting stops too.
+ */
 export function requestStop(): string {
   put(stopFile(), { at: new Date().toISOString() });
-  const h = holder();
-  return h?.live && h.cmd === "loop" ? "the loop stops before its next step (what's in flight finishes first); rte run goes on from there" : "no loop is running (its next start drops this request)";
+  const h = holder(), unit = loopUnit();
+  if (h?.live && h.cmd === "loop") return "the loop stops before its next step (what's in flight finishes first); rte run goes on from there";
+  if (unit === "active" || unit === "activating") return "the loop's unit is starting it: it stops as soon as it starts; rte run goes on from there";
+  return "no loop is running; if one starts, it stops at once (rte run takes this back)";
 }
 
 /**
@@ -428,7 +440,8 @@ export function requestStop(): string {
 export async function unitFailedCmd(rte: Rte) {
   const why = "the loop's unit failed past its restarts (the loop or its readiness check threw; the log has the errors)";
   const st = readState();
-  if (st) setRun(st, { status: "stopped", code: "crashed", why, slot: st.run?.slot });
+  // Its own code: a reboot doesn't start a loop that gave up (wanted says no until rte run).
+  if (st) setRun(st, { status: "stopped", code: "gave-up", why, slot: st.run?.slot });
   try {
     openHistory();
     ownerItem(why);
@@ -436,7 +449,7 @@ export async function unitFailedCmd(rte: Rte) {
   } catch (err) {
     rte.say(`unit-failed: not on the owner list: ${msg(err)}`);
   }
-  await tellOwner(rte, "the loop's unit failed", [why, "Look at rte status and the log, then start it again with rte run."]);
+  await tellOwner(rte, "the loop's unit gave up", ["It failed past its restarts. Eval HQ and rte status show where; once it's dealt with, bin/rte run starts it again."]);
 }
 
 /**
@@ -447,7 +460,10 @@ export async function unitFailedCmd(rte: Rte) {
 export async function wantedCmd(rte: Rte) {
   const st = readState();
   if (rte.o.f.set) {
-    if (!st) return;
+    // The owner's word to run takes back a stop they asked for.
+    if (existsSync(stopFile())) rmSync(stopFile());
+    const h = holder();
+    if (!st || (h?.live && h.cmd === "loop")) return; // running already: its status is its own
     // As a fresh start's: no --epochs bound, and what emptied the last epochs is the owner's to have dealt with.
     Object.assign(st, { until: undefined, emptyEpochs: 0 });
     return void setRun(st, { status: "running", phase: "starting (rte run)" });

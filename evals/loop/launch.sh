@@ -2,8 +2,9 @@
 # Runs a run.ts command as its own systemd user unit (spec §7.7, fix F23), from the harness clone this file is in:
 #   bash evals/loop/launch.sh <command> [flags…]     e.g. ladder --max 4, calib --check --cap 150   (bin/rte job …)
 #   bash evals/loop/launch.sh stop                   stops the last one
-# The unit's cgroup holds Chrome, Vite and Claude, so one stop takes them all, under the runs' memory limit and a low
-# CPU weight. On a machine with a battery (the laptop) this terminal holds the sleep inhibitor around it and waits for
+# The unit's cgroup holds Chrome, Vite and Claude, so one stop takes them all, at a low CPU weight and with no memory
+# limit, as the loop's and intake's units have none: a cap of 10 GB OOM-killed intake's replay warm-up (16 slots × 2
+# arms, 240 Claude processes) on the PGX's 119 GB. On a machine with a battery (the laptop) this terminal holds the sleep inhibitor around it and waits for
 # it; on one without (the PGX, always on) the unit starts detached and its output is in the journal.
 # The loop itself isn't launched here: on the PGX its own unit runs it (evals/ops/units.sh).
 # CPU is a weight (it yields to the owner's work), never a quota: under CPUQuota=600% a burst of Claude starts got
@@ -33,7 +34,7 @@ fi
 [ "$1" = stop ] && exec systemctl --user stop "$(cat "$RT_EVAL_HOME/unit")"
 unit="rt-eval-$(date +%s)-$$" # never collides, and --collect unloads even a failed one
 echo "$unit" > "$RT_EVAL_HOME/unit"
-props=(--collect --same-dir --unit "$unit" -p MemoryMax=10G -p CPUWeight=50 --setenv=RT_EVAL_HOME="$RT_EVAL_HOME" --setenv=RT_EVAL_LAUNCHED=1)
+props=(--collect --same-dir --unit "$unit" -p CPUWeight=50 --setenv=RT_EVAL_HOME="$RT_EVAL_HOME" --setenv=RT_EVAL_LAUNCHED=1)
 
 # A machine with no battery is always on: the unit runs detached, and a closed ssh doesn't end it.
 if ! compgen -G "${RT_POWER_SUPPLY:-/sys/class/power_supply}/BAT*" >/dev/null; then

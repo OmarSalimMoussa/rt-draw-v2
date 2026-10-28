@@ -39,6 +39,7 @@ export const waiting = (ts: Thread[]) => ts.filter((t) => t.last?.who === "owner
 // ---- Plain words for the loop's commonest owner-list lines (anything else stays as the loop wrote it)
 
 const PLAIN: [RegExp, string][] = [
+  // No longer written (too rare is reverted, not listed, since 2026-10-28), but open lines from before are still shown.
   [/^too rare to measure: (\d+) affected cases?.*\(< (\d+)\)$/, "only $1 cases touched by the change, too few to measure (it takes $2)"],
   [/^void: (.+)$/, "not measured, the run was void: $1"],
   [/^a prompt line about roughness or stroke width in (\S+): "(.*)"$/, "changes a prompt line about roughness or stroke width in $1 (how hand-drawn the page looks is yours): “$2…”"],

@@ -43,10 +43,11 @@ Signed in as omar@emberhub.dev:
    `Code.gs` with `deploy/mailer.gs`.
 2. **Project Settings → Script Properties:** add `SECRET`, with the value in
    `~/imagine-mailer-secret.txt` on Omar's laptop (the box has the same value as
-   `MAILER_SECRET` in the box's shared `/srv/emberhub.env`). Optionally add `SHEET_ID`, the id of
-   a Google Sheet to keep a row per waitlist sign-up and invite.
+   `MAILER_SECRET` in the box's shared `/srv/emberhub.env`), and `NOTICE_SECRET`, with the value
+   in `~/imagine-mailer-notice-secret.txt` (the eval loop's; it sends notices to the admin only).
+   Optionally add `SHEET_ID`, the id of a Google Sheet to keep a row per waitlist sign-up and invite.
 3. Choose **`authorise`** in the function dropdown, press **Run**, and accept. Its log
-   should say `"secretSet": true` and a `quotaLeft` of 1500.
+   should say `"secretSet": true`, `"noticeSecretSet": true` and a `quotaLeft` of 1500.
 4. **Deploy → New deployment → Web app.** Execute as: **Me**. Who has access:
    **Anyone** (every request without the secret is refused).
 5. Put the deployment URL, ending in `/exec`, in the box's shared env file and restart:
@@ -60,6 +61,10 @@ edit → New version); the URL stays the same.
 
 The eval loop mails the admin through the same script (its `notice` action) when it
 stops for a reason that's the owner's, or holds a decision for them: harness words and
-ids only, never a tester's. It reads the URL and secret from `~/.config/rt-eval/notify.env`
-on the PGX (mode 600; `evals/loop/notify.ts`). The `notice` action came after the first
-deployment: paste `deploy/mailer.gs` again and make a new version.
+ids only, never a tester's. It reads the URL and `NOTICE_SECRET`'s value (as `MAILER_SECRET`) from
+`~/.config/rt-eval/notify.env` on the PGX (mode 600; `evals/loop/notify.ts`), so the PGX holds no
+secret that can mail anyone else. To put it there without it passing through a terminal:
+
+```bash
+ssh "$RT_PGX" 'f=~/.config/rt-eval/notify.env; s=$(cat); sed -i "s|^MAILER_SECRET=.*|MAILER_SECRET=$s|" "$f"' < ~/imagine-mailer-notice-secret.txt
+```

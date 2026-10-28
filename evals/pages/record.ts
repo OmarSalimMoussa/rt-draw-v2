@@ -7,6 +7,22 @@ import { join } from "node:path";
 import type { Plugin } from "vite";
 import { paths } from "../loop/paths.ts";
 
+/**
+ * Whether a POST is a page of this server's own: JSON (a page elsewhere can't send that without asking first, and this
+ * server never says yes) and, when the browser names its origin, this host. Any page the owner opens could otherwise
+ * post a form at the PGX's address on the tailnet.
+ */
+export function ownPost(req: IncomingMessage): boolean {
+  if (!/^application\/json\b/i.test(req.headers["content-type"] ?? "")) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false; // "null": a sandboxed frame or a file
+  }
+}
+
 /** A recorded send's file, for an id the server made (h-<time>-<4>); undefined for anything else. */
 export const sendFile = (id: string) => (/^h-[\w-]+$/.test(id) ? join(paths().human, `${id}.json`) : undefined);
 
@@ -25,6 +41,7 @@ export const recordApi = (): Plugin => ({
   configureServer(server) {
     server.middlewares.use("/api/eval/record", (req: IncomingMessage, res: ServerResponse, next: () => void) => {
       if (req.method !== "POST") return next();
+      if (!ownPost(req)) return void ((res.statusCode = 403), res.end('{"error":"a JSON POST from this server\'s own pages only"}'));
       const parts: Buffer[] = [];
       req.on("data", (c: Buffer) => parts.push(c));
       req.on("end", () => {

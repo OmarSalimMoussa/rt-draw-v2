@@ -12,11 +12,11 @@ import { hq } from "../progress/hq.ts";
 
 hq("review", "Intake: new sends are pulled every 30 minutes, labeled between the loop's epochs (triage for every send, gold for each clear miss) and proposed here. A card joins the bank after its look window unless you reject it; approve it sooner, or edit what's wrong first.");
 
-type State = "labeled" | "proposed" | "admitted" | "rejected";
+type State = "labeled" | "proposed" | "admitted" | "rejected" | "skipped";
 type Rubric = { should: string[]; mustNot: string[] };
 type Row = {
   key: string; state: State; tester: boolean; split: "tune" | "hold"; project: string; at: string; said: string; landed?: string; categories: string[]; gold: boolean;
-  proposedAt?: string; admitAt?: string; verdict?: "approve" | "reject"; reason?: string; edited: { meant: boolean; expectation: boolean };
+  skip?: string; proposedAt?: string; admitAt?: string; verdict?: "approve" | "reject"; reason?: string; edited: { meant: boolean; expectation: boolean };
 };
 type Check = { pass: boolean; why: string };
 type Card = Row & {
@@ -57,13 +57,16 @@ const post = async (body: unknown) => {
 // ---- Filters, kept in the address so a reload or a link keeps them
 
 const params = new URLSearchParams(location.search);
-const filters = { state: params.get("state") ?? "proposed", who: params.get("who") ?? "all", landed: params.get("landed") ?? "all" };
+const filters = { state: params.get("state") ?? "proposed", who: params.get("who") ?? "all", landed: params.get("landed") ?? "all", reason: params.get("reason") ?? "all" };
+/** Triage's word that a send asked for nothing drawn (cases.ts NOT_DRAWING): approving it reopens it. */
+const NOT_DRAWING = "not a drawing request";
 const saveFilters = () => history.replaceState(null, "", `?${new URLSearchParams(filters)}${location.hash}`);
 const shown = (rows: Row[]) =>
   rows
     .filter((r) => filters.state === "all" || r.state === filters.state)
     .filter((r) => filters.who === "all" || (filters.who === "tester") === r.tester)
     .filter((r) => filters.landed === "all" || (filters.landed === "missed" ? r.landed !== "yes" : r.landed === "yes"))
+    .filter((r) => filters.reason === "all" || r.skip === filters.reason || r.reason === filters.reason)
     // Proposed: the next to join first. The rest: the newest first.
     .sort((a, b) => (filters.state === "proposed" ? (a.admitAt ?? "").localeCompare(b.admitAt ?? "") : b.at.localeCompare(a.at)));
 
@@ -115,10 +118,11 @@ function queue(d: Intake) {
   const opt = (name: keyof typeof filters, values: [string, string][]) => `<label>${name} <select data-filter="${name}">${values.map(([v, l]) => `<option value="${v}"${filters[name] === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>`;
   const rows = shown(d.cards);
   host.innerHTML = `<h2>Cards</h2>
-    <div class="filters">${opt("state", [["proposed", `proposed (${d.states.proposed ?? 0})`], ["labeled", `being labeled (${d.states.labeled ?? 0})`], ["admitted", `admitted (${d.states.admitted ?? 0})`], ["rejected", `rejected (${d.states.rejected ?? 0})`], ["all", "all"]])}
+    <div class="filters">${opt("state", [["proposed", `proposed (${d.states.proposed ?? 0})`], ["labeled", `being labeled (${d.states.labeled ?? 0})`], ["admitted", `admitted (${d.states.admitted ?? 0})`], ["rejected", `rejected (${d.states.rejected ?? 0})`], ["skipped", `skipped (${d.states.skipped ?? 0})`], ["all", "all"]])}
       ${opt("who", [["all", "everyone"], ["tester", "testers"], ["owner", "you"]])}${opt("landed", [["all", "landed or missed"], ["missed", "missed"], ["landed", "landed"]])}
+      ${opt("reason", [["all", "any reason"], ...Object.entries(d.rejected).map(([k, n]) => [k, `rejected: ${d.reasons[k] ?? k} (${n})`] as [string, string]), ...Object.entries(d.skipped).map(([why, n]) => [why, `skipped: ${why} (${n})`] as [string, string])])}
       <span class="muted">${rows.length} shown · J and K step through them in a card</span></div>
-    <div class="queue">${rows.map((r) => `<button class="item" data-key="${esc(r.key)}"><span class="chip ${r.state}">${r.state === "proposed" ? `joins ${esc(day(r.admitAt))}` : r.state === "labeled" ? "being labeled" : esc(r.state)}</span><span class="said">“${esc(r.said)}”</span><span class="muted">${r.landed === "yes" ? "landed" : r.landed ? `missed${r.gold ? " · gold" : ""}` : ""}</span><span class="meta muted">${esc(r.project)} · ${r.tester ? `tester${r.split === "hold" ? " (R-hold: R1 only)" : ""}` : "you"} · ${esc(day(r.at))}${r.categories.length ? ` · ${esc(r.categories.join(", "))}` : ""}${r.edited.meant || r.edited.expectation ? " · edited" : ""}${r.reason ? ` · ${esc(d.reasons[r.reason] ?? r.reason)}` : ""}</span></button>`).join("") || '<p class="muted">No card here.</p>'}</div>`;
+    <div class="queue">${rows.map((r) => `<button class="item" data-key="${esc(r.key)}"><span class="chip ${r.state}">${r.state === "proposed" ? `joins ${esc(day(r.admitAt))}` : r.state === "labeled" ? "being labeled" : r.state === "skipped" ? `skipped: ${esc(r.skip)}` : esc(r.state)}</span><span class="said">“${esc(r.said)}”</span><span class="muted">${r.landed === "yes" ? "landed" : r.landed ? `missed${r.gold ? " · gold" : ""}` : ""}</span><span class="meta muted">${esc(r.project)} · ${r.tester ? `tester${r.split === "hold" ? " (R-hold: R1 only)" : ""}` : "you"} · ${esc(day(r.at))}${r.categories.length ? ` · ${esc(r.categories.join(", "))}` : ""}${r.edited.meant || r.edited.expectation ? " · edited" : ""}${r.reason ? ` · ${esc(d.reasons[r.reason] ?? r.reason)}` : ""}</span></button>`).join("") || '<p class="muted">No card here.</p>'}</div>`;
   host.querySelectorAll<HTMLSelectElement>("select[data-filter]").forEach((s) =>
     s.addEventListener("change", () => {
       filters[s.dataset.filter as keyof typeof filters] = s.value;
@@ -139,7 +143,8 @@ const wordsHtml = (w: Card["send"]["words"], label: string) =>
 
 function cardHtml(c: Card) {
   const e = c.expectation.now;
-  const status = c.state === "proposed" ? `joins ${day(c.admitAt)} unless rejected` : c.state === "labeled" ? "still being labeled: it can't be judged yet" : c.state === "rejected" ? `rejected: ${c.reasons[c.review.reason ?? ""] ?? c.review.reason ?? ""}` : "admitted";
+  const reopens = c.state === "skipped" && c.skip === NOT_DRAWING;
+  const status = c.state === "proposed" ? `joins ${day(c.admitAt)} unless rejected` : c.state === "labeled" ? "still being labeled: it can't be judged yet" : c.state === "rejected" ? `rejected: ${c.reasons[c.review.reason ?? ""] ?? c.review.reason ?? ""}` : c.state === "skipped" ? `skipped: ${c.skip}` : "admitted";
   return `<div class="sheet">
     <div class="row"><span class="chip ${c.state}">${esc(status)}</span><span class="muted">${esc(c.project)} · send ${c.send.n} of ${c.send.of} · ${c.tester ? `a tester's${c.split === "hold" ? " (R-hold: R1 only, never the bank)" : ""}` : "yours"} · ${esc(new Date(c.at).toLocaleString())} · ${esc(c.send.replay)}${c.send.kind === "build" ? " · a preview click" : ""}${c.send.status && c.send.status !== "done" ? ` · ${esc(c.send.status)}` : ""}</span></div>
     <div><div class="words">${wordsHtml(c.send.words, c.send.label)}</div>
@@ -156,7 +161,7 @@ function cardHtml(c: Card) {
     ${c.gold ? `<div><p><b>Gold</b>: ${esc(c.gold.why ?? c.gold.error ?? "")}</p>${c.gold.problems.length ? `<p class="bad">${c.gold.problems.map(esc).join("<br>")}</p>` : ""}
       ${c.gold.checks.length ? `<div class="scroll"><table class="marks"><thead><tr><th>Free check</th><th>then</th><th>now</th><th>gold</th></tr></thead><tbody>${c.gold.checks.map((k) => `<tr><td><code>${esc(JSON.stringify(k.check))}</code></td>${checkCell(k.then)}${checkCell(k.now)}${checkCell(k.gold)}</tr>`).join("")}</tbody></table></div>` : ""}</div>` : ""}
     <textarea data-note rows="2" placeholder="A note for yourself (saved as you type; stays with your verdicts under real/)">${esc(c.review.note ?? "")}</textarea>
-    <div class="acts">${c.state === "labeled" ? '<span class="muted">Verdicts open once it is proposed.</span>' : `
+    <div class="acts">${c.state === "labeled" ? '<span class="muted">Verdicts open once it is proposed.</span>' : reopens ? '<button class="primary" data-act="approve">It is a drawing request: reopen it<kbd>A</kbd></button>' : c.state === "skipped" ? '<span class="muted">Skipped sends aren\'t cases: nothing to judge.</span>' : `
       <button class="primary" data-act="approve">Approve<kbd>A</kbd></button>
       <button data-act="edit">Save my edits and approve<kbd>E</kbd></button>
       <select data-reason><option value="">reject because…</option>${Object.entries(c.reasons).map(([k, v]) => `<option value="${k}"${c.review.reason === k ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>
@@ -196,6 +201,7 @@ async function show(key: string, keys: string[]) {
   };
   /** The card's note (saved as it's typed) and its verdict buttons; returns what A, E and R do. */
   const wire = (c: Card, k: string) => {
+    const reopens = c.state === "skipped" && c.skip === NOT_DRAWING;
     const said = m.body.querySelector<HTMLElement>("[data-said]")!;
     const val = (f: string) => m.body.querySelector<HTMLTextAreaElement>(`[data-edit="${f}"]`)!.value;
     const note = m.body.querySelector<HTMLTextAreaElement>("[data-note]")!;
@@ -219,7 +225,7 @@ async function show(key: string, keys: string[]) {
     });
     note.addEventListener("blur", () => void saveNote());
     const verdict = async (a: string) => {
-      if (c.state === "labeled") return;
+      if (c.state === "labeled" || (c.state === "skipped" && !(reopens && a === "approve"))) return;
       const body: Record<string, unknown> = { key: k, note: note.value };
       if (a === "reject") {
         if (!reason?.value) return void ((said.textContent = "pick why first"), reason?.focus());
@@ -241,7 +247,7 @@ async function show(key: string, keys: string[]) {
         clearTimeout(timer);
         sent = note.value;
         changed = true;
-        said.textContent = a === "reject" ? "rejected" : "approved";
+        said.textContent = a === "reject" ? "rejected" : reopens ? "reopened: it's labeled and proposed with the next intake" : "approved";
         step(1);
       } catch (err) {
         said.textContent = `not saved: ${(err as Error).message}`;

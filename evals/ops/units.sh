@@ -9,8 +9,8 @@
 # rt-intake.timer    every 30 minutes, a pull of the hosted app's data (evals/real/pull.sh live), then `rte intake`
 #                    (evals/real/README.md): while the loop's unit isn't running, new sends become cards; while it is, the
 #                    loop does that between its epochs.
-# Each unit runs with the PATH this shell has (node, claude, pnpm), kept in $RT_EVAL_HOME/rt-units.env, and never with
-# this shell's other variables.
+# Each unit runs with the PATH this shell has (node, claude, pnpm), kept in $RT_EVAL_HOME/<prefix>-units.env, and never
+# with this shell's other variables. None has a memory cap: the machine's slot count (rte ladder) sizes what runs.
 # Checks install a set of their own: RT_UNIT_PREFIX (default rt), RT_UNIT_DIR, RT_RTE (the rte to run), RT_RESTART_SEC.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -38,7 +38,8 @@ cat > "$dir/$prefix-loop.service" <<EOF
 [Unit]
 Description=imagine's eval loop (evals/RUNBOOK.md)
 StartLimitIntervalSec=6h
-StartLimitBurst=3
+# Its first start and three restarts after a crash: past them it stays down and the failure unit tells the owner.
+StartLimitBurst=4
 OnFailure=$prefix-loop-failed.service
 
 [Service]
@@ -89,7 +90,6 @@ Description=imagine's eval intake, every 30 minutes
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=30min
-Persistent=true
 
 [Install]
 WantedBy=timers.target

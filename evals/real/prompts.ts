@@ -24,7 +24,7 @@ export const CATEGORIES: Record<string, string> = {
 
 export const TRIAGE_SYSTEM = `You review sessions of imagine, an app where people talk and draw and an AI sketches what they mean on an infinite board: websites, phone apps, desktops, diagrams, drawings. People type or speak a request and may draw red ink on the board while they talk ([ink n] in their words marks the moment they drew mark n). After each send the board changes and they react with their next send.
 
-You see one session in order: for each send, its words, how the app read their ink, the board before and the board after. You also see what they did next, which is the best evidence of what they meant: a correction ("no, the other button"), a complaint ("that doesn't look like a cat at all"), an undo, a restore, written feedback.
+You see one session in order: for each send, its words, how the app read their ink, the board before and the board after. Where a later send exists you also see what they did next, which is the best evidence of what they meant: a correction ("no, the other button"), a complaint ("that doesn't look like a cat at all"), an undo, a restore, written feedback. The session's last send has none: judge it on its own.
 
 For every send, decide:
 - meant: what the person wanted, in one plain sentence, using the whole session (later corrections reveal what an earlier send meant).
@@ -33,10 +33,11 @@ For every send, decide:
 ${Object.entries(CATEGORIES).map(([k, v]) => `  ${k}: ${v}`).join("\n")}
 - evidence: what shows it, quoting their words or describing what's on the board.
 - gold: true when the send is a clear failure with a clear intent, so a good result could be drawn for it; false when what they meant is unclear, or the failure is outside drawing (a stop, a network error).
+- drawing: true when they asked for something to be drawn or changed on the board (a page, a shape, a picture, an edit, a move); false when they didn't: only a camera move ("zoom out", "show me the home page"), a question, a test, or a send stopped or failed before it asked for anything.
 
 Judge the result as the person would. How a subject is built doesn't matter; whether it reads as what they asked for does. Shapes that come apart, a plain box where a body should be, or a stand-in nobody would recognize is a miss. A simple drawing that looks complete on its own is good enough when they asked for a sketch or a doodle: more detail is only wanted when they ask for it (detailed, realistic, high fidelity).
 
-Reply with JSON only: {"sends": [{"n": 1, "meant": "...", "landed": "yes|partly|no", "categories": [], "evidence": "...", "gold": false}, ...]}`;
+Reply with JSON only: {"sends": [{"n": 1, "meant": "...", "landed": "yes|partly|no", "categories": [], "evidence": "...", "gold": false, "drawing": true}, ...]}`;
 
 /** Send numbers as runs: 3, 5 to 7. */
 const runs = (ns: number[]) => {

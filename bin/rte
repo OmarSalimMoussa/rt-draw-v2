@@ -7,16 +7,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export RT_EVAL_HOME="${RT_EVAL_HOME:-$HOME/rt-eval}"
+# The units' prefix (evals/ops/units.sh): rt, or a check's own.
+prefix=${RT_UNIT_PREFIX:-rt}
 case "${1:-}" in
   run)
-    systemctl --user cat rt-loop.service >/dev/null 2>&1 || { echo "rte run: no rt-loop unit here: bash evals/ops/units.sh installs it (the PGX)" >&2; exit 1; }
+    systemctl --user cat "$prefix-loop.service" >/dev/null 2>&1 || { echo "rte run: no $prefix-loop unit here: bash evals/ops/units.sh installs it (the PGX)" >&2; exit 1; }
     # The owner's word: a stop of theirs no longer holds it (rte wanted), and a unit that gave up after its restarts is reset.
     node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts wanted --set
-    systemctl --user reset-failed rt-loop.service 2>/dev/null || true
+    systemctl --user reset-failed "$prefix-loop.service" 2>/dev/null || true
     # The loop does intake between its epochs from now: a pass of the timer's stops (what it paid for is cached).
-    systemctl --user stop rt-intake.service 2>/dev/null || true
-    systemctl --user start --no-block rt-loop.service
-    echo "rte run: the loop's unit is starting (readiness first, then loop --resume): bin/rte status, journalctl --user -fu rt-loop"
+    systemctl --user stop "$prefix-intake.service" 2>/dev/null || true
+    systemctl --user start --no-block "$prefix-loop.service"
+    echo "rte run: the loop's unit is starting (readiness first, then loop --resume): bin/rte status, journalctl --user -fu $prefix-loop"
     ;;
   job)
     shift

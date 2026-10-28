@@ -8,9 +8,11 @@
  *   invite    the admin invited someone: mailed to them, with their link (invite() says how it's written)
  *   notice    the eval loop needs the admin (evals/loop/notify.ts): mailed to ADMIN, never anyone else
  *
- * Only imagine's server and its eval loop may call it: every request carries SECRET, which lives in
- * Script Properties here, in MAILER_SECRET on the server and in the loop's notify.env. Without it,
- * anyone could mail anyone as you. An invite's link must also be one of imagine's own.
+ * Only imagine's server and its eval loop may call it. The server's requests carry SECRET (Script
+ * Properties here, MAILER_SECRET on the server): without it, anyone could mail anyone as you. The
+ * loop's carry NOTICE_SECRET (Script Properties here, MAILER_SECRET in its notify.env), which sends
+ * notices to ADMIN and nothing else, so the machine the loop runs on can't mail anyone as you. An
+ * invite's link must also be one of imagine's own.
  *
  * This file isn't part of any build. It is pasted into a standalone Apps Script project and deployed
  * as a web app; deploy/README.md says how.
@@ -29,6 +31,7 @@ function authorise() {
     account: Session.getEffectiveUser().getEmail(),
     quotaLeft: MailApp.getRemainingDailyQuota(),
     secretSet: prop('SECRET').length >= 32,
+    noticeSecretSet: prop('NOTICE_SECRET').length >= 32,
     sheet: prop('SHEET_ID') ? SpreadsheetApp.openById(prop('SHEET_ID')).getName() : 'no sheet (optional)',
   };
   Logger.log(JSON.stringify(report, null, 2));
@@ -38,10 +41,10 @@ function authorise() {
 function doPost(e) {
   try {
     var f = JSON.parse(e.postData.contents);
-    var secret = prop('SECRET');
-    if (!secret || secret.length < 32 || f.secret !== secret) return json({ ok: false, error: 'not allowed' });
+    var known = function (key) { var s = prop(key); return s.length >= 32 && f.secret === s; };
 
     if (f.action === 'notice') {
+      if (!known('NOTICE_SECRET') && !known('SECRET')) return json({ ok: false, error: 'not allowed' });
       var subject = String(f.subject || '').trim().slice(0, 200);
       var text = String(f.text || '').trim().slice(0, 5000);
       if (!subject) return json({ ok: false, error: 'a notice needs a subject' });
@@ -49,6 +52,8 @@ function doPost(e) {
       GmailApp.sendEmail(ADMIN, 'imagine eval: ' + subject, text + '\n\n' + noticeRef, { name: 'imagine eval' });
       return json({ ok: true, inboxed: toInbox(noticeRef) });
     }
+
+    if (!known('SECRET')) return json({ ok: false, error: 'not allowed' });
 
     var email = String(f.email || '').trim();
     if (!/^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/.test(email)) return json({ ok: false, error: 'bad email' });

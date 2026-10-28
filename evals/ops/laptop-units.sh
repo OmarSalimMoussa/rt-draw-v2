@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# The laptop's one eval unit: rt-pull-local.timer sends its dev server's .data (the owner's own sends) to the PGX every
-# 30 minutes, for intake there (evals/real/pull.sh local). A laptop asleep sends when it wakes. Install it from the
-# checkout you deploy the harness from (it runs that checkout's pull.sh):
+# The laptop's one eval unit: rt-pull-local.timer sends its dev server's .data (the owner's own sends) and the sends they
+# recorded for U1 to the PGX every 30 minutes, for intake and the Judge view there (evals/real/pull.sh local). It runs on
+# the clock, so a pull missed while the laptop slept runs when it wakes. Install it from the checkout you deploy the
+# harness from (it runs that checkout's pull.sh):
 #   bash evals/ops/laptop-units.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -23,8 +24,7 @@ cat > "$dir/rt-pull-local.timer" <<UNIT
 Description=This laptop's dev-server sends to the PGX, every 30 minutes
 
 [Timer]
-OnBootSec=10min
-OnUnitActiveSec=30min
+OnCalendar=*:0/30
 Persistent=true
 
 [Install]

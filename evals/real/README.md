@@ -12,7 +12,7 @@ Where an admitted card goes depends on who sent it:
   owner sees whether what the loop keeps helps people it never tuned on.
 
 ```
-pull.sh live   (PGX, before each intake)  ─┐
+pull.sh live   (PGX, every 30 minutes)    ─┐
 pull.sh local  (laptop, every 30 minutes) ─┴→ real/raw/<source>/<stamp>
                                                 │
 intake (between the loop's epochs, or rte intake from its timer)
@@ -23,22 +23,27 @@ intake (between the loop's epochs, or rte intake from its timer)
 
 | Step | What it does | Calls |
 |---|---|---|
-| Pull | Before each intake, `pull.sh live` asks the box for its data over ssh as `rt-box`. That key may only run the export (`evals/ops/box-key.sh`): people, feedback, projects, the send log and model calls, never `claude-config/`. Separately, the laptop's `rt-pull-local.timer` (`evals/ops/laptop-units.sh`) sends its dev server's `.data` with `pull.sh local`. Each pull is a snapshot in `real/raw/<source>/<stamp>/`; the newest is named in `latest`. A pull the same as the last is dropped, and each source keeps its newest 8. | 0 |
-| Ingest | `sessions.ts` turns each project into a session: its sends in order, each with its before and after boards. A send has a key that never moves: `<session>#<send id>` for one from the send log (`app/src/board/capture.ts`), or `<session>#v<n>` for one rebuilt from the version it saved. A logged send replays exactly. A rebuilt one replays its words as typed, but its ink survives only as the product's reading of it. | 0 |
+| Pull | Every 30 minutes `rt-intake.timer` runs `pull.sh live`, which asks the box for its data over ssh as `rt-box`, while the loop runs too. That key may only run the export (`evals/ops/box-key.sh`): people, feedback, projects, the send log and model calls, never `claude-config/`. Separately, the laptop's `rt-pull-local.timer` (`evals/ops/laptop-units.sh`) sends its dev server's `.data` with `pull.sh local`, and the owner's recorded sends (`human/`) beside it. Each pull is a snapshot in `real/raw/<source>/<stamp>/`; the newest is named in `latest`. A pull the same as the last is dropped, and each source keeps its newest 8. | 0 |
+| Ingest | `sessions.ts` turns each project into a session: its sends in order, each with its before and after boards. A send has a key that never moves: `<session>#<send id>` for one from the send log (`app/src/board/capture.ts`), or `<session>#v<n>` for one rebuilt from the version it saved. A logged send replays exactly. A rebuilt one replays its words as typed, but its ink survives only as the product's reading of it. A version saved in the 10 minutes before the snapshot, with no send log yet, waits for the next pull: the app logs a send just after saving its version, and the log would move its key. | 0 |
 | Splits | Each person is placed once, in `splits.json`. The owner tunes. A tester goes, in the order of their first send, to whichever side is further below its share of the sends that replay (R-hold toward a third). Nobody changes sides. | 0 |
-| Images | Each new send's before (the person's screen with their ink) and after, as JPEGs on a bridge page of the champion. | 0 |
-| Triage | Opus (effort high) reads each session with new sends: 11 sends per call, the whole session's words as context. It judges only the new ones: what was meant, whether it landed, the failure kinds (`prompts.ts` `CATEGORIES`), and whether gold can be drawn. A send is triaged once, so a prompt change labels new sends only. | 1 per session with new sends |
-| Gold | Each miss triage marked, if it can replay. Opus draws the product's own ops and every picture, plus a rubric (should / must not) and free checks (`checks.ts`). It works without the product's limits, since gold is the ideal the product aims at. The ops run on the before board with the product's `runScript`; the pictures go through `readPicture` (`gold.ts`). An unreadable reply is drawn once more. `rte intake --regold` redraws the gold that has no verdict yet; the look window stays as it was. | 1 per miss |
-| Proposals | A tune person's card becomes a bank case `real/bank/c-r-<id>/`: its input, before board and meaning, with gold's rubric as its expectation. Where gold drew nothing, the expectation judge drafts one. Its before image is shot as the driver's are. The case is replayed on the champion, in one run per champion (`real-bank-<sha12>`, resumed if cut short); that replay opens its look window. An R-hold person's card opens its window once its gold is shot. | the product's, once per case; the judge's, per case without gold |
+| Images | Each new send's before (the person's screen with their ink) and after, as JPEGs on a bridge page of the champion. A send whose boards fail to draw is tried again next pass, 3 times in all. | 0 |
+| Triage | Opus (effort high) reads each session with new sends: 11 sends per call, the whole session's words as context. It judges only the new ones: what was meant, whether it landed, the failure kinds (`prompts.ts` `CATEGORIES`), whether it asked for a drawing at all, and whether gold can be drawn. A session waits until its last send is an hour old, since what the person did next is the best evidence. A send is triaged once, so a prompt change labels new sends only. | 1 per settled session with new sends |
+| Gold | Each miss triage marked, if it can replay. Opus draws the product's own ops and every picture, plus a rubric (should / must not) and free checks (`checks.ts`). It works without the product's limits, since gold is the ideal the product aims at. The ops run on the before board with the product's `runScript`; the pictures go through `readPicture` (`gold.ts`). An unreadable reply is drawn once more, and gold's board image is tried 3 times. When `gold.ts` changes, each board it would build differently is rebuilt and shot again, at 0 calls. `rte intake --regold` redraws the gold that has no verdict yet, keeping its look window; while the loop runs, it asks the loop's next intake to (`real/regold.request`). | 1 per miss |
+| Proposals | A tune person's card becomes a bank case `real/bank/c-r-<id>/`: its input, before board and meaning, with gold's rubric as its expectation. Where gold drew nothing, the expectation judge drafts one, in 3 tries. Its before image is shot as the driver's are. The case is replayed on the champion, in one run per champion (`real-bank-<sha12>`, resumed if cut short); that replay opens its look window. An R-hold person's card opens its window once its gold is shot. | the product's, once per case; the judge's, per case without gold |
 | Admission | Each pass applies the owner's verdicts. A card is admitted when its window ends, unless rejected, and at once when approved. An admitted bank case gets `done`, so decisions take it. A rejection after that retires it. | 0 |
 | R1 | Every admitted card with gold, each with the card's meaning and rubric, as `real/bench/R1/<case>/`. R1 is rebuilt whole and swapped in only when it changed, and history gets `bench/R1.json`. | 0 |
 
 A send becomes no card (it's **skipped**, with its reason shown in Eval HQ) when:
 - its ink was lost (sent before the send log);
+- its boards couldn't be drawn in 3 tries;
 - its board still waits for a picture, which both arms would draw;
-- it repeats an earlier send (the same words and ink on the same board);
+- it repeats another send (the same words and ink on the same board). The case stays with the send that holds it:
+  the one its bank case was made from, then one in its look window or with the owner's verdict, then one triaged,
+  else the earliest. A later pull bringing an earlier copy never moves it;
+- triage found it isn't a drawing request (a question, a test). The owner's approval in Eval HQ reopens it;
 - it's an R-hold send with no gold, or with gold that couldn't be drawn;
 - a sync voided its bank case;
+- no expectation could be drafted for it in 3 tries;
 - the champion couldn't replay it in 3 tries.
 
 Local sessions (the owner's dev server) count from 2026-10-22, when testers started on the hosted app (`real.ts`
@@ -47,12 +52,17 @@ Local sessions (the owner's dev server) count from 2026-10-22, when testers star
 ## When it runs
 
 The loop runs intake between epochs, after sync (`coordinator.ts` `between`). While the loop isn't running,
-`rt-intake.timer` runs `rte intake` every 30 minutes, with a live pull first. `rte intake` leaves the work to the loop
+`rt-intake.timer` runs `rte intake` every 30 minutes, after its live pull. `rte intake` leaves the work to the loop
 when the loop's unit is up or a live loop holds the lock.
 
 Every Opus call waits at the budget's gate. It pauses at 90% of the five-hour window and at the week's threshold, and
-never caps. A week spent ends the pass, and what was paid for is kept. A session or send that fails is said and tried
-again next pass. The log gets keys and counts only.
+never caps. A week spent (or the owner's stop, asked for while a call waited) ends the paid stages, and what was paid
+for is kept.
+
+Each stage holds its own failures: a stage, session or send that fails is said and tried again next pass, and the
+stages after it still run. Admission and R1 always run, at 0 calls. The log gets keys and counts only. An error's own
+text, which can quote a tester, goes to `real/logs/intake.log`. Each pass writes `real/intake.json` (when, how many
+failed, and how many passes in a row had failures), which Eval HQ shows.
 
 ## Review in Eval HQ
 
@@ -85,12 +95,15 @@ the card.
 
 ```
 real/raw/<source>/<stamp>/   pulls; latest names the newest, pulled says when the last one came
-real/sessions/<id>/          session.json, v<n>.json and before-<send>.json boards, img/, triage.json
+real/sessions/<id>/          session.json, v<n>.json and before-<send>.json boards, img/ (failed.json counts tries), triage.json
 real/gold/<session>-<send>/  gold.json, reply.txt, gold.scene.json, gold.jpg
 real/bank/c-r-<id>/          bank cases (set real)
 real/bench/R1/               R1, with its manifest
 real/review/verdicts.jsonl   the owner's verdicts, edits and notes, appended
 real/splits.json             each person's side
+real/intake.json             the last pass: when, its failures, passes in a row with failures
+real/logs/intake.log         the errors behind those failures (they can quote testers)
+real/regold.request          rte intake --regold, asked while the loop runs: its next intake redraws gold
 real/bank.key                the secret real case ids are keyed by (mode 600)
 real/runs/, real/cache/      a run's files, calls and images for real cases
 ```

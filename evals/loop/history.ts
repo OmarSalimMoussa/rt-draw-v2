@@ -35,6 +35,22 @@ function tryGit(cwd: string, ...args: string[]): string | undefined {
 }
 /** The loop always commits as itself: the machine's own identity (the owner's email) would land in every record and tried patch. */
 const WHO = ["-c", "user.name=rt-eval loop", "-c", "user.email=rt-eval@localhost"];
+/** git in the history worktree, waiting out another process's commit there (rte shipped beside the loop holds index.lock). */
+function gitWaiting(cwd: string, ...args: string[]): string {
+  for (let tries = 1; ; tries++) {
+    try {
+      return git(cwd, ...args);
+    } catch (err) {
+      if (tries >= 20 || !/index\.lock/.test(String((err as { stderr?: unknown }).stderr ?? ""))) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
+}
+/**
+ * A push that can't hang the loop: the remote's ssh gives up on a dead connection, and the whole push on 2 minutes. It
+ * runs after each history commit, so the private remote is at most one commit behind.
+ */
+const PUSH = { timeout: 120_000, env: { ...process.env, GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4" } };
 
 /** The history worktree, made on first use: the orphan branch, then the worktree; files written before it are adopted. */
 export function openHistory(): string {
@@ -67,13 +83,13 @@ const at = (...p: string[]) => join(openHistory(), ...p);
 /** Commits everything in the worktree (nothing to commit: undefined) and pushes when the branch has a remote. */
 export function commitHistory(message: string): string | undefined {
   const dir = openHistory();
-  git(dir, "add", "-A");
+  gitWaiting(dir, "add", "-A");
   if (tryGit(dir, "diff", "--cached", "--quiet") !== undefined) return undefined;
-  git(dir, ...WHO, "commit", "-q", "-m", message);
+  gitWaiting(dir, ...WHO, "commit", "-q", "-m", message);
   const remote = tryGit(dir, "config", "--get", `branch.${BRANCH}.remote`);
   if (remote) {
     try {
-      git(dir, "push", "-q", remote, `${BRANCH}:${BRANCH}`);
+      execFileSync("git", ["-C", dir, "push", "-q", remote, `${BRANCH}:${BRANCH}`], { ...PUSH, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       // Never fatal: the next decision's push carries this commit too.
       console.error(`history: push to ${remote} failed: ${String(err).split("\n")[0]}`);

@@ -201,9 +201,10 @@ All of it is in `loop/verdict.ts`, with frozen numbers in `loop/config.ts`. Stat
 unit, since sends from one session are alike (`loop/stats.ts`: clustered standard errors, and for latency a test
 that swaps the arms of whole sessions, exact at any number of sessions; session bootstraps are reported only).
 
-- **Quality cards (Rule F).** The judge's verdicts are checked in looks at 16, 32, 48 and 80 affected cases. Keep when
-  the clustered Z reaches 2.3, 1.8 or 1.4 at looks 32, 48 or 80; revert as soon as it falls under -0.2, 0.3, 0.7 or 1.4.
-  A clear result stops early, so a dud costs 16 cases, not 80.
+- **Quality cards (Rule F).** The judge's verdicts are checked in looks at 16, 32, 48, 80 and 160 affected cases. Keep
+  when the clustered Z reaches 2.3, 1.9, 1.8 or 1.7 at looks 32, 48, 80 or 160; revert as soon as it falls under -1,
+  -0.5, 0, 0.6 or 1.7. A card out of cases short of a look gets one last look on them all at that look's keep line. A
+  clear result stops early, so a dud costs 16 cases, not 160.
 - **Latency cards.** Keep when the median paired ratio (time to first drawing, or render) is surely under 1.0 (the
   swap test's p under 0.10), or a slow-send tail (p90, p95) is surely under 0.95 and at least 10% faster, the other
   latency isn't surely slower, and
@@ -259,4 +260,4 @@ R1, scored beside every keep. Testers' words and drawings never leave the eval m
 
 The loop, Eval HQ and intake run on one always-on machine as systemd units, and restart by themselves. The owner looks
 at new cards, answers what the loop holds for them, and ships the champion with one command. Claude sessions run the
-rest through five MCP tools. `RUNBOOK.md` has the commands.
+rest through five MCP tools. `RUNBOOK.md` has what the owner does; `ops/README.md`, how it's set up and run.

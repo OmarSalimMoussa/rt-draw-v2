@@ -64,7 +64,7 @@ async function call(name: string, a: Record<string, unknown>): Promise<{ text: s
     args.push("--thread", String(a.thread), ...(text ? ["--text", text] : []), ...(a.resolve ? ["--resolve"] : []));
   }
   // A plain ssh has no node on its PATH: the units' env file has the one the loop runs with.
-  const remote = `set -a; . "\${RT_EVAL_HOME:-$HOME/rt-eval}/rt-units.env"; set +a; exec "$RT_EVAL_HOME/repo/bin/rte" api ${args.map(quote).join(" ")}`;
+  const remote = `set -a; . "\${RT_EVAL_HOME:-$HOME/rt-eval}/\${RT_UNIT_PREFIX:-rt}-units.env"; set +a; exec "$RT_EVAL_HOME/repo/bin/rte" api ${args.map(quote).join(" ")}`;
   const r = await exec(process.env.RT_SSH ?? "ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", pgx(), remote], 120_000);
   return r.code === 0 ? { text: r.out.trim(), isError: false } : { text: `${r.out}${r.err}`.trim() || `exit ${r.code}`, isError: true };
 }

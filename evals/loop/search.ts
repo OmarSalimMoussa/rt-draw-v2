@@ -1,5 +1,5 @@
-// The search's building blocks (LOOP-V2.md D): knob literals in tuning.ts, sweeps run as knob cards with pruning,
-// combos of tried patches, and the near wins the analyst reads. run.ts calls them; t18 checks them at 0 calls.
+// The search's building blocks (LOOP-V2.md D): knob literals in tuning.ts, sweeps run as knob cards with pruning, and
+// combos of tried patches. The loop's decide step calls them; t18 checks them at 0 calls.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

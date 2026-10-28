@@ -2,7 +2,8 @@
 // the loop's unit failing past its restarts. It goes through imagine's own mailer (deploy/mailer.gs, action "notice"),
 // to the admin's inbox, with the harness's words and ids only: never a tester's, never an error's text.
 // The mailer's address and secret are in ~/.config/rt-eval/notify.env (mode 600, outside every repo):
-//   MAILER_URL=https://script.google.com/macros/s/…/exec   MAILER_SECRET=…   HQ_URL=http://<the PGX>:5181/evals/progress/
+//   MAILER_URL=https://script.google.com/macros/s/…/exec   MAILER_SECRET=<its NOTICE_SECRET, which sends notices only>
+//   HQ_URL=http://<the PGX>:5181/evals/progress/
 // Without the file a notice is the log line alone.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";

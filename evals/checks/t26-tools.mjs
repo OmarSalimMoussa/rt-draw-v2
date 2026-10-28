@@ -51,10 +51,15 @@ const last = readFileSync(join(home, "notes", "threads.jsonl"), "utf8").trim().s
 check(r.code === 0 && js(r.out) === js({ replied: { thread: "e6-h3", resolved: true } }) && last.who === "claude" && last.resolved === true && /rough/.test(last.text), `a reply through needs_you: ${r.raw.slice(0, 200)}, wrote ${js(last)}`);
 check(rte("needs_you", "--thread", "e9-nope", "--text", "hello").code !== 0 && readFileSync(join(home, "notes", "threads.jsonl"), "utf8").trim().split("\n").length === 2, "a reply to a thread that doesn't exist was written");
 const st = rte("stop");
-check(st.code === 0 && /no loop is running/.test(st.out?.said ?? "") && existsSync(join(home, "stop.request")), `rte api stop: ${st.raw.slice(0, 200)}`);
+check(st.code === 0 && /no loop is running; if one starts, it stops at once/.test(st.out?.said ?? "") && existsSync(join(home, "stop.request")), `rte api stop: ${st.raw.slice(0, 200)}`);
 const i = rte("intake_now");
 check(i.code === 0 && i.out?.started === false && typeof i.out.said === "string", `rte api intake_now with no intake unit here: ${i.raw.slice(0, 200)}`);
 check(rte("nothing").code !== 0, "rte api took a tool it doesn't have");
+// A ship (evals/ops/ship.sh's rte shipped): the champion's keeps count from what's on prod, and status says where it serves.
+const ship = (sha, url = "https://imagine.example.test") => spawnSync(join(ROOT, "bin", "rte"), ["shipped", "--sha", sha, "--tag", `v2-${sha.slice(0, 12)}`, "--url", url], { env, encoding: "utf8" });
+check(ship(git("rev-parse", "master")).status === 0 && js(rte("status").out?.champion) === js({ sha: git("rev-parse", "--short=12", "loop/champion"), unshipped: 1, since: "prod" }), `status after a ship of master: ${js(rte("status").out?.champion)}`);
+check(ship(git("rev-parse", "loop/champion")).status === 0 && rte("status").out?.champion?.unshipped === 0 && rte("status").out.prod?.url === "https://imagine.example.test", `status after a ship of the champion: ${js(rte("status").out)}`);
+check(ship(git("rev-parse", "master"), "http://imagine.example.test").status !== 0 && rte("status").out?.champion?.unshipped === 0, "rte shipped took an address that isn't https");
 
 // ---- The MCP server, through a fake ssh: the remote command runs here, with this check's home as the PGX's ~/rt-eval.
 const pgxHome = join(home, "pgx-home");
@@ -92,7 +97,7 @@ const names = (list.result?.tools ?? []).map((t) => t.name);
 check(js(names) === js(["status", "needs_you", "run", "stop", "intake_now", "deploy"]) && list.result.tools.every((t) => t.description && t.inputSchema?.type === "object"), `tools/list: ${js(names)}`);
 const text = (m) => m.result?.content?.[0]?.text ?? "";
 const cs = await ask("tools/call", { name: "status", arguments: {} });
-check(!cs.result?.isError && JSON.parse(text(cs)).champion?.unshipped === 1, `tools/call status: ${text(cs).slice(0, 300)}`);
+check(!cs.result?.isError && JSON.parse(text(cs)).champion?.since === "prod", `tools/call status: ${text(cs).slice(0, 300)}`);
 const cn = await ask("tools/call", { name: "needs_you", arguments: { thread: "e6-h3", text: "Said once more, with an apostrophe's quote." } });
 check(!cn.result?.isError && JSON.parse(text(cn)).replied?.thread === "e6-h3" && /apostrophe's quote/.test(readFileSync(join(home, "notes", "threads.jsonl"), "utf8")), `tools/call needs_you with a reply: ${text(cn).slice(0, 200)}`);
 const bad = await ask("tools/call", { name: "needs_you", arguments: { thread: "e6-h3", text: "--resolve" } });

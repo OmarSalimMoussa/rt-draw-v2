@@ -37,7 +37,7 @@ export async function freezeHuman(shot: Shot): Promise<BenchManifest> {
   const dir = paths().human;
   const sends = (existsSync(dir) ? readdirSync(dir) : []).filter((n) => /^h-[\w-]+\.json$/.test(n)).sort()
     .map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as HumanSend).filter((s) => s.meant?.trim());
-  if (!sends.length) throw new Error("no recorded send has a meant yet: write them on the labeling page's “your sends” tab");
+  if (!sends.length) throw new Error("no recorded send has a meant yet: write them in Eval HQ's Judge view, under “your sends”");
   const root = join(openHistory(), "bench", "U1");
   for (const [i, s] of sends.entries()) {
     const f = (name: string) => `bench/U1/${s.id}/${name}`;
