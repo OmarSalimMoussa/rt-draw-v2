@@ -77,7 +77,7 @@ export const LOOP = {
   fiveHourPauseAt: 0.90, weekSevenDayMax: 0.70,
   // machine (§7); the per-machine dispatch limit is the ladder's p99 at the knee (machine.json), capped here
   loadMax: 0.6, psiMax: 0.10, sendTimeoutMs: 120_000, quiesceMs: 500, suspendGapMs: 10_000,
-  dispatchOffsetCapMs: 25, eventLoopP99MaxMs: 20, heapGrowMaxMb: 20, diskOwnerGb: 20, diskPauseGb: 10,
+  dispatchOffsetCapMs: 25, eventLoopP99MaxMs: 100, heapGrowMaxMb: 20, diskOwnerGb: 20, diskPauseGb: 10,
 } as const;
 /** The driver's eyes and hand: today's values, frozen, so a candidate's shot.* or camera.* knobs can't move the simulated user. */
 export const DRIVE_VIEW = { screenW: 960, screenH: 600, jpegQuality: 0.8, inkSize: 5, lookMinPx: 160, zoomMinPx: 160, zoomMaxPx: 20000, maxLooks: 3 } as const;

@@ -202,6 +202,8 @@ for (const by of ["By beat:", "By ask type:", "By start:", "By component:"]) che
 const missed = (n) => n % 3 === 0 || n % 4 === 1 || n % 4 === 2 || n % 11 === 0 || n % 13 === 0 || n % 17 === 0 || cpLost.includes(tuningCases[n].id);
 const misses = tuningCases.filter((c, n) => c.beat === "amb-arrow" && missed(n)).length;
 check(s1.includes(`amb-arrow ${misses}/64`), `section 1's beat count for amb-arrow isn't ${misses}/64: ${/By beat:.*/.exec(s1)?.[0]}`);
+// The bar before a card is measured, and every target's case count, missed or not, so narrow cards drop before they're built.
+check(/Coverage: .*fewer than 32 .*too rare/.test(s1) && /by beat: [^;]*amb-arrow 64/.test(s1) && /by ask type: /.test(s1) && /with ink: \d+/.test(s1), `section 1 lacks the 32-case bar or the coverage counts: ${/Coverage:.*/.exec(s1)?.[0]}`);
 const scores = [...s1.matchAll(/^- (\S+) \[(\d+)\]/gm)].map((m) => [m[1], Number(m[2])]);
 check(scores[0]?.[0] === worst && scores.every((x, i) => !i || x[1] <= scores[i - 1][1]), `champion misses aren't ranked worst first: ${scores.slice(0, 5)}`);
 check(cpLost.every((c) => !scores.some(([id]) => id === c) || s1.includes(`${c} [`)), "a checkpoint loss is missing");
@@ -266,6 +268,7 @@ check(Object.entries(report).every(([id, r]) => r.cases.some((c) => c.case === `
 
 // ---- Prompts, seed cards, card rules
 check((prompts.LATENCY_PATTERNS.match(/^\| (?!Pattern|---)/gm) ?? []).length === 6 && prompts.ANALYST_SYSTEM.includes(prompts.LATENCY_PATTERNS), "the analyst prompt lacks the doc's 6-row latency table");
+check([prompts.ANALYST_SYSTEM, prompts.CRITIC_SYSTEM].every((x) => /fewer than 32 of them it is reverted unmeasured/.test(x)) && /at least 32 tuning cases/.test(prompts.CRITIC_SYSTEM), "the analyst or critic isn't told the 32-case bar");
 check(prompts.CRITIC_SYSTEM.includes(prompts.CARD_SCHEMA) && Object.keys(OVERUSE).every((d) => prompts.CARD_SCHEMA.includes(d)), "the critic prompt lacks the card schema or the detector names");
 check(["send(", "fromJSON", "render", "DEFAULTS", "tuningId", "needsPicture", "runScript", "SCREEN", "asPage", "pageTop", "Word", "Stroke", "finished", "boardStage"].every((x) => prompts.BRIDGE_CONTRACT.includes(x)) && prompts.ENGINEER_SYSTEM.includes(prompts.BRIDGE_CONTRACT), "the engineer prompt lacks the bridge contract");
 check(["The card's change only: one idea", "every model a send may take is warmed at Send and gets the current board", "No new tests or scaffolding", "knob in src/core/tuning.ts", "Never touch frozen paths", "Never turn a patch on", "Edit with Edit, not whole-file Write"].every((r) => prompts.ENGINEER_SYSTEM.includes(r)), "the engineer prompt lacks a rule");

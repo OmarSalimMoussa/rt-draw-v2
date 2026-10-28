@@ -562,6 +562,87 @@ for (const [id, k] of [[id1, key(LIVE, 1)], [id3, key(LIVE, 3)], [idQ2, key(Q1, 
 check(existsSync(runFile(RUN, "real.json")) && runFile(RUN, "real.json").startsWith(join(p.real, "runs")) && !existsSync(join(p.home, "runs", RUN)), `real.json isn't under real/runs: ${runFile(RUN, "real.json")}`);
 check(!unexpected.length, `the fake rig's page was asked what it doesn't answer: ${js(unexpected)}`);
 
+// ===== 7. Real sends in the bank (set "real"): every triaged send that replays, landed or not, one case per input, in
+// real/bank (never bank/cases); gold's rubric is its expectation while that gold is accepted and was drawn for it. A
+// decision run's files, calls and images for one stay under real/, its rows keep error codes only, and no digest shows it.
+const { banked } = await import("../loop/rte.ts");
+const { missSection } = await import("../optimizer/digest.ts");
+const { bankedScenes } = await import("../optimizer/gates.ts");
+const { appendRow } = await import("../loop/metrics.ts");
+const { storeImages, writeReply } = await import("../loop/cache.ts");
+const rb = () => (existsSync(p.realBank) ? readdirSync(p.realBank).filter((d) => d.startsWith("c-r-")).sort() : []);
+// R-hold's people stay out, so R-hold stays people the loop never tuned on: tess is R1's R-hold.
+const w0 = R.writeRealBank(SINCE);
+check(w0.cases === 2 && w0.held === 4 && w0.todo.length === 2, `writeRealBank with tess in R-hold: ${js(w0)} (want the owner's 2 sends only, tess's 4 held out)`);
+for (const id of rb()) rmSync(join(p.realBank, id), { recursive: true });
+// With R1 aside, nobody is held out: every send that replays, one case per input.
+renameSync(r1, `${r1}.aside`);
+const w1 = R.writeRealBank(SINCE);
+const bankedReal = rb().map((id) => ({ id, info: json(join(p.realBank, id, "case.json")), meant: json(join(p.realBank, id, "meant.json")).meant }));
+const expOf = (id) => maybe(join(p.realBank, id, "expectation.json"));
+check(w1.cases === 4 && w1.inkWaiting === 1 && w1.merged === 1 && w1.held === 0 && js([...w1.todo].sort()) === js(rb()) && !existsSync(p.bankCases)
+  && bankedReal.every((c) => /^c-r-[0-9a-f]{12}$/.test(c.id) && c.info.set === "real" && /^r-[0-9a-f]{8}$/.test(c.info.originSession)),
+  `writeRealBank: ${js(w1)}, cases ${js(bankedReal.map((c) => [c.id, c.info.set, c.info.originSession]))} (want 4 in real/bank: the ink-lost send waits, a stopped send and its resend are one, landed or not)`);
+// Ids are keyed by a secret under real/: a plain hash of a blank board's words would let anyone check a guess.
+const plainId = (id) => {
+  const input = json(join(p.realBank, id, "input.json")), before = json(join(p.realBank, id, "before.scene.json"));
+  const words = typeof input.words === "string" ? input.words : input.words.map((w) => w.word).join(" ");
+  return sha(js([words, input.strokes.map((k) => k.points), before.shapes])).slice(0, 12);
+};
+check((statSync(join(p.real, "bank.key")).mode & 0o777) === 0o600 && bankedReal.every((c) => c.id.slice(4) !== plainId(c.id)), "a real case's id is the plain hash of its input, or the key isn't mode 600");
+for (const c of bankedReal) await R.shootRealCase(c.id, stubShot);
+check(bankedReal.every((c) => readFileSync(join(p.realBank, c.id, "before-ink.jpg")).equals(JPEG)), "a real case's before image isn't shot at its camera");
+const duck = bankedReal.find((c) => c.meant === "one yellow duck");
+const rubrics = () => bankedReal.filter((c) => expOf(c.id)?.judgeId === RUBRIC).length;
+check(rubrics() === 3 && duck && js(expOf(duck.id)?.should) === js(R.goldOf(key(LIVE, 1)).gold.rubric.should),
+  `gold's rubric as the expectation on ${rubrics()} cases (want L#1, L#3 and Q#2: not Q#1's unapproved gold)`);
+check(banked(["real"]).length === 0, "a real case with no replies recorded counts as banked");
+for (const c of bankedReal) put(join(p.realBank, c.id, "replies.json"), []), R.realCaseDone(c.id, "champ-sha");
+check(js(banked(["real"])) === js(rb()) && banked(["tuning", "fresh"]).length === 0 && json(join(p.realBank, rb()[0], "case.json")).championSha === "champ-sha"
+  && bankedScenes().filter((f) => f.startsWith(`${p.realBank}/`)).length === 4, "done real cases aren't banked (as real only), or their boards miss G0's scene check");
+await post("/api/verdict", { key: key(LIVE, 3), verdict: "reject" });
+const w2 = R.writeRealBank(SINCE);
+check(w2.cases === 4 && w2.todo.length === 0 && rubrics() === 2, `written again after a rejection: ${js(w2)}, ${rubrics()} rubrics (want nothing to record, L#3's rubric gone with its gold)`);
+await post("/api/verdict", { key: key(LIVE, 3), verdict: "approve" });
+// A case a sync voided (V8) stays out: not rebuilt, not recorded again, its board not in G0's check.
+const gone = rb()[0];
+renameSync(join(p.realBank, gone), join(p.realBank, `${gone}.void`));
+const w3 = R.writeRealBank(SINCE);
+check(w3.cases === 3 && w3.todo.length === 0 && !existsSync(join(p.realBank, gone)) && bankedScenes().filter((f) => f.startsWith(`${p.realBank}/`)).length === 3, `after a V8 void: ${js(w3)}`);
+renameSync(join(p.realBank, `${gone}.void`), join(p.realBank, gone));
+// A board still waiting for a picture: both arms would draw it (V12), so the send waits.
+{
+  const x = Q.s.sends[1], f = join(Q.dir, `v${x.before}.json`), was = readFileSync(f, "utf8"), b = JSON.parse(was);
+  b.shapes[0] = { ...b.shapes[0], drawing: "a rubber duck", picture: undefined };
+  writeFileSync(f, js(b));
+  const w4 = R.writeRealBank(SINCE);
+  writeFileSync(f, was);
+  check(w4.pending === 1 && w4.cases === 3, `a board waiting for a picture: ${js(w4)} (want it left out)`);
+}
+writeFileSync(p.lock, `${process.pid}\n`);
+let lockedBank;
+try {
+  R.writeRealBank(SINCE);
+} catch (e) {
+  lockedBank = e;
+}
+check(/loop\.lock is held/.test(lockedBank?.message ?? "") && R.writeRealBank(SINCE, { held: true }).cases === 4, `writeRealBank under the lock: ${lockedBank?.message ?? "not refused"}, or refused for its own holder`);
+rmSync(p.lock);
+renameSync(`${r1}.aside`, r1);
+{
+  const DEC = "2026-10-28T00-00-e1-h1-ab", rid = rb()[0];
+  check(caseDir(DEC, rid).startsWith(join(p.real, "runs", DEC)) && !caseDir(DEC, "c-b1-s01-1").startsWith(p.real), `a decision run's real case folder: ${caseDir(DEC, rid)}`);
+  const req = { model: "m", system: "", user: "draw a cat next to the duck", images: [], effort: "low", thinking: "auto" };
+  const file = writeReply(p, { reqHash: "t23-req", run: DEC, role: "draw", at: "", request: req, text: "the duck is just boxes", chunks: [], doneMs: 0, stats: {} }, false, rid);
+  const [img] = storeImages(p, [`data:image/jpeg;base64,${randomBytes(64).toString("base64")}`], DEC, rid);
+  check(file.startsWith(join(p.real, "cache")) && existsSync(p.blob(img, true)) && !existsSync(p.blob(img)), `a real case's call and image in a decision run: ${file}, image under real/ ${existsSync(p.blob(img, true))}`);
+  appendRow(DEC, { case: rid, cluster: "r-1", void: "V7: a judge call failed twice (the duck is just boxes)", lost: { arm: "B", why: "page error: draw a cat next to the duck" } });
+  const row = readFileSync(runFile(DEC, "rows.jsonl"), "utf8");
+  check(/"void":"V7"/.test(row) && /"why":"failed"/.test(row), `a real case's row keeps its words: ${row.slice(0, 200)}`);
+  const s1 = missSection("champ");
+  check(s1.includes("Also measured: 4 real sends") && !rb().some((id) => s1.includes(id)) && !/duck|cat/i.test(s1), `the digest shows a real send, or not its count: ${s1.slice(0, 400)}`);
+}
+
 // ---- Privacy: testers' words, project names and emails stay under real/ (runs/, cache/, the meter and history are shown or
 // exported; the Claude processes' config dir is scanned too).
 const leaks = [];

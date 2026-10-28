@@ -461,23 +461,39 @@ async function rerecord(rte: Rte) {
   rte.needCap("bank rerecord");
   const champ = championArm();
   const run = `rerecord-${stampNow()}`;
-  const ids = banked(["tuning", "fresh", "heldout-gate", "heldout-chart"]);
+  const ids = banked(["tuning", "fresh", "heldout-gate", "heldout-chart", "real"]);
+  const n = (await recordOnChampion(rte, ids, run)).length;
+  rte.say(`bank rerecord: ${n} of ${ids.length} cases recorded again on ${champ.sha.slice(0, 12)} (${run}); ${ids.length - n ? "the rest keep their old replies" : "every case"}`);
+  return n === ids.length ? 0 : 1;
+}
+
+/**
+ * Banked cases' replies recorded on today's champion (one live A/A with sharing, each call paid once); the ids recorded,
+ * each passed to `recorded` as it's written. What finished is kept when the run throws (the call cap, a page that never
+ * loads), so the same run name resumes the rest.
+ */
+export function recordOnChampion(rte: Rte, ids: string[], run: string, recorded?: (id: string) => void): Promise<string[]> {
+  const champ = championArm();
+  const want = new Set(ids);
   return rte.withGateway((gw) => rte.withRig(gw, [champ.tree, champ.tree], async (rig) => {
-    const { rows } = await runAB(rig, { run, kind: "ab", arms: { A: champ, B: champ }, mode: "live", share: true, seed: run, cases: ids });
-    let n = 0;
-    for (const r of rows) {
-      const from = join(caseDir(run, r.case), "A", "replies.json");
-      if (r.void || r.lost || !existsSync(from)) continue;
-      // Crash-safe: the old file copied aside, the new one copied beside it, then one rename over it, so the case
-      // always holds a whole replies.json.
-      const to = join(paths().bankCase(r.case), "replies.json"), tmp = `${to}.${run}.tmp`;
-      if (existsSync(to)) copyFileSync(to, join(paths().bankCase(r.case), `replies.${run}.json`));
-      copyFileSync(from, tmp);
-      renameSync(tmp, to);
-      n++;
+    const done: string[] = [];
+    try {
+      await runAB(rig, { run, kind: "ab", arms: { A: champ, B: champ }, mode: "live", share: true, seed: run, cases: ids });
+    } finally {
+      for (const r of readRows(run)) {
+        const from = join(caseDir(run, r.case), "A", "replies.json");
+        if (!want.has(r.case) || r.void || r.lost || !existsSync(from)) continue;
+        // Crash-safe: the old file copied aside, the new one copied beside it, then one rename over it, so the case
+        // always holds a whole replies.json.
+        const to = join(paths().bankCase(r.case), "replies.json"), tmp = `${to}.${run}.tmp`;
+        if (existsSync(to)) copyFileSync(to, join(paths().bankCase(r.case), `replies.${run}.json`));
+        copyFileSync(from, tmp);
+        renameSync(tmp, to);
+        done.push(r.case);
+        recorded?.(r.case);
+      }
     }
-    rte.say(`bank rerecord: ${n} of ${ids.length} cases recorded again on ${champ.sha.slice(0, 12)} (${run}); ${ids.length - n ? "the rest keep their old replies" : "every case"}`);
-    return n === ids.length ? 0 : 1;
+    return done;
   }));
 }
 

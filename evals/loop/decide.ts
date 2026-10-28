@@ -16,7 +16,7 @@ import { type ScanResult, sameOnTheClock, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom } from "./drive.ts";
 import { decisionRow, historyRows, openHistory, realLine, recordDecision } from "./history.ts";
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
-import { paths } from "./paths.ts";
+import { isRealCase, paths } from "./paths.ts";
 import { caseDir, put, runFile } from "./record.ts";
 import { TriedConflict, applyKnobs, applyTried, triedPatch } from "./search.ts";
 import { type CardState, type Decided, type Facts, RULES, type State, newState, overrun, readState, saveState } from "./state.ts";
@@ -99,7 +99,8 @@ async function toppedUp(run: string, banked: string[], judge: Judge, cls: Row["c
 async function lessons(gw: string, run: string, rows: Row[]) {
   if (!existsSync(runFile(run, "rows.jsonl"))) return;
   writeLossDigest(run);
-  const lost = rows.filter((r) => !r.void && !r.lost && r.s < 0).slice(0, 12);
+  // The driver's cases only: a real send's never reaches the failure analyst (failureDigest), so it can't take a place.
+  const lost = rows.filter((r) => !r.void && !r.lost && r.s < 0 && !isRealCase(r.case)).slice(0, 12);
   if (lost.length && ((await gatewayStatus(gw)) as { pace: { ok: boolean } }).pace.ok) put(runFile(run, "failures.json"), await agents.failureAnalyst(failureDigest(lost.map((r) => ({ case: r.case, run }))), run).catch(() => []));
 }
 
@@ -111,7 +112,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   const base = championSha();
   const cand = c.cand!;
   const t0 = Date.now(), paused0 = budgetPausedMs();
-  const affected = { tuning: 0, of: 0, topUp: 0 };
+  const affected: DecisionRow["affected"] = { tuning: 0, of: 0, topUp: 0 };
   const record = (d: Decision, at: string, result: Omit<ABResult, "invariants"> = { rows: [] }, owner: string[] = []) => {
     const row = decisionRow({ id, epoch: st.epoch, card: c.card, candSha: cand, baseSha: base, run: at, judgeId: judgeId("fidelity", lastServed(), variants().fidelity), result: { ...result, decision: d }, affected });
     if (d.verdict === "keep") git(p.repo, "branch", "-f", "loop/champion", cand);
@@ -176,8 +177,8 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     // Knobs a code card adds or moves in tuning.ts, as its own knobs are: e88-h3's jev.copies came that way.
     const moved = [...git(p.repo, "diff", base, cand, "--", "src/core/tuning.ts").matchAll(/^\+\s*K\("([\w.]+)"/gm)].map((m) => m[1]);
     const sc = hedgeScan(c.card, maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) })), moved);
-    const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? [])];
-    Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
+    const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? []), ...(sc.affected.real ?? [])];
+    Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length, real: sc.affected.real?.length ?? 0 });
     if (rte.o.f["quality-only"] && sc.class === "S") {
       rte.say(`${id}: a schedule change (S): latency-goal cards wait for the PGX (--quality-only)`);
       return settle({ id, verdict: "deferred", component: c.card.component, at: new Date().toISOString() });
@@ -188,7 +189,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     const more = tops && affected.of ? (LOOP.topUpMaxSends * tuning.length) / affected.of : 0;
     if (sc.class !== "N" && sc.class !== "S" && tuning.length + more < LOOP.rareMin) {
       const why = `too rare to measure: ${tuning.length} affected cases${tops ? `, ~${more.toFixed(0)} more from ${LOOP.topUpMaxSends} top-up sends` : ""} (< ${LOOP.rareMin})`;
-      return gate("revert", [why], { owner: [why], cls: sc.class });
+      return gate("revert", [why], { cls: sc.class });
     }
     let at: string, result: ABResult;
     if (sc.class === "N" || sc.class === "S") {
@@ -231,7 +232,6 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     // A void goes to the owner list, never rerun (§1.4 item 9): in history every rerun of a void voided again, the same
     // harness asymmetry each time. The owner re-decides it with rte decide --card once the cause is fixed.
     if (d.verdict === "void") owner.push(`void: ${d.reasons.join("; ")}`);
-    if (d.ownerList) owner.push(`too rare to measure: ${result.rows.filter((r) => !r.void).length} affected cases`);
     if (d.verdict === "owner") owner.push(...d.vetoes);
     if (d.verdict === "keep") {
       const hold = [...new Set([

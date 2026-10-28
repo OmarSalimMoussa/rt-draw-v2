@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { sceneDiff } from "../core/diff.ts";
 import { readReply } from "./cache.ts";
 import { listUsd } from "./meter.ts";
-import { paths } from "./paths.ts";
+import { isRealCase, paths } from "./paths.ts";
 import { appendLine, caseDir, runFile } from "./record.ts";
 import type { Arm, ArmResult, ArmTiming, CallLog, Engine, EngineRun, Judged, Row, Same, SceneJSON } from "./types.ts";
 
@@ -65,7 +65,7 @@ export const beforeOf = (runId: string, caseId: string): SceneJSON =>
  * that changes a prompt as several times dearer (×6.00 on e4-h2, whose own calls cost $0.0001).
  */
 function recordedUsd(c: CallLog): number {
-  const r = readReply(paths(), c.reqHash, c.run, false);
+  const r = readReply(paths(), c.reqHash, c.run, false, c.case);
   const s = r?.stats as Record<string, number | undefined> | undefined;
   return r && s ? listUsd(r.request.model, { inTokens: s.inTokens ?? 0, cacheRead: s.cacheRead ?? 0, cacheWrite5m: s.write5m ?? 0, cacheWrite1h: s.write1h ?? 0, outTokens: s.outTokens ?? 0 }) : 0;
 }
@@ -153,7 +153,10 @@ export function rowOf(runId: string, f: RowFacts, calls: CallLog[]): Row {
   };
 }
 
-export const appendRow = (runId: string, row: Row) => appendLine(runFile(runId, "rows.jsonl"), row);
+/** A real send's void or loss reason, as rows keep it: its code (V7, V9, …), since a page's or a call's error can quote the person. */
+const codeOnly = (why: string) => /^V\d+/.exec(why)?.[0] ?? "failed";
+export const appendRow = (runId: string, row: Row) =>
+  appendLine(runFile(runId, "rows.jsonl"), !isRealCase(row.case) ? row : { ...row, ...(row.void ? { void: codeOnly(row.void) } : {}), ...(row.lost ? { lost: { arm: row.lost.arm, why: codeOnly(row.lost.why) } } : {}) });
 
 /** rows.jsonl, one row per case in the order cases were first written (a resumed case's later row wins). */
 export function readRows(runId: string): Row[] {

@@ -33,8 +33,6 @@ export type Decision = Omit<Verdict, "verdict"> & {
   next?: number;
   /** A keep that stands only once these stages ran and vetoed nothing. */
   pending?: ("heldout" | "continuation")[];
-  /** Too rare to measure: reverted, and the card goes to the owner list too. */
-  ownerList?: boolean;
   codes: Code[];
   /** Raw counts at the look it stopped at, never a share (an early-stopped share is biased). */
   counts: { wins: number; losses: number; ties: number; n: number; look: number };
@@ -225,7 +223,7 @@ export function decide(input: DecideInput, card: HypothesisCard): Decision {
   const trust = untrusted(all, [...live, ...(input.heldout ?? []), ...(input.continuation ?? [])].filter((r) => !r.void), input);
   if (trust.length) return (reasons.push(...trust), out("void"));
   if (cls === "N") return (reasons.push("no effect: nothing differs between the arms"), out("revert"));
-  if (exhausted && live.length < LOOP.rareMin) return (reasons.push(`too rare to measure: ${live.length} affected cases`), out("revert", { ownerList: true }));
+  if (exhausted && live.length < LOOP.rareMin) return (reasons.push(`too rare to measure: ${live.length} affected cases`), out("revert"));
   if (core.keep === undefined && core.next) return out("more", { next: core.next });
   if (!core.keep) {
     reasons.push(core.why || (core.n ? `Rule F at look ${core.n}` : `out of cases at ${live.length}`));

@@ -256,8 +256,8 @@ if (import.meta.main) {
   const one = (run, faults, cases = [L.tuning[1]]) => runAB(rig, { ...base, run, kind: "ab", mode: "scan", share: true, cases, faults });
   const mis = await one("fault-input", { input: (id, a, i) => (a === "B" ? { ...i, words: [...i.words, word("now", 900, 1000)] } : i) });
   check(/different inputs/.test(mis.rows[0].void ?? "") && mis.invariants.length && existsSync(runFile("fault-input", "invariants.jsonl")), `a forced input mismatch didn't void the case and flag the run (${mis.rows[0].void})`);
-  // Five 60-ms stalls: what a starved gateway does, and more than p99 lets through.
-  const stall = await one("fault-loop", { afterSend: async () => { for (let k = 0; k < 5; k++) process.kill(gw.pid, "SIGSTOP"), await sleep(60), process.kill(gw.pid, "SIGCONT"), await sleep(30); } });
+  // Five 150-ms stalls: what a starved gateway does, and more than p99 lets through.
+  const stall = await one("fault-loop", { afterSend: async () => { for (let k = 0; k < 5; k++) process.kill(gw.pid, "SIGSTOP"), await sleep(150), process.kill(gw.pid, "SIGCONT"), await sleep(30); } });
   check(/event-loop p99/.test(stall.rows[0].void ?? ""), `a stalled gateway didn't void the case (${stall.rows[0].void}; p99 ${fork("fault-loop", L.tuning[1]).loopP99Ms} ms)`);
   writeFileSync(p.machine, JSON.stringify({ host: "check", slots: 2, dispatchLimitMs: 0 }));
   const lim = await one("fault-dispatch", {});

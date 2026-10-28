@@ -198,6 +198,17 @@ no-change, owner, …); the search reads them, and reads the words only for rows
 **G0 is frozen as it stands.** A new gate, veto or hold needs evidence that it would have changed a decision in history,
 and replaces a rule rather than adding one.
 
+## Changed on 2026-10-28: real sends in the bank, and what stopped decisions short
+
+The owner approved four changes. Each is a number or a step that changed recorded decisions:
+
+| What | Evidence | Now |
+|---|---|---|
+| The bank was the driver's alone | All 648 banked cases were made up by the driver model (the 444 "fresh" ones are top-ups); 213 real sends had reached only R1, which decides nothing | Every triaged send that replays, landed or not, is a bank case (set `real`, `rte real bank`), measured like a tuning case and never digested; R-hold's people stay out, so R1's held-out check stays honest. Its files and calls stay under `real/` (evals/real/README.md). A class D keep whose affected cases are all real sends goes to the owner: the driver can't continue one |
+| "Too rare to measure" on the owner list | 49 of the 110 owner-list lines ever written; none needed the owner | Reverted, not listed |
+| Cards proposed for narrow situations | 19 of 146 decisions from epoch 80 to 111 reverted unmeasured, too rare | The analyst and critic are told the 32-case bar, and the digest's section 2 gives every ask type's, beat's and start's case count |
+| V9's gateway event-loop limit at 20 ms | 208 trips in two days, all from the PGX's own 21–95 ms lags, which hit both arms alike; e111-h4b voided on 12 of its cases | 100 ms |
+
 ## The checks
 
 All of `evals/checks/` at 0 real calls. Changed for v2: t2, t10 and t14 (Jev stubs and roles), t3 (later knobs and
@@ -218,7 +229,10 @@ board alone count as unmeasured), t18 (effects moved, not added; ordinary code; 
 the 2026-10-26 cleanup: t13 (one family-wise veto, its rates pinned again; decisions' codes), t20 (checkpoints against
 A0 alone, eras without bridges), t5 and t21 (no night cap, W or void rerun), t15 (every case warmed; a moved median is a
 schedule change whatever the session count), t18 (sweeps and near wins read codes), t23 (the real-use pipeline end to
-end on invented sessions), and t0's `SPEC_CONFIG_ID`. `npm run checks` runs the fast ones, `-- --slow` all.
+end on invented sessions), and t0's `SPEC_CONFIG_ID`. For 2026-10-28: t13 (too rare isn't listed), t15 (a stall past
+100 ms), t18 (the 32-case bar and coverage), t23 (real sends in the bank: which sends, their expectations, the lock,
+their folders, calls and rows under `real/`, the digest's count only), and t0's `SPEC_CONFIG_ID`. `npm run checks`
+runs the fast ones, `-- --slow` all.
 
 ## Re-validation (before any run)
 

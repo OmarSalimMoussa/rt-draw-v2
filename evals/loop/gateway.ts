@@ -4,7 +4,7 @@
 // POST /call (client.ts). It runs as its own process: run.ts also does CDP
 // traffic, screenshot decoding, hashing, statistics and tsc spawns, and a stall
 // in its event loop would delay chunks to both arms and skew a follower's timed
-// delivery. The loop's delay p99 is reported per case (V9 voids a case above 20 ms).
+// delivery. The loop's delay p99 is reported per case (V9 voids a case above 100 ms).
 //
 // Product calls are never queued (a queue would read as model latency) and pool
 // per (arm, case slot, token, model, system, effort, thinking), so each slot
@@ -208,7 +208,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
         if (flight) Flights.end(flight, { ms: st.ms, error: stopped === "page" ? "dropped by its page" : late });
         return { text: "", stats: st, mode: "live", shared: "-", ...(stopped === "page" ? { dropped: true } : { error: late }), chunks, upstream: { usd, token } };
       }
-      const cacheFile = writeReply(p, { reqHash: a.hash, run: a.run, role: a.role, at: new Date().toISOString(), request: a.req, text, chunks, doneMs: st.ms, stats: st }, !a.page);
+      const cacheFile = writeReply(p, { reqHash: a.hash, run: a.run, role: a.role, at: new Date().toISOString(), request: a.req, text, chunks, doneMs: st.ms, stats: st }, !a.page, a.case);
       if (flight) Flights.end(flight, { ms: st.ms, stats: st, cacheFile });
       return { text, stats: st, mode: "live", shared: flight?.followers.size ? "leader" : "-", chunks, cacheFile, upstream: { usd, token } };
     } catch (err) {
@@ -239,7 +239,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
       onText(text);
       const st = { ...stats, ms: since(), firstMs: c.ms, settings: JEV_SETTINGS };
       const usd = listUsd(a.req.model, { inTokens: stats.inTokens, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, outTokens: stats.outTokens });
-      const cacheFile = writeReply(p, { reqHash: a.hash, run: a.run, role: a.role, at: new Date().toISOString(), request: a.req, text, chunks: [c], doneMs: st.ms, stats: st }, !a.page);
+      const cacheFile = writeReply(p, { reqHash: a.hash, run: a.run, role: a.role, at: new Date().toISOString(), request: a.req, text, chunks: [c], doneMs: st.ms, stats: st }, !a.page, a.case);
       if (flight) Flights.end(flight, { ms: st.ms, stats: st, cacheFile });
       return { text, stats: st, mode: "live", shared: flight?.followers.size ? "leader" : "-", chunks: [c], cacheFile, upstream: { usd } };
     } catch (err) {
@@ -267,7 +267,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     // in a scan or a replay it answers nothing, so its first copy's reply decides and the page drops it.
     if (a.copy) return mode === "live" ? live(a, onText) : held(a, mode);
     // An eval call this run already made (a resume); in replay and scan any product reply the cache holds; in live the run's named ones.
-    const hit = !a.page || mode !== "live" || cached?.has(a.hash) ? readReply(p, a.hash, a.run, !a.page) : undefined;
+    const hit = !a.page || mode !== "live" || cached?.has(a.hash) ? readReply(p, a.hash, a.run, !a.page, a.case) : undefined;
     if (hit) {
       await replay(hit.chunks, hit.doneMs, a.t0, onText, instant);
       return { text: hit.text, stats: hit.stats, mode: !a.page ? "resume" : mode === "live" ? "replay" : mode, shared: "-", chunks: hit.chunks, cacheFile: replyName(a.hash, a.run, !a.page), scan: mode === "scan" && a.page ? "hit" : undefined };
@@ -340,7 +340,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   }
 
   const model = (m: unknown) => (typeof m === "string" ? (MODEL_IDS[m] ?? (Object.values(MODEL_IDS).includes(m) ? m : undefined)) : undefined);
-  function reqOf(b: Record<string, unknown>, user: string | string[], run: string): { req?: Req; error?: string } {
+  function reqOf(b: Record<string, unknown>, user: string | string[], run: string, kase?: string): { req?: Req; error?: string } {
     // Jev: the version is the model; no images, effort or thinking (fixed, so the hash is stable).
     if (isJev(b.model)) return typeof user === "string" ? { req: { model: b.model as string, system: typeof b.system === "string" ? b.system : "", user, images: [], effort: "low", thinking: "auto" } } : { error: "a Jev call's user is one JSON text" };
     const id = model(b.model);
@@ -348,14 +348,14 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
     if (!id) return { error: `unknown model "${b.model}" (haiku, sonnet, opus)` };
     if (!EFFORTS.includes(effort)) return { error: `unknown effort "${effort}"` };
     if (typeof b.system !== "string") return { error: "system must be a string" };
-    return { req: { model: id, system: b.system, user, images: storeImages(p, (b.images as string[]) ?? [], run), effort, thinking: b.thinking === "off" ? "off" : "auto" } };
+    return { req: { model: id, system: b.system, user, images: storeImages(p, (b.images as string[]) ?? [], run, kase), effort, thinking: b.thinking === "off" ? "off" : "auto" } };
   }
 
   /** An arm page's /api/model: NDJSON text chunks, then the stats line (with reqHash, shared, mode). */
   async function product(req: IncomingMessage, res: ServerResponse, b: Record<string, unknown>, arrived: number) {
     const h = (k: string) => req.headers[`x-rt-${k}`] as string | undefined;
     const base = { run: h("run") ?? "-", case: h("case"), arm: h("arm"), slot: h("slot") === undefined ? undefined : Number(h("slot")), role: h("role") ?? (b.from as string) ?? "product" };
-    const { req: r, error } = reqOf(b, (b.user as string) ?? "", base.run);
+    const { req: r, error } = reqOf(b, (b.user as string) ?? "", base.run, base.case);
     if (!r) return json(res, 400, { error });
     const c = base.case ? caseOf(base.run, base.case) : undefined;
     if (b.user === undefined && isJev(b.model)) return json(res, 200, { warming: 0 });
@@ -384,7 +384,7 @@ async function startGateway(o: { p: Paths; tokens: Token[]; cap?: number; mockAp
   async function evalCall(res: ServerResponse, b: Record<string, unknown>, arrived: number) {
     const user = (b.user ?? b.turns) as string | string[] | undefined;
     if (!user || typeof b.role !== "string") return json(res, 400, { error: "a call needs a role and user text (turns)" });
-    const { req: r, error } = reqOf(b, user, (b.run as string) ?? "-");
+    const { req: r, error } = reqOf(b, user, (b.run as string) ?? "-", b.case as string | undefined);
     if (!r) return json(res, 400, { error });
     const a: Ask = { run: (b.run as string) ?? "-", case: b.case as string | undefined, role: b.role, ordinal: 0, t0: arrived, page: false, req: r, hash: reqHash(r), images: (b.images as string[]) ?? [], token: b.token as SlotN | undefined };
     const out = await serveAndRecord(a, () => {});

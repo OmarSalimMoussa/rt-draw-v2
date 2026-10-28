@@ -29,7 +29,7 @@ import { ask, gatewayStatus, spawnGateway } from "./client.ts";
 import { LOOP } from "./config.ts";
 import { inFactorySlice, managedSettingsHash, onAC, quiet, sampleLoad } from "./load.ts";
 import { type MeterCall, readMeter } from "./meter.ts";
-import { type Paths, ownerCheckout, paths } from "./paths.ts";
+import { type Paths, isRealCase, ownerCheckout, paths } from "./paths.ts";
 import { ARM_PORT, serveArm } from "./servers.ts";
 import { DRAW_DELAY_MS, type Stubs, fakeApiReplies, serveStubs, stubPictures, stubReply } from "./stubs.ts";
 import { type SlotN, Slots } from "./tokens.ts";
@@ -502,7 +502,7 @@ function tokens(p: Paths) {
 }
 
 /** Banked cases: the ones with their done marker (it's written last). */
-const bankCases = (p: Paths) => (existsSync(p.bankCases) ? readdirSync(p.bankCases).filter((id) => existsSync(join(p.bankCase(id), "done"))) : []);
+const bankCases = (p: Paths) => [p.bankCases, p.realBank].flatMap((d) => (existsSync(d) ? readdirSync(d) : [])).filter((id) => existsSync(join(p.bankCase(id), "done")));
 
 function bankResolves(p: Paths) {
   const cases = bankCases(p);
@@ -517,13 +517,13 @@ function bankResolves(p: Paths) {
     }
     for (const r of JSON.parse(readFileSync(file, "utf8")) as RecordedReply[]) {
       replies++;
-      const reply = r.cacheFile ? p.reply(basename(r.cacheFile, ".json")) : "";
+      const reply = r.cacheFile ? p.reply(basename(r.cacheFile, ".json"), isRealCase(id)) : "";
       if (!reply || !existsSync(reply)) {
         why.push(`${id}: reply ${r.cacheFile || "(none)"} isn't in cache/replies`);
         continue;
       }
       for (const img of (JSON.parse(readFileSync(reply, "utf8")) as Reply).request.images ?? [])
-        if (!existsSync(p.blob(img))) why.push(`${id}: image ${img.slice(0, 12)} isn't in cache/blobs`);
+        if (!existsSync(p.blob(img, isRealCase(id)))) why.push(`${id}: image ${img.slice(0, 12)} isn't in cache/blobs`);
     }
   }
   return verdict(why.length > 5 ? [...why.slice(0, 5), `${why.length - 5} more`] : why, `${cases.length} cases, ${replies} replies and their images resolve here`);

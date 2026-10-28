@@ -4,13 +4,13 @@
 // by different content, or a voided case, is renamed *.void first. Images are stored once by
 // sha256 in cache/blobs/ and hard-linked where a case names them.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { View } from "../../src/core/board.ts";
 import { needsPicture, readPicture } from "../../src/core/picture.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
 import { nameOf, sceneDiff } from "../core/diff.ts";
-import { paths } from "./paths.ts";
+import { isRealCase, isRealRun, paths } from "./paths.ts";
 import type {
   Arm, ArmResult, ArmTiming, CaseInfo, CaseInput, ChampionOutcome, DriverRecord, Expectation, Meant, Miss, Rating,
   Readings, RecordedReply, RunInfo, SceneJSON, SpanJSON,
@@ -150,7 +150,13 @@ function replyText(r: RecordedReply): string | undefined {
 // ---- Runs: runs/<run-id>/ (§3.3)
 
 export const runFile = (runId: string, ...p: string[]) => join(paths().run(runId), ...p);
-export const caseDir = (runId: string, caseId: string) => runFile(runId, "cases", caseId);
+/** A run's case folder; a real send's is under real/ whatever the run (paths.ts underReal), with the rest of testers' data. */
+export const caseDir = (runId: string, caseId: string) => (isRealCase(caseId) && !isRealRun(runId) ? join(paths().real, "runs", runId, "cases", caseId) : runFile(runId, "cases", caseId));
+/** Every case folder a run wrote, real sends' included (caseDir). */
+export function runCaseIds(runId: string): string[] {
+  const at = [runFile(runId, "cases"), ...(isRealRun(runId) ? [] : [join(paths().real, "runs", runId, "cases")])];
+  return at.flatMap((d) => (existsSync(d) ? readdirSync(d) : []));
+}
 
 export function writeRun(info: RunInfo) {
   put(runFile(info.id, "run.json"), info);

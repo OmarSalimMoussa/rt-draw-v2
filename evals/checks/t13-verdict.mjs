@@ -230,7 +230,7 @@ for (const [name, d] of Object.entries(nearMisses)) check(says(d, d.verdict === 
 }
 check(says(run(rows(32, { class: "N" })), "revert", /no effect/), "class N isn't reverted as no effect");
 const rare = decide({ tuning: rows(20), exhausted: true }, card());
-check(says(rare, "revert", /too rare/) && rare.ownerList, `20 affected cases after the top-ups isn't 'too rare': ${rare.verdict} ${rare.reasons}`);
+check(says(rare, "revert", /too rare/), `20 affected cases after the top-ups isn't 'too rare': ${rare.verdict} ${rare.reasons}`);
 const more = decide({ tuning: rows(20) }, card());
 check(more.verdict === "more" && more.next === 32, `20 cases with more to come doesn't ask for look 32: ${more.verdict} ${more.next}`);
 const d1 = run(rows(32, { class: "D" }), card({ dialogue: true }), { heldout: rows(16) });

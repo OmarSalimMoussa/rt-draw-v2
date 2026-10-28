@@ -24,7 +24,7 @@ import { eachSlot } from "./drive.ts";
 import type { RunMode } from "./gateway.ts";
 import { type Machine, beforeWave, sampleLoad } from "./load.ts";
 import { appendRow, caseMetrics, isProduct, readRows, rowOf } from "./metrics.ts";
-import { paths } from "./paths.ts";
+import { isRealCase, paths } from "./paths.ts";
 import { appendLine, caseDir, isDone, put, putImage, runCaseDone, runFile, writeArm, writeRun } from "./record.ts";
 import { ARM_PORT, type ArmServer, serveArm } from "./servers.ts";
 import { entryOrder, seedOf } from "./stats.ts";
@@ -592,8 +592,11 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
       }
       if (dec.pending?.includes("continuation")) {
         if (!d.continueFrom) throw new Error("class D needs continuation forks: pass continueFrom");
-        // An origin case per slot at a time (one slot alone added ~18 min to a D decision), rows in case order.
-        const from = rows.filter((x) => x.affected && !x.void).slice(0, LOOP.cont.cases);
+        // An origin case per slot at a time (one slot alone added ~18 min to a D decision), rows in case order. Never a
+        // real send: the driver can't take a person's next turn.
+        const from = rows.filter((x) => x.affected && !x.void && !isRealCase(x.case)).slice(0, LOOP.cont.cases);
+        // Every affected case a real send: no G4 can run, so the keep is the owner's, never one G4 didn't check.
+        if (!from.length) return done({ ...dec, verdict: "owner", pending: undefined, vetoes: [...dec.vetoes, "G4: every affected case is a real send, which the driver can't continue"], codes: [...dec.codes, "owner"] });
         const out: Row[][] = [];
         let at = 0;
         await eachSlot(rig.slots, (slot) => {

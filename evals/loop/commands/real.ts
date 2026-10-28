@@ -1,12 +1,16 @@
 // rte real: testers' sends → triage → gold → bench R1 (evals/real/README.md), each paying step under its cap.
 import { commitHistory, openHistory } from "../history.ts";
-import type { Shot } from "../human.ts";
-import { stampNow } from "../state.ts";
+import type { Page } from "../chrome.ts";
+import { type Shot, pageShot } from "../human.ts";
+import { lock, stampNow } from "../state.ts";
 import * as real from "../../real/real.ts";
 import { type Rte, championArm, msg } from "../rte.ts";
+import { recordOnChampion } from "./setup.ts";
 
 /** Local (the owner's dev server) sessions before this aren't triaged: the hosted app's testers started then. */
 const REAL_SINCE = "2026-10-22";
+/** The product's calls a send makes, at most (the drawing call, the resolver, Jev's answers, pictures): real bank's cap. */
+const SEND_CALLS = 12;
 /** Opus calls in flight at once in triage and gold (the gateway runs eval roles 6 at a time). */
 const REAL_PARALLEL = 4;
 async function pool<T>(items: T[], n: number, f: (x: T) => Promise<void>) {
@@ -19,9 +23,9 @@ async function pool<T>(items: T[], n: number, f: (x: T) => Promise<void>) {
 export async function realCmd(rte: Rte) {
   const step = rte.o.pos[1];
   const since = rte.str("since") ?? REAL_SINCE, only = rte.str("only");
-  const shots = (f: (shot: Shot) => Promise<void>) => {
+  const shots = (f: (shot: Shot) => Promise<void>, as: (page: Page) => Shot = real.realShot) => {
     const champ = championArm();
-    return rte.withGateway((gw) => rte.withRig(gw, [champ.tree], async (rig) => f(real.realShot((await rig.tab(0, "A", champ.tree)).page)), 1), true);
+    return rte.withGateway((gw) => rte.withRig(gw, [champ.tree], async (rig) => f(as((await rig.tab(0, "A", champ.tree)).page)), 1), true);
   };
   if (step === "update") {
     // Every step but the owner's review, in order; triage and gold capped at 1.5× their calls (a call per session to
@@ -31,6 +35,8 @@ export async function realCmd(rte: Rte) {
     const steps: [string, (() => number)?][] = [
       ["ingest"], ["render"], ["triage", () => real.chosen(since, only).filter(({ dir, s }) => !real.triaged(dir, s)).length],
       ["gold", () => real.wantGold(since, only, false).length], ["freeze"],
+      // Writing the cases is free and the same each time; recording them on the champion pays the product's calls.
+      ["bank", () => SEND_CALLS * real.writeRealBank(since).todo.length],
     ];
     for (const [next, calls] of steps) {
       const n = calls?.();
@@ -44,6 +50,27 @@ export async function realCmd(rte: Rte) {
     return 0;
   }
   if (step === "ingest") for (const line of real.ingestStep(rte.str("raw"))) rte.say(`real ingest: ${line}`);
+  else if (step === "bank") {
+    // The loop's lock for the whole step: a loop started meanwhile would see cases turn done mid-epoch. Counts and ids
+    // only in the log: what people said stays under real/.
+    const held = lock();
+    try {
+      const w = real.writeRealBank(since, { held: true });
+      rte.say(`real bank: ${w.cases} real sends in the bank (${w.merged} repeats merged; left out: ${w.inkWaiting} waiting for synthesized ink, ${w.pending} on a board still waiting for a picture, ${w.held} by R-hold's people), ${w.todo.length} to record on the champion`);
+      if (!w.todo.length) return 0;
+      rte.needCap("real bank");
+      await shots(async (shot) => {
+        for (const id of w.todo) await real.shootRealCase(id, shot);
+      }, pageShot);
+      // One run per champion: a run cut short resumes where it stopped, the cases it finished already done.
+      const champ = championArm(), run = `real-bank-${champ.sha.slice(0, 12)}`;
+      const done = await recordOnChampion(rte, w.todo, run, (id) => real.realCaseDone(id, champ.sha));
+      rte.say(`real bank: ${done.length} of ${w.todo.length} recorded on ${champ.sha.slice(0, 12)} (${run})${done.length < w.todo.length ? "; the rest wait for the next run" : ""}`);
+      return done.length === w.todo.length ? 0 : 1;
+    } finally {
+      held.release();
+    }
+  }
   else if (step === "render") {
     await shots(async (shot) => {
       let n = 0;

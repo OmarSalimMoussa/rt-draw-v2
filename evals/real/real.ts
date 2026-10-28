@@ -4,18 +4,20 @@
 // the approved cases become the frozen bench R1 (freeze). Testers' words and drawings stay in
 // $RT_EVAL_HOME/real/ on this machine: the repo and its eval/history branch are public, so history gets
 // only R1's hash and counts, never a case.
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import { SCREEN, type View } from "../../src/core/board.ts";
+import { needsPicture } from "../../src/core/picture.ts";
 import { changeFrame } from "../core/diff.ts";
 import { type Page, capture } from "../loop/chrome.ts";
 import type { Shot } from "../loop/human.ts";
 import { ask } from "../loop/client.ts";
+import { RUBRIC } from "../judge/judge.ts";
 import { historyWrite } from "../loop/history.ts";
 import { paths } from "../loop/paths.ts";
-import type { CaseInput, Meant, SceneJSON } from "../loop/types.ts";
+import type { CaseInput, Expectation, Meant, SceneJSON } from "../loop/types.ts";
 import { type Check, runChecks } from "./checks.ts";
 import { type Gold, applyGold, boardOps, ownChecks, readGold } from "./gold.ts";
 import { GOLD_SYSTEM, TRIAGE_SYSTEM, goldUser, triageTurns } from "./prompts.ts";
@@ -504,4 +506,99 @@ export function freezeReal(): { cases: number; tune: number; hold: number; inkWa
   const r = { cases: Object.keys(ids).length, tune, hold: Object.keys(ids).length - tune, inkWaiting, merged, moved, people, hash: m.hash };
   historyWrite("bench/R1.json", { ...r, at: new Date().toISOString(), splits: ids });
   return r;
+}
+
+// ---- real sends in the bank
+
+/**
+ * A real case's id: keyed by a secret that never leaves real/ (bank.key, mode 600), since ids reach public history and
+ * a plain hash of a send's words on a blank board would let anyone check a guess of what a tester typed.
+ */
+function realId(input: string): string {
+  const f = join(realHome(), "bank.key");
+  if (!existsSync(f)) {
+    mkdirSync(realHome(), { recursive: true });
+    writeFileSync(f, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
+  }
+  return `c-r-${createHmac("sha256", readFileSync(f, "utf8").trim()).update(input).digest("hex").slice(0, 12)}`;
+}
+/** People in R1's R-hold: their sends stay out of the bank, so R-hold stays people the loop never tuned on. */
+const holdPeople = () => {
+  const root = benchDir();
+  const ids = existsSync(root) ? readdirSync(root).filter((d) => existsSync(join(root, d, "case.json"))) : [];
+  return new Set(ids.map((d) => json<{ split: string; originSession: string }>(join(root, d, "case.json"))).filter((c) => c.split === "hold").map((c) => c.originSession));
+};
+
+/**
+ * People's own sends as bank cases (set "real", LOOP-V2.md, 2026-10-28): every triaged send that replays, landed or not,
+ * one case per distinct input. Decisions measure them as they do tuning cases; the digests never read them, so what
+ * people said reaches no agent, and history and the run log get ids and counts only. Left out: a send whose ink is lost
+ * (it waits for synthesized ink), one whose board still waits for a picture (both arms would draw it: V12's stray
+ * pictures), R-hold's people (holdPeople), and a case a sync voided (V8). A case is real/bank/<realId>/ (paths.ts
+ * bankCase; its run files and calls stay under real/ too, underReal): its input, before board, triage's meant, and gold's
+ * rubric as its expectation when the send has accepted gold drawn for it (else the expectation judge makes one when it's
+ * first judged). rte real bank shoots its before image and records it on the champion, which makes it done. Returns the
+ * cases waiting for that. `held`: the caller holds the loop's lock.
+ */
+export function writeRealBank(since: string, o: { held?: boolean } = {}): { cases: number; todo: string[]; merged: number; inkWaiting: number; pending: number; held: number } {
+  if (!o.held && existsSync(paths().lock)) throw new Error(`${paths().lock} is held: a loop is running (or stopped mid-way: loop --resume first); the bank can't change under it`);
+  const gold = new Map(goldCases().filter(accepted).map((g) => [g.key, g]));
+  const hold = holdPeople();
+  const voided = new Set((existsSync(paths().realBank) ? readdirSync(paths().realBank) : []).filter((d) => d.includes(".void")).map((d) => d.replace(/\.void.*$/, "")));
+  const seen = new Set<string>();
+  const todo: string[] = [];
+  let inkWaiting = 0, merged = 0, pending = 0, held = 0;
+  for (const { dir, s } of chosen(since)) {
+    if (!triaged(dir, s)) continue;
+    if (hold.has(whoOf(s))) {
+      held += s.sends.length;
+      continue;
+    }
+    const rows = triageOf(dir)!.sends;
+    for (const [i, x] of s.sends.entries()) {
+      if (x.replay === "ink") {
+        inkWaiting++;
+        continue;
+      }
+      const before = beforeOf(dir, x);
+      if (before.shapes.some(needsPicture)) {
+        pending++;
+        continue;
+      }
+      const k = inputKey(x, before);
+      if (seen.has(k)) {
+        merged++;
+        continue;
+      }
+      const id = realId(k), d = paths().bankCase(id), e = join(d, "expectation.json");
+      if (voided.has(id)) continue;
+      seen.add(k);
+      // Gold's rubric only while its gold is accepted and was drawn for this very send; a rejected one's goes.
+      const g = gold.get(x.key);
+      if (g?.gold && (!g.sendHash || g.sendHash === sendHash(x))) put(e, { judgeId: RUBRIC, should: g.gold.rubric.should, mustNot: g.gold.rubric.mustNot } satisfies Expectation);
+      else if (maybe<Expectation>(e)?.judgeId === RUBRIC) rmSync(e);
+      if (existsSync(join(d, "done"))) continue;
+      const camera = cameraOf(x, before);
+      // A cluster per session, as the driver's are: one person's many sessions don't enter a decision as one block.
+      put(join(d, "case.json"), { id, set: "real", scenario: "real", persona: "real", start: "real", ask: "real", seed: 0, originSession: `r-${sha(s.id).slice(0, 8)}`, send: i + 1, recordedAt: x.at, replay: x.replay, source: s.source, hedged: false, beatDone: false, flags: [] });
+      put(join(d, "input.json"), { camera, words: x.words, strokes: x.strokes, enterAtMs: x.enterAtMs, inputHash: sha(js([camera, x.words, x.strokes])) } satisfies CaseInput);
+      put(join(d, "before.scene.json"), before);
+      put(join(d, "meant.json"), { meant: rows.find((r) => r.n === i + 1)?.meant ?? "", hedged: false } satisfies Meant);
+      todo.push(id);
+    }
+  }
+  return { cases: seen.size, todo, merged, inkWaiting, pending, held };
+}
+
+/** A real case's before image, as the driver's are shot: its board at its camera with the ink numbered, at judge size. */
+export async function shootRealCase(id: string, shot: Shot) {
+  const d = paths().bankCase(id), input = json<CaseInput>(join(d, "input.json"));
+  writeFileSync(join(d, "before-ink.jpg"), await shot(json<SceneJSON>(join(d, "before.scene.json")), input.camera, input.strokes));
+}
+
+/** A real case recorded on `sha` (its replies.json written): done, so decisions take it. */
+export function realCaseDone(id: string, sha: string) {
+  const f = join(paths().bankCase(id), "case.json");
+  put(f, { ...json<Record<string, unknown>>(f), championSha: sha });
+  writeFileSync(join(paths().bankCase(id), "done"), `${new Date().toISOString()}\n`);
 }

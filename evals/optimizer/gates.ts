@@ -255,10 +255,10 @@ export function typecheck(tree: string): Finding[] {
   return [{ verdict: "reject", why: `typecheck: ${(errors.length ? errors : [`${r.stdout}${r.stderr}`.trim() || `tsc exited ${r.status}`]).slice(0, 3).join(" | ")}` }];
 }
 
-/** Every banked case's before-scene. */
+/** Every banked case's before-scene, voided ones left out. */
 export function bankedScenes(): string[] {
-  const dir = paths().bankCases;
-  return existsSync(dir) ? readdirSync(dir).map((id) => join(dir, id, "before.scene.json")).filter((f) => existsSync(join(f, "..", "done")) && existsSync(f)) : [];
+  const p = paths();
+  return [p.bankCases, p.realBank].flatMap((dir) => (existsSync(dir) ? readdirSync(dir).filter((id) => !id.includes(".void")).map((id) => join(dir, id, "before.scene.json")) : [])).filter((f) => existsSync(join(f, "..", "done")) && existsSync(f));
 }
 
 // Runs in the candidate's tree, in its own process: the candidate's code never runs inside the harness.
@@ -314,8 +314,13 @@ export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?
   if (!found.length && o.tree) {
     found.push(...typecheck(o.tree));
     if (!found.length && files.some((f) => touched(f).includes("src/core/scene.ts"))) {
-      scenes = sceneRoundTrip(o.tree, o.scenes ?? bankedScenes());
-      if (scenes.failed.length) found.push({ verdict: "owner", why: `scene format: ${scenes.failed.length} banked before-scenes don't load through the candidate's Scene.fromJSON (${scenes.failed[0]})` });
+      // Real sends' boards in a process of their own, counted only: the candidate's code and messages never get near a
+      // driver case's report with what a person drew.
+      const all = o.scenes ?? bankedScenes(), real = all.filter((f) => f.startsWith(`${paths().realBank}/`));
+      const mine = sceneRoundTrip(o.tree, all.filter((f) => !real.includes(f)));
+      const theirs = real.length ? sceneRoundTrip(o.tree, real) : { loaded: 0, failed: [] };
+      scenes = { loaded: mine.loaded + theirs.loaded, failed: [...mine.failed, ...theirs.failed.map(() => "a real send's board")] };
+      if (scenes.failed.length) found.push({ verdict: "owner", why: `scene format: ${scenes.failed.length} banked before-scenes don't load through the candidate's Scene.fromJSON (${mine.failed[0] ?? `${theirs.failed.length} real sends' boards`})` });
     }
   }
   return { verdict: found.some((f) => f.verdict === "reject") ? "reject" : found.length ? "owner" : "pass", reasons: found.map((f) => f.why), ...(waived.length ? { waived: waived.map((f) => f.why) } : {}), ...(scenes ? { scenes } : {}) };

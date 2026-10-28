@@ -10,7 +10,8 @@ import type { Dropped, Turn } from "../core/driver.ts";
 
 // ---- Ids shared by scenarios, cases and cards (§2.1–2.2)
 
-export type SetId = "tuning" | "heldout-gate" | "heldout-chart" | "fresh";
+/** real: people's own sends on the hosted app, measured like tuning cases and never digested (evals/real/README.md). */
+export type SetId = "tuning" | "heldout-gate" | "heldout-chart" | "fresh" | "real";
 export type PersonaId = "first-timer" | "explorer" | "breaker";
 export type StyleId = "typical" | "pointer" | "talker" | "precise" | "rambler";
 /** Today's 8 targets plus notion and uber. */
@@ -203,7 +204,8 @@ export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: numb
   /** The reasons as data (absent before 2026-10-26: search.ts reads those rows' words). */ codes?: Code[];
   trust: "green" | "amber" | "void";
   looks: { n: number; decisive: number; z: number }[]; counts: { wins: number; losses: number; ties: number; exactTies: number };
-  affected: { tuning: number; of: number; topUp: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
+  /** tuning counts every measured case, the real sends among them as real (absent before 2026-10-28). */
+  affected: { tuning: number; of: number; topUp: number; real?: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
   overuse?: { detector: string; a: number; b: number }; checkpoint?: string /* owner steps */;
   /** ttfd and render decide (absent before LOOP-V2); ttfc and ttd are reported. tails: "ttfd p90" … "render p95". */
   latency: { ttfc: Ratio; ttd: Ratio; ttfd?: Ratio; render?: Ratio; byThinking?: Record<string, Ratio>; tails?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;

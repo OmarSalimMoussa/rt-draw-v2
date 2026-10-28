@@ -169,8 +169,9 @@ export const tuningIdOf = async (page: Page) => (await page.eval<{ tuningId: str
 
 /** Done, unvoided banked cases of these sets, by id. */
 export function banked(sets: string[]): string[] {
-  const dir = paths().bankCases;
-  return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done")) && sets.includes(maybe<CaseInfo>(join(dir, id, "case.json"))!.set)).sort();
+  const p = paths();
+  return [p.bankCases, p.realBank].flatMap((d) => (existsSync(d) ? readdirSync(d) : []))
+    .filter((id) => !id.includes(".void") && existsSync(join(p.bankCase(id), "done")) && sets.includes(maybe<CaseInfo>(join(p.bankCase(id), "case.json"))!.set)).sort();
 }
 /** Cases in a seeded order that keeps each origin session together (as decisions enter them). */
 export const ordered = (ids: string[], seed: string) => entryOrder(ids, (id) => maybe<CaseInfo>(join(paths().bankCase(id), "case.json"))!.originSession, seedOf(seed));
@@ -178,7 +179,7 @@ export const ordered = (ids: string[], seed: string) => entryOrder(ids, (id) => 
  * What a decision's diffscan runs: every H-gate case, and every tuning case up to LOOP.bank.scanMax; past it a sample of
  * whole sessions seeded by the decision, a different one each time, so no case drops out for good.
  */
-export const scanCases = (seed: string) => [...ordered(banked(["tuning", "fresh"]), seed).slice(0, LOOP.bank.scanMax), ...banked(["heldout-gate"])].sort();
+export const scanCases = (seed: string) => [...ordered(banked(["tuning", "fresh", "real"]), seed).slice(0, LOOP.bank.scanMax), ...banked(["heldout-gate"])].sort();
 
 /** A bank that failed §2.3 is used by nothing after it (bench, checkpoints, calibration, decisions) until rebuilt or accepted. */
 export function needBank() {

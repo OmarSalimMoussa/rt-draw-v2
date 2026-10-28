@@ -5,6 +5,7 @@
 // after the seed cards the analyst would be guessing from noise.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { LOOP } from "../loop/config.ts";
 import { readRows } from "../loop/metrics.ts";
 import { paths } from "../loop/paths.ts";
 import { caseDir, put, runFile } from "../loop/record.ts";
@@ -134,6 +135,30 @@ export function championMisses(checkpoint?: CheckpointRef): { cases: CaseInfo[];
   return { cases, misses };
 }
 
+/** Every value of one dimension with its case count, most first: what a card targeting it can be measured on. */
+const counts = (cases: CaseInfo[], key: (c: CaseInfo) => string) => {
+  const by = new Map<string, number>();
+  for (const c of cases) by.set(key(c), (by.get(key(c)) ?? 0) + 1);
+  return [...by].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(", ");
+};
+/** Real sends in the bank: measured beside the tuning cases, never digested (what people said stays private). */
+const realCases = () => {
+  const dir = paths().realBank;
+  return existsSync(dir) ? readdirSync(dir).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done"))).length : 0;
+};
+/**
+ * The bar a card must clear before it's measured at all, and how many cases each target has: a card for a narrow
+ * situation reverts unmeasured (19 of 146 decisions from epoch 80 to 111), so the analyst and critic can drop it first.
+ */
+function coverage(cases: CaseInfo[]): string[] {
+  const ink = cases.filter((c) => (bank<CaseInput>(c.id, "input.json")?.strokes ?? []).length).length;
+  const real = realCases();
+  return [
+    `Coverage: a change is measured only on the cases where it changes a call's request or how a reply is read (a free scan finds them); on fewer than ${LOOP.rareMin} it is reverted unmeasured, as too rare. The ${cases.length} tuning cases by ask type: ${counts(cases, (c) => c.ask)}; by beat: ${counts(cases, (c) => c.beat ?? "-")}; by start: ${counts(cases, (c) => c.start)}; with ink: ${ink}; a session's second send or later: ${cases.filter((c) => c.send > 1).length}.`,
+    ...(real ? [`Also measured: ${real} real sends from people using the product, scored like the tuning cases but never shown here (what they said stays private).`] : []),
+  ];
+}
+
 /** Section 1: the champion's misses with counts per beat, ask type, start and component, then the cases worst first. */
 export function missSection(championSha: string, checkpoint?: CheckpointRef, chars = DIGEST.maxTokens * DIGEST.share.misses * DIGEST.charsPerToken): string {
   const { cases, misses } = championMisses(checkpoint);
@@ -146,6 +171,7 @@ export function missSection(championSha: string, checkpoint?: CheckpointRef, cha
     table("ask type", cases.map((c) => ({ key: c.ask, hit: hit.has(c.id) }))),
     table("start", cases.map((c) => ({ key: c.start, hit: hit.has(c.id) }))),
     table("component", misses.flatMap((m) => m.components.map((key) => ({ key, hit: true })))),
+    ...coverage(cases),
     "Cases, worst first:",
   ];
   const items = misses.map((m) => `- ${m.id} [${m.score}] ${tags(m.info)}: said ${q(saidOf(m.id))}; meant ${q(bank<Meant>(m.id, "meant.json")?.meant)}; ${m.why.join("; ")}`);
@@ -325,7 +351,7 @@ const live = (run: string) => existsSync(runFile(run, "cases")) && read<{ kind?:
 export function decisionLines(rows: DecisionRow[]): string[] {
   return rows.filter((d) => d.kind === "card").reverse().map((d) => {
     const lat = [d.latency?.ttfd && `first drawing ×${d.latency.ttfd.est.toFixed(3)}`, d.latency?.render && `render ×${d.latency.render.est.toFixed(3)}`].filter(Boolean).join(", ");
-    const n = d.affected ? `, ${d.affected.tuning} of ${d.affected.of} cases affected` : "";
+    const n = d.affected ? `, ${d.affected.tuning} of ${d.affected.of} cases affected${d.affected.real ? ` (${d.affected.real} real sends)` : ""}` : "";
     return `- ${d.id} ${d.card?.kind ?? "-"} ${d.card?.component ?? "-"} ${d.goal}: ${cut(d.card?.change, 120)} → ${d.verdict}: ${cut(d.reasons[0] ?? "-", 160)} (${d.counts.wins}-${d.counts.losses}-${d.counts.ties}${lat ? `, ${lat}` : ""}${n})`;
   });
 }
