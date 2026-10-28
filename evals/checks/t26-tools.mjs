@@ -19,7 +19,9 @@ execFileSync("git", ["init", "-q", "-b", "master", repo]);
 git("commit", "-q", "--allow-empty", "-m", "master");
 git("update-ref", "refs/remotes/origin/master", "HEAD");
 git("checkout", "-q", "-b", "loop/champion");
-git("commit", "-q", "--allow-empty", "-m", "a keep");
+// A keep is the loop's own commit, naming its decision; the owner's commits a sync merges in aren't keeps.
+git("commit", "-q", "--allow-empty", "--author=rt-eval loop <rt-eval@localhost>", "-m", "a keep\n\ne7-h1: a code card on draw (goal latency)");
+git("commit", "-q", "--allow-empty", "-m", "the owner's commit, merged in by a sync");
 git("checkout", "-q", "master");
 put(join(home, "init.json"), { from: "/nowhere", branch: "master" });
 put(join(home, "state.json"), { epoch: 7, stamp: "s", cards: [{ id: "e7-h1", status: "done" }, { id: "e7-h2", status: "todo" }], queue: [], keepsSinceCheckpoint: 0, keepsSinceRefresh: 0, refreshes: 0, recent: [], paused: [], lastRuns: [], run: { status: "paused", at: "2026-10-28T01:00:00Z", phase: "e7-h2 measuring", why: "every token is past 90% of its five-hour window" } });
@@ -56,10 +58,13 @@ const i = rte("intake_now");
 check(i.code === 0 && i.out?.started === false && typeof i.out.said === "string", `rte api intake_now with no intake unit here: ${i.raw.slice(0, 200)}`);
 check(rte("nothing").code !== 0, "rte api took a tool it doesn't have");
 // A ship (evals/ops/ship.sh's rte shipped): the champion's keeps count from what's on prod, and status says where it serves.
-const ship = (sha, url = "https://imagine.example.test") => spawnSync(join(ROOT, "bin", "rte"), ["shipped", "--sha", sha, "--tag", `v2-${sha.slice(0, 12)}`, "--url", url], { env, encoding: "utf8" });
+const ship = (sha, champion, url = "https://imagine.example.test") => spawnSync(join(ROOT, "bin", "rte"), ["shipped", "--sha", sha, "--tag", `v2-${sha.slice(0, 12)}`, "--url", url, ...(champion ? ["--champion", champion] : [])], { env, encoding: "utf8" });
 check(ship(git("rev-parse", "master")).status === 0 && js(rte("status").out?.champion) === js({ sha: git("rev-parse", "--short=12", "loop/champion"), unshipped: 1, since: "prod" }), `status after a ship of master: ${js(rte("status").out?.champion)}`);
-check(ship(git("rev-parse", "loop/champion")).status === 0 && rte("status").out?.champion?.unshipped === 0 && rte("status").out.prod?.url === "https://imagine.example.test", `status after a ship of the champion: ${js(rte("status").out)}`);
-check(ship(git("rev-parse", "master"), "http://imagine.example.test").status !== 0 && rte("status").out?.champion?.unshipped === 0, "rte shipped took an address that isn't https");
+// Prod carries the champion (a merge on master, here the same commit): its keep is on prod; the record replaces master's.
+const shipsNow = () => readFileSync(join(home, "history", "ships.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+check(ship(git("rev-parse", "master"), git("rev-parse", "loop/champion")).status === 0 && rte("status").out?.champion?.unshipped === 0 && shipsNow().length === 1 && shipsNow()[0].champion === git("rev-parse", "loop/champion") && rte("status").out.prod?.url === "https://imagine.example.test",
+  `status after a ship of the champion: ${js(rte("status").out)}, ships ${js(shipsNow())}`);
+check(ship(git("rev-parse", "master"), undefined, "http://imagine.example.test").status !== 0 && rte("status").out?.champion?.unshipped === 0, "rte shipped took an address that isn't https");
 
 // ---- The MCP server, through a fake ssh: the remote command runs here, with this check's home as the PGX's ~/rt-eval.
 const pgxHome = join(home, "pgx-home");

@@ -76,12 +76,12 @@ url=https://$(sed -n 's/^HOST=//p' scripts/deploy.sh)
 echo "== the record"
 # The PGX's checkout and the loop's clone see master as shipped (so the champion's keeps count from it), and history
 # gets the ship.
-ssh -o BatchMode=yes "$PGX" bash -s -- "$sha" "$tag" "$url" "$PGX_HOME" <<'EOF'
+ssh -o BatchMode=yes "$PGX" bash -s -- "$sha" "$tag" "$url" "$PGX_HOME" "$champ" <<'EOF'
 set -euo pipefail
 set -a; . "$HOME/$4/rt-units.env"; set +a
 from=$(sed -n 's/.*"from": *"\([^"]*\)".*/\1/p' "$RT_EVAL_HOME/init.json")
 git -C "$from" fetch -q origin master && git -C "$from" merge -q --ff-only FETCH_HEAD
 git -C "$RT_EVAL_HOME/repo" fetch -q origin master
-"$RT_EVAL_HOME/repo/bin/rte" shipped --sha "$1" --tag "$2" --url "$3"
+"$RT_EVAL_HOME/repo/bin/rte" shipped --sha "$1" --tag "$2" --url "$3" --champion "$5"
 EOF
 echo "ship: $tag is on prod"

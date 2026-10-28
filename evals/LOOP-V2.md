@@ -248,7 +248,7 @@ break it against the code. Every finding was fixed or is recorded here:
 | The PGX held the mailer secret that can mail anyone | A `NOTICE_SECRET` that sends notices to the owner only (`deploy/mailer.gs`) |
 | The critic got every decision twice, unbounded | Once, in the digest's sized section 5 |
 | Mail and stop reasons carried raw text | Codes, ids and harness sentences only |
-| Eval HQ froze on a stopped loop, never showed R1, landed links at the top, hid an intake error, and showed keeps against master with no prod health | It always polls, R1 has its panel, links scroll to their view, intake errors are said, and the overview shows keeps not on prod and prod's health (each ship records prod's address) |
+| Eval HQ froze on a stopped loop, never showed R1, landed links at the top, hid an intake error, and showed keeps against master with no prod health | It always polls, R1 has its panel, links scroll to their view, intake errors are said, and the overview shows the keeps not on prod and prod's health (each ship records the champion it carries and prod's address) |
 | The RUNBOOK held the reference beside the owner's decisions, and its rehearsal ran its steps at once on the PGX | The RUNBOOK is what the owner decides; setup, the rehearsal (each step in the foreground) and where things live are in `evals/ops/README.md` |
 | `verify_decision.py` checked Rule F's numbers from before the funnel audit | It has today's looks and lines, and the last look on all cases |
 

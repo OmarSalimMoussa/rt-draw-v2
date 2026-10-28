@@ -239,8 +239,11 @@ export type BudgetRow = { at: string; epoch: number; slot: 1 | 2 | 3; usdThisWin
   status: string; resetsAt?: number; usd7d: number };
 /** health.jsonl: A/A, canary, readiness and calibration outcomes. */
 export type HealthRow = { at: string; kind: "aa" | "canary" | "ready" | "calib"; pass: boolean; detail: Record<string, unknown> };
-/** ships.jsonl: what evals/ops/ship.sh put on prod (rte shipped), and where it serves (Eval HQ checks it's up). */
-export type ShipRow = { at: string; sha: string; tag: string; url?: string };
+/**
+ * ships.jsonl: what evals/ops/ship.sh put on prod (rte shipped): master's commit and its image, the loop/champion
+ * commit it carries (keeps after it aren't on prod), and where prod serves (Eval HQ checks it's up).
+ */
+export type ShipRow = { at: string; sha: string; tag: string; champion?: string; url?: string };
 /** smoke.jsonl: §11 step 1, the page's first point before any epoch: its A/B's share and median latency, and its cost. */
 export type SmokeRow = { at: string; run: string; pass: boolean; calls: number; listUsd: number; minutes: number; cases: number; share?: number; ttfcP50?: number; ttdP50?: number; ttfdP50?: number; renderP50?: number };
 /** bench/B1/manifest.json, bench/U1/manifest.json: file → sha256, and the hash over them (N7). */

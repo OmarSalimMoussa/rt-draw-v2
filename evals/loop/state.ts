@@ -176,15 +176,18 @@ export function loopUnit(): string {
   return r.error ? "none" : r.stdout.trim() || "none";
 }
 /**
- * The champion, and how many of its commits (the loop's keeps) aren't on prod: past the last ship (history's
- * ships.jsonl), or before any, past the branch the loop follows. Undefined before init.
+ * The champion, and how many of its keeps aren't on prod: past the champion commit the last ship carried (history's
+ * ships.jsonl), or before any ship, past the branch the loop follows. Undefined before init.
  */
 export function championStatus(): { sha: string; unshipped?: number; since?: "prod" | "master" } | undefined {
   const { home, repo, history } = paths();
   const git = (...a: string[]) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   const keepsSince = (ref: string) => {
     try {
-      return Number(git("rev-list", "--count", "--no-merges", `${ref}..loop/champion`));
+      // A keep is the loop's own commits (an engineer's change, its card's knobs), each naming its decision at a line's
+      // start ("e108-h2: …"); the owner's commits that syncs merged in aren't keeps.
+      const log = git("log", "--no-merges", "--author=rt-eval loop", "--format=%B", `${ref}..loop/champion`);
+      return new Set(log.match(/^e\d+-h\d+[a-z]?(?=: )/gm)).size;
     } catch {
       return undefined; // a ship the clone hasn't fetched yet
     }
@@ -192,7 +195,8 @@ export function championStatus(): { sha: string; unshipped?: number; since?: "pr
   try {
     const sha = git("rev-parse", "--short=12", "loop/champion");
     const ships = existsSync(join(history, "ships.jsonl")) ? readFileSync(join(history, "ships.jsonl"), "utf8").split("\n").filter(Boolean) : [];
-    const shipped = ships.length ? keepsSince((JSON.parse(ships.at(-1)!) as { sha: string }).sha) : undefined;
+    const last = ships.length ? (JSON.parse(ships.at(-1)!) as { sha: string; champion?: string }) : undefined;
+    const shipped = last && keepsSince(last.champion ?? last.sha);
     if (shipped !== undefined) return { sha, unshipped: shipped, since: "prod" };
     const f = join(home, "init.json");
     const branch = existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")) as { branch?: string }).branch : undefined;

@@ -101,7 +101,7 @@ one slot's send wall; 24 put the arms' Enter 35 ms apart, past V9's 25 ms.
 - `rte remetric <run>`.
 - `rte gc --trees`.
 - `rte sync --cap n`: the owner's master into the champion. The loop runs it itself between epochs, at most daily.
-- `rte shipped --sha <commit> --tag <image tag> --url <prod>`: `ship.sh`'s record of a ship.
+- `rte shipped --sha <commit> --tag <image tag> --champion <commit> --url <prod>`: `ship.sh`'s record of a ship.
 
 `python3 -I evals/tools/verify_decision.py ~/rt-eval/runs <run>…` recomputes a decision's numbers from its rows,
 without the harness's code. `npm run checks [-- --slow]` runs the harness's checks at 0 real calls (fast ~5 min;
