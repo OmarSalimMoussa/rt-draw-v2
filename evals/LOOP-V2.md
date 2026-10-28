@@ -252,6 +252,15 @@ break it against the code. Every finding was fixed or is recorded here:
 | The RUNBOOK held the reference beside the owner's decisions, and its rehearsal ran its steps at once on the PGX | The RUNBOOK is what the owner decides; setup, the rehearsal (each step in the foreground) and where things live are in `evals/ops/README.md` |
 | `verify_decision.py` checked Rule F's numbers from before the funnel audit | It has today's looks and lines, and the last look on all cases |
 
+## Changed on 2026-10-28 (evening): Eval HQ at the owner's pace
+
+At the owner's word: the Loop view is folded until opened (a link to it opens it), its decisions 20 a page, the latest
+first. Intake and review's cards go through a reviewer that fills the window: a card's four boards, its words, meaning,
+expectation and actions on one screen; <kbd>A</kbd> approves (with any edits), <kbd>1</kbd>–<kbd>6</kbd> reject for that
+reason, <kbd>J</kbd> and <kbd>K</kbd> step, <kbd>Z</kbd> zooms in place. The next two cards are fetched ahead, images
+and all, and a verdict shows the next before its save returns. Eval HQ's links to the cards waiting open it
+(`/evals/review/#go`).
+
 ## The checks
 
 All of `evals/checks/` at 0 real calls. Changed for v2: t2, t10 and t14 (Jev stubs and roles), t3 (later knobs and
@@ -277,7 +286,8 @@ end on invented sessions), and t0's `SPEC_CONFIG_ID`. For 2026-10-28: t13 (too r
 their folders, calls and rows under `real/`, the digest's count only), and t0's `SPEC_CONFIG_ID`. For I: t16 (foreign
 POSTs, prod's health once a minute), t17 (R1's panel, intake's last pass, the front page), t21 (a stop asked for before a
 start), t23 (a held case kept, not-drawing skips, failing stages and boards), t25 (the lock's takeovers, a deploy, `pull.sh
-local` across two homes), t26 (ships). `npm run checks`
+local` across two homes), t26 (ships). For the evening's: t17 (the Loop view's fold and pages), t27 (the reviewer).
+`npm run checks`
 runs the fast ones, `-- --slow` all.
 
 ## Re-validation (before any run)

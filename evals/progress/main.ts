@@ -481,7 +481,7 @@ function pipelineNeeds(): string[] {
     const byDay = new Map<string, number>();
     for (const c of [...proposed].sort((a, b) => (a.admitAt ?? "").localeCompare(b.admitAt ?? ""))) byDay.set(day(c.admitAt), (byDay.get(day(c.admitAt)) ?? 0) + 1);
     const joins = [...byDay].map(([d, k]) => `${k} join${k > 1 ? "" : "s"} ${d || "when looked at"}`).join(", ");
-    out.push(`<li class="item"><p class="what">${proposed.length} card${proposed.length > 1 ? "s wait" : " waits"} for your look</p><p class="why">${esc(joins)}, unless you reject ${proposed.length > 1 ? "them" : "it"}. <a href="/evals/review/">Intake and review</a></p></li>`);
+    out.push(`<li class="item"><p class="what">${proposed.length} card${proposed.length > 1 ? "s wait" : " waits"} for your look</p><p class="why">${esc(joins)}, unless you reject ${proposed.length > 1 ? "them" : "it"}. <a href="/evals/review/#go">Review ${proposed.length > 1 ? "them" : "it"}</a></p></li>`);
   }
   const pass = intakeData?.pass;
   if (pass && pass.failedPasses >= INTAKE_FAILS)
@@ -609,7 +609,7 @@ function overview(d: Data, i?: Intake) {
   host.innerHTML = `<div class="pipeline">${[
     i ? stage("Pull", "/evals/review/", `live ${pulled(i.pull.live.pulledAt)}`, `local ${pulled(i.pull.local.pulledAt)} · ${n("pulled")} new sends`) : "",
     i ? stage("Intake", "/evals/review/?state=labeled", `${n("labeled")} being labeled`, [i.pass && `last pass ${ago(now() - Date.parse(i.pass.at))}${i.pass.failed ? `, ${i.pass.failed} failed` : ""}`, `${n("skipped")} skipped`].filter(Boolean).join(" · ")) : "",
-    i ? stage("Review", "/evals/review/", `${n("proposed")} waiting for you`, next ? `next joins ${day(next)}` : "none waiting") : "",
+    i ? stage("Review", n("proposed") ? "/evals/review/#go" : "/evals/review/", `${n("proposed")} waiting for you`, next ? `next joins ${day(next)}` : "none waiting") : "",
     i ? stage("Bank", "/evals/review/?state=admitted", `${i.bank.driver} driver · ${i.bank.real} real`, "cases decisions measure") : "",
     intakeError ? stage("Intake", "/evals/review/", "can't be read", intakeError) : "",
     stage("Loop", "#loop", loop.state, loop.st.phase ?? loop.st.why ?? ""),

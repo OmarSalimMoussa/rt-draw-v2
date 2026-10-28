@@ -74,7 +74,8 @@ The page has:
 - **Quality chart:** the owner's edit and reject rates per week, which show how well the labeling is doing.
 - **Queue:** proposed cards first, with filters kept in the address.
 
-A card shows four boards:
+The reviewer goes through the queue (or the cards waiting, at `/evals/review/#go`, where Eval HQ's links land) one
+card at a time over the whole window. A card shows four boards:
 - **before:** their screen, with their ink numbered;
 - **then:** what the app made;
 - **now:** the champion's replay;
@@ -83,8 +84,11 @@ A card shows four boards:
 Beside them are what they said and when, the meaning and expectation it will be judged by, and gold's checks on
 each board.
 
-Keys: <kbd>A</kbd> approves, <kbd>E</kbd> edits the meaning or expectation and then approves, <kbd>R</kbd> rejects with
-a reason, and <kbd>J</kbd> / <kbd>K</kbd> move through the queue. The note saves as it's typed.
+Keys: <kbd>A</kbd> approves, with any edit to the meaning or expectation (<kbd>Ctrl</kbd>+<kbd>Enter</kbd> from a
+field); <kbd>1</kbd>–<kbd>6</kbd> reject for that reason; <kbd>J</kbd> / <kbd>K</kbd> step; <kbd>Z</kbd> zooms a board
+in place (arrows for the others); <kbd>E</kbd> and <kbd>N</kbd> go to the meaning and the note; <kbd>Esc</kbd> closes.
+The next two cards are fetched ahead, images and all, so a verdict shows the next card at once while it's saved. The
+note saves as it's typed.
 
 An edit is pinned: no prompt change, rebuild or judge replaces it, and clearing it takes it back. Rejection reasons
 (`cases.ts` `REJECT_REASONS`) are counted, so the next revision of the triage and gold prompts starts from them.

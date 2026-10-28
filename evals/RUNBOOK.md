@@ -14,8 +14,9 @@ the few commands behind it.
 
 ## What the owner does
 
-1. **Look at new cards.** In Eval HQ, open *Intake and review*. Approve (<kbd>A</kbd>), edit then approve (<kbd>E</kbd>),
-   or reject with a reason (<kbd>R</kbd>). A card you don't touch joins after 2 days: nothing waits on you.
+1. **Look at new cards.** Eval HQ's *Review* stage (or Needs you) opens the reviewer on the cards waiting, one at a
+   time: approve (<kbd>A</kbd>, with any edits you made), or reject for a reason (<kbd>1</kbd>–<kbd>6</kbd>); the next
+   card is up at once. A card you don't touch joins after 2 days: nothing waits on you.
 2. **Answer what the loop holds for you.** Eval HQ's *Needs you* has the decisions held for your call, owner-list items
    and threads with Claude. When the loop stops for a reason that's yours, or holds a decision, you get a mail (codes and
    ids only, through imagine's mailer).
