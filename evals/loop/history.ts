@@ -14,7 +14,7 @@ import { readRows } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { runFile, voidPath } from "./record.ts";
 import { clusteredZ } from "./stats.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, HypothesisCard, Marker, Ratio, Row, RunInfo, SmokeRow } from "./types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, HypothesisCard, Marker, Ratio, Row, RunInfo, ShipRow, SmokeRow } from "./types.ts";
 import type { Decision } from "./verdict.ts";
 
 export const BRANCH = "eval/history";
@@ -84,7 +84,7 @@ export function commitHistory(message: string): string | undefined {
 
 // ---- The files of §5.3
 
-type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker; "smoke.jsonl": SmokeRow };
+type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker; "smoke.jsonl": SmokeRow; "ships.jsonl": ShipRow };
 /** anchors.json: A0, checkpoint 0's champion, which every checkpoint runs against (§5.2); `tuning` when it was a commit plus knobs. */
 export type Anchor = { id: string; sha: string; tuning?: Record<string, number> };
 type Whole = { "anchors.json": Anchor[] };

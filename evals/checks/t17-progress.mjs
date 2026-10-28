@@ -1,6 +1,7 @@
-// T17's acceptance check: the progress page draws the sample history (copied into a
-// temp RT_EVAL_HOME's history worktree and served by the real /api/eval/history)
-// with all 6 panels at 1280 and 390 px, its owner steps, era and marker ticks, a band
+// T17's acceptance check: Eval HQ's home, the progress page, draws the sample history
+// (copied into a temp RT_EVAL_HOME's history worktree and served by the real
+// /api/eval/history) under the HQ header and the pipeline's overview, with its views
+// and every panel at 1280 and 390 px, its owner steps, era and marker ticks, a band
 // and line per era, hollow points and the slower-than-A0 ring where §5.4 puts them,
 // a decision row opens its cases and calls, and "Needs you" lists what waits for the
 // owner (held first, the count in the tab title), sends his note, shows Claude's reply
@@ -8,7 +9,6 @@
 // Chrome; every /api/* request goes through a counted stub to the pages server's
 // endpoints. 0 model calls: there is no model endpoint and no stub for one.
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t17-progress.mjs
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "vite";
@@ -20,15 +20,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const put = (f, data) => (mkdirSync(dirname(f), { recursive: true }), writeFileSync(f, data));
 const home = tempHome();
 
-// ---- index.html gains only the two cards, under Evals.
-const cur = readFileSync(join(ROOT, "index.html"), "utf8").split("\n");
-const base = execFileSync("git", ["-C", ROOT, "show", "master:index.html"], { encoding: "utf8" }).split("\n");
-const added = cur.filter((l) => !base.includes(l));
-const evals = cur.findIndex((l) => />Evals</.test(l));
-const cardAt = (href) => cur.findIndex((l) => l.includes(`<a class="card" href="${href}">`));
-check(base.every((l) => cur.includes(l)), "index.html lost or changed a line of master's");
-check(added.every((l) => /href="\/evals\/(progress|label)\/"/.test(l)) && added.length <= 2, `index.html gained more than the two cards: ${added.length} lines`);
-check(evals >= 0 && cardAt("/evals/progress/") > evals && cardAt("/evals/label/") > evals, "the Progress and Labels cards aren't under the Evals heading");
+// ---- The product's index links no Eval HQ page: the owner's dev server doesn't serve their endpoints (only the record one).
+const index = readFileSync(join(ROOT, "index.html"), "utf8");
+check(!/href="\/evals\/(progress|label|review)\//.test(index) && /href="\/evals\/driver\/"/.test(index), "index.html links an Eval HQ page, or lost the driver's card");
 
 // ---- The sample history in the worktree, plus what only a live loop writes.
 const SAMPLE = join(ROOT, "evals/progress/sample");
@@ -40,6 +34,7 @@ const cks = rows("checkpoints.jsonl");
 const epochs = rows("epochs.jsonl");
 const at = (e) => epochs.find((x) => x.epoch === e).at;
 put(join(home, "history/health.jsonl"), [{ at: at(2), kind: "calib", pass: true, detail: {} }, { at: at(12), kind: "canary", pass: true, detail: {} }].map((r) => JSON.stringify(r)).join("\n") + "\n");
+put(join(home, "history/ships.jsonl"), `${JSON.stringify({ at: at(20), sha: "a".repeat(40), tag: "v2-aaaaaaaaaaaa" })}\n`);
 put(join(home, "heartbeat.json"), JSON.stringify({ wall: Date.now(), mono: 1 }));
 put(join(home, "state.json"), JSON.stringify({ run: { status: "running", at: new Date().toISOString(), phase: "e21-h1 measuring", slot: 2 } }));
 
@@ -59,14 +54,15 @@ const proxy = ({ url, method, body }) => {
   const u = new URL(url);
   return fetch(`http://127.0.0.1:${PORT}${u.pathname}${u.search}`, { method, body: method === "GET" ? undefined : body }).then(async (r) => ({ status: r.status, type: r.headers.get("content-type"), body: Buffer.from(await r.arrayBuffer()) }));
 };
-const c = await openChrome({ width: 1280, height: 900, stubs: Object.fromEntries(["history", "file", "calls", "threads"].map((p) => [`/api/eval/${p}`, proxy])) });
+const c = await openChrome({ width: 1280, height: 900, stubs: Object.fromEntries(["history", "file", "calls", "threads", "intake"].map((p) => [`/api/eval/${p}`, proxy])) });
 const { page } = c;
 await page.goto("about:blank");
 const jpeg = await page.shot({ format: "jpeg", quality: 80, clip: { x: 0, y: 0, width: 640, height: 400, scale: 1 } });
 for (const f of ["cases/c-b1-s01-1/A/after.jpg", "cases/c-b1-s01-1/B/after.jpg"]) put(join(run, f), jpeg);
 put(join(home, "bank/cases/c-b1-s01-1/before-ink.jpg"), jpeg);
 
-const PANELS = ["status", "quality", "latency", "health", "cost", "decisions"];
+const PANELS = ["status", "decisions", "quality", "latency", "health", "cost", "playgrounds"];
+const CHARTS = ["quality", "latency", "health", "cost"];
 const waitFor = async (expr, what, ms = 8000) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if (await page.eval(expr)) return;
   fail(`timed out waiting for ${what}`);
@@ -84,7 +80,11 @@ const READ = `(() => {
   });
   return {
     panels: [...document.querySelectorAll("[data-panel]")].map((p) => p.dataset.panel),
-    drawn: ${JSON.stringify(PANELS.slice(1, 5))}.map((p) => n(p, "svg path")),
+    drawn: ${JSON.stringify(CHARTS)}.map((p) => n(p, "svg path")),
+    nav: [...document.querySelectorAll("header.bar nav a")].map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("aria-current")]),
+    views: [...document.querySelectorAll("#panels > .view")].map((v) => v.id),
+    stages: [...document.querySelectorAll("#overview .stage-link")].map((a) => a.innerText.replace(/\\s+/g, " ").trim()),
+    playgrounds: [...(P("playgrounds")?.querySelectorAll("[data-list] a") ?? [])].map((a) => a.getAttribute("href")),
     scroll: document.documentElement.scrollWidth - innerWidth,
     wideSvg: [...document.querySelectorAll("[data-panel] svg")].filter((s) => s.getBoundingClientRect().right > s.closest("[data-panel]").getBoundingClientRect().right + 1).length,
     steps: Object.fromEntries(["quality", "latency"].map((p) => [p, [n(p, '[data-step="owner"]'), n(p, "[data-step]")]])),
@@ -106,6 +106,13 @@ const verify = (w) => {
   const r = got[w];
   check(JSON.stringify(r.panels) === JSON.stringify(PANELS), `${w} px: panels ${r.panels}`);
   check(r.drawn.every((k) => k > 0), `${w} px: a chart panel drew nothing (${r.drawn})`);
+  check(JSON.stringify(r.nav.map((a) => a[0])) === JSON.stringify(["Needs you", "Intake and review", "Loop", "Benchmarks", "Judge", "Playgrounds"]) && r.nav.every((a) => a[1].startsWith("/evals/") && a[2] === null),
+    `${w} px: the HQ header's views ${JSON.stringify(r.nav)}`);
+  check(JSON.stringify(r.views) === JSON.stringify(["loop", "benchmarks", "playgrounds"]), `${w} px: the page's view headings ${JSON.stringify(r.views)}`);
+  // No pull yet (intake's endpoint on an empty real/): every stage still shows, in the pipeline's order.
+  check(JSON.stringify(r.stages.map((x) => x.split(" ")[0])) === JSON.stringify(["Pull", "Intake", "Review", "Bank", "Loop", "Prod"]) && /^Pull never 0 new sends/.test(r.stages[0]) && /^Loop running/.test(r.stages[4]) && /^Prod v2-aaaaaaaaaaaa shipped/.test(r.stages[5]),
+    `${w} px: the overview reads ${JSON.stringify(r.stages)}`);
+  check(r.playgrounds.length === 17 && r.playgrounds.every((h) => /^http:\/\/localhost:5173\/playgrounds\/[a-z]+\/$/.test(h)), `${w} px: the playgrounds' links ${JSON.stringify(r.playgrounds.slice(0, 3))}`);
   check(r.scroll <= 0 && r.wideSvg === 0, `${w} px: horizontal scroll (${r.scroll} px over, ${r.wideSvg} charts wider than their card)`);
   // The one owner step, on each panel's main line, and no other step (no anchor moves or era bridges now).
   check(JSON.stringify(r.steps) === JSON.stringify({ quality: [1, 1], latency: [1, 1] }), `${w} px: steps (owner, all) ${JSON.stringify(r.steps)}`);

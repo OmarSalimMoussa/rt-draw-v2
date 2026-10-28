@@ -3,11 +3,12 @@
 // intake or readiness check instead of failing; the budget pauses on the week instead of stopping, until the week is
 // read again; `rte wanted` keeps an owner's stop across a reboot and lets a crash restart; `rte unit-failed` records
 // the unit giving up. Then evals/ops/units.sh's units run for real under systemd with a fake rte: a crash loop restarts
-// three times and then runs the failure unit once, and a stop the owner made keeps the loop's unit from running.
+// three times and then runs the failure unit once, and a stop the owner made keeps the loop's unit from running; intake's
+// unit pulls first, and pull.sh keeps each pull as a snapshot.
 // 0 model calls: no gateway, no tokens; the units are this check's own (prefix rtcheck<pid>), removed after.
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t25-supervise.mjs
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { ROOT, check, cleanEnv, finish, tempHome } from "./lib.mjs";
@@ -115,6 +116,28 @@ const rte = (...a) => spawnSync(process.execPath, ["--import", join(ROOT, "evals
   check(f.status === 0 && readState().run.code === "crashed" && /unit failed past its restarts/.test(owner) && /not mailed: no /.test(f.stdout), `rte unit-failed: exit ${f.status}, run ${JSON.stringify(readState().run)}, ${f.stdout.trim().slice(-200)}`);
 }
 
+// ---- pull.sh receive: each pull a snapshot under real/raw/<source>/ that only this user reads, the newest named in
+// latest; a pull the same as the last is dropped.
+{
+  const src = join(home, "pull-src");
+  mkdirSync(join(src, "app"), { recursive: true });
+  writeFileSync(join(src, "app", "a.json"), "{}");
+  const receive = () => spawnSync("bash", [join(ROOT, "evals/real/pull.sh"), "receive", "live"], { input: execFileSync("tar", ["-C", src, "-cf", "-", "app"]), env: cleanEnv({ RT_EVAL_HOME: home }), encoding: "utf8" });
+  const raw = join(home, "real", "raw", "live");
+  const snaps = () => readdirSync(raw).filter((d) => /^\d{8}T\d{6}Z$/.test(d)).sort();
+  const latest = () => readFileSync(join(raw, "latest"), "utf8").trim();
+  const r1 = receive();
+  check(r1.status === 0 && snaps().length === 1 && latest() === snaps()[0] && existsSync(join(raw, latest(), "app", "a.json")) && existsSync(join(raw, "pulled")) && (statSync(join(home, "real")).mode & 0o077) === 0,
+    `the first pull: exit ${r1.status}, ${snaps().join(", ")} (${r1.stderr.trim()})`);
+  const r2 = receive();
+  check(r2.status === 0 && /the same as/.test(r2.stdout) && snaps().length === 1, `a pull the same as the last was kept: ${snaps().join(", ")}`);
+  await sleep(1100);
+  writeFileSync(join(src, "app", "a.json"), '{"n":2}');
+  const r3 = receive();
+  check(r3.status === 0 && snaps().length === 2 && latest() === snaps()[1] && readFileSync(join(raw, latest(), "app", "a.json"), "utf8") === '{"n":2}', `a new pull isn't the latest: ${snaps().join(", ")}`);
+  rmSync(join(home, "real"), { recursive: true, force: true });
+}
+
 // ---- The units under systemd, with a fake rte
 if (spawnSync("systemctl", ["--user", "show-environment"]).status !== 0) console.log("note: no systemd user manager here: the units aren't run");
 else {
@@ -143,7 +166,10 @@ esac
     check(/installed/.test(out) && ["loop", "loop-failed", "intake", "pages"].every((n) => existsSync(join(dir, `${unit(n)}.service`))) && existsSync(join(dir, `${unit("intake")}.timer`)), `units.sh didn't install every unit: ${out.trim()}`);
     check(sc("is-enabled", `${unit("loop")}.service`).stdout.trim() === "enabled", "the loop's unit isn't enabled: a reboot wouldn't start it");
     const env = readFileSync(join(home, `${prefix}-units.env`), "utf8");
-    check(env.includes(`RT_EVAL_HOME=${home}`) && /PATH=.*\//.test(env), `the units' env file: ${env}`);
+    check(env.includes(`RT_EVAL_HOME=${home}`) && env.includes(`RT_UNIT_PREFIX=${prefix}`) && /PATH=.*\//.test(env), `the units' env file: ${env}`);
+    // Intake pulls the hosted app's data first; a pull that fails (the box down) doesn't keep intake from the last snapshot.
+    const intakeUnit = readFileSync(join(dir, `${unit("intake")}.service`), "utf8");
+    check(intakeUnit.includes(`ExecStartPre=-/bin/bash ${join(ROOT, "evals/real/pull.sh")} live\n`) && intakeUnit.includes(`ExecStart=${fake} intake\n`), `the intake unit: ${intakeUnit}`);
 
     // A crash loop: three starts, each after readiness, then the failure unit once.
     writeFileSync(join(home, "loop.mode"), "crash");

@@ -9,10 +9,12 @@
 // --port n (the first arm server's, default 5300) and --fakes <module> (checks: a canned critic, engineer, judge).
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { apiCmd } from "./commands/api.ts";
 import { calib, checkpointCmd, packetsCmd, syncCmd } from "./commands/checkpoint.ts";
 import { noteCmd } from "./commands/note.ts";
-import { realCmd } from "./commands/real.ts";
+import { intakeCmd } from "./commands/intake.ts";
 import { aaCmd, bakeCmd, bankCmd, benchCmd, costCmd, exportTo, gc, humanCmd, init, ladderCmd, probeCmd, readyCmd, smoke, status } from "./commands/setup.ts";
+import { shippedCmd } from "./commands/shipped.ts";
 import { loop, stopAfterCmd, unitFailedCmd, wantedCmd, weekCmd } from "./coordinator.ts";
 import { decideCmd } from "./decide.ts";
 import { remetric } from "./remetric.ts";
@@ -23,9 +25,8 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   smoke --cap n                        bake --cap n                         bank build --tuning n --heldout-gate n --heldout-chart n --cap n
   probe --cap n | --accept               bank accept (a bank that failed §2.3, used anyway) | bank rerecord --cap n (replies on today's champion)
   aa --shared --cases n | --live --cap n   bench freeze                     human freeze
-  real ingest [--raw stamp] | render | triage --cap n | gold --cap n [--run real-gold-…] [--regold] | review [--host ip] [--review-port n] | freeze
-       | update (all but review, each paying step capped at 1.5× its calls)
-       [--since yyyy-mm-dd] [--only <session>]   (testers' sends → triage → gold → bench R1, evals/real/README.md)
+  intake [--regold]   (testers' new sends to cards for the owner's review, evals/real/README.md: rt-intake.timer runs it while the
+       loop is stopped, the loop between its epochs; --regold redraws the gold of every card without a verdict)
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
        | --illustrations --contrast picture.k=v [--cases n] --cap n | --check --illustrations   (the judge on pictures: labels/illustrations/)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render | --card <decision id>] [--owner-ok] --cap n
@@ -35,14 +36,17 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   week --cap n            (reads again the weekly use of each token parked on an old reading, one one-word call each)
   status (each token's use too)        cost <run>… (calls and list $, sub-runs included)   remetric <run>   gc --trees
   packets <run>… (frames the changes a run's after captures missed, 0 calls)
-  note [<thread> "<text>" [--resolve] | <thread> --resolve | new "<text>"]   (the owner's threads on the progress page: no thread lists
-       those where he wrote last; a reply is Claude's, in $RT_EVAL_HOME/notes/threads.jsonl)`;
+  note [<thread> "<text>" [--resolve] | <thread> --resolve | new "<text>"]   (the owner's threads in Eval HQ: no thread lists
+       those where they wrote last; a reply is Claude's, in $RT_EVAL_HOME/notes/threads.jsonl)
+  api status | needs_you [--thread <id> --text "<words>" [--resolve]] | run | stop | intake_now   (JSON: Claude's tools, evals/ops/mcp.ts)
+  shipped --sha <commit> --tag <image tag>   (evals/ops/ship.sh's record of what's on prod)`;
 
 /** Each command, given the command line (rte.ts' Rte): the commands are in commands/, decide.ts and coordinator.ts. */
 const COMMANDS: Record<string, (rte: Rte) => Promise<number | void>> = {
-  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd, real: realCmd,
+  init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd, intake: intakeCmd,
   checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, "unit-failed": unitFailedCmd, wanted: wantedCmd, week: weekCmd, status,
   remetric: async (rte) => void rte.say(`remetric: ${js(remetric(rte.o.pos[1]))}`), gc, packets: packetsCmd, cost: costCmd, note: noteCmd,
+  api: apiCmd, shipped: shippedCmd,
 };
 
 if (import.meta.main) {

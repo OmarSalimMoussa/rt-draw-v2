@@ -1,27 +1,27 @@
-// The eval's progress page (§5.4, frozen measuring side): quality against A0
-// (checkpoint 0's champion, which never moves), each era of the yardstick charted
-// apart, latency against A0 in the same run, cost and speed against v1, the
-// decisions with every case and call behind them, health, and the loop's status.
-// Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the
-// eval/history branch); the page holds no state and polls every 60 s while the
-// loop's heartbeat is fresh. Above it all, "Needs you" (attention.ts): what waits
-// for the owner, each with a thread he writes in and Claude answers through
-// `rte note` ($RT_EVAL_HOME/notes/threads.jsonl, outside git), read every 20 s.
-// ?sample=1 draws the fake history in ./sample/ (its threads kept in memory).
-// Rows written before 2026-10-26 may carry Q, anchor moves, chained ratios and
-// debts: the page ignores them, and skips their "anchor" markers.
+// Eval HQ's home (§5.4, frozen measuring side): the pipeline at a glance (pull, intake, review, bank, loop, champion),
+// "Needs you" (attention.ts: what waits for the owner, each with a thread they write in and Claude answers through
+// `rte note`, $RT_EVAL_HOME/notes/threads.jsonl outside git, read every 20 s), the loop (its status and the decisions
+// with every case and call behind them), the benchmarks (quality against A0, checkpoint 0's champion, which never moves,
+// each era of the yardstick charted apart; latency against A0 in the same run; cost and speed against v1; health), and
+// the playgrounds. Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the eval/history branch) and
+// /api/eval/intake; the page holds no state and polls every 60 s while the loop's heartbeat is fresh. ?sample=1 draws
+// the fake history in ./sample/ (its threads kept in memory). Rows written before 2026-10-26 may carry Q, anchor moves,
+// chained ratios and debts: the page ignores them, and skips their "anchor" markers.
 import { openModal } from "../../src/modal.ts";
-import { $, shell } from "../../src/ui.ts";
+import { $, PLAYGROUNDS } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
 import type { Run } from "../loop/state.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, SmokeRow } from "../loop/types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, ShipRow, SmokeRow } from "../loop/types.ts";
 import { type Item, type Note, type Thread, chatId, isChat, needsYou, yourTurn } from "./attention.ts";
 import { type Dot, type Frame, INK, type XY, frame, legend } from "./charts.ts";
+import { hq } from "./hq.ts";
 
-shell("", "Eval progress: what the loop kept and reverted, quality against A0 (a frozen first champion) on cases no decision sees, latency, and what it cost against v1. Read from the eval/history branch; no model call.");
+hq("home", "The eval's pipeline: testers' sends become cases you review, the loop tries changes on them and keeps what wins, and the champion waits for you to ship it. Read from the eval/history branch and the PGX's files; no model call.");
 
 type Disk = { freeGb: number; weekGrowthGb: number; daysLeft: number | null; ownerGb: number; pauseGb: number };
-type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; now: number; error?: string };
+type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; champion?: { sha: string; unshipped?: number }; now: number; error?: string };
+/** What the overview takes of GET /api/eval/intake (evals/real/review.ts); absent where intake isn't served (the sample). */
+type Intake = { lookDays: number; pull: Record<"live" | "local", { pulledAt?: string }>; states: Record<string, number>; bank: { driver: number; real: number }; cards: { state: string; admitAt?: string }[] };
 type History = { source: string; files: Record<string, string | null>; status: Status };
 type Data = ReturnType<typeof parse>;
 
@@ -50,7 +50,7 @@ function parse(h: History) {
     source: h.source, status: h.status,
     epochs: rowsOf<EpochRow>(f["epochs.jsonl"]), decisions: rowsOf<DecisionRow>(f["decisions.jsonl"]), checkpoints: rowsOf<CheckpointRow>(f["checkpoints.jsonl"]),
     budget: rowsOf<BudgetRow>(f["budget.jsonl"]), health: rowsOf<HealthRow>(f["health.jsonl"]), markers: rowsOf<Marker>(f["markers.jsonl"]),
-    smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]),
+    smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]), ships: rowsOf<ShipRow>(f["ships.jsonl"]),
     /** Open owner-list items: unchecked markdown tasks. */
     ownerOpen: (f["owner-list.md"]?.match(/^\s*- \[ \]/gm) ?? []).length,
     ownerList: f["owner-list.md"] ?? "",
@@ -422,11 +422,26 @@ function itemHtml(it: Item) {
 const chatHtml = (t: Thread) =>
   `<li class="item${t.last?.who === "owner" ? " answered" : ""}" data-item="${esc(t.id)}"><div class="row"><span class="chip">side chat</span><span class="muted">${esc(t.id)}</span>${turnChip(t)}</div>${t.notes.map(noteHtml).join("")}${acts(t.id)}${form(t.id, true)}</li>`;
 
+/** What the pipeline itself waits on the owner for: a loop stopped for them, and cards waiting for their look. */
+function pipelineNeeds(): string[] {
+  const out: string[] = [];
+  const st = (data?.status.state?.run ?? {}) as Partial<Run>;
+  if (st.status === "stopped" && st.code && st.code !== "asked" && st.code !== "done")
+    out.push(`<li class="item held"><p class="what">The loop stopped (${esc(st.code)})</p><p class="why">${esc(st.why ?? "")} Once it's dealt with, <code>bin/rte run</code> on the PGX starts it again.</p></li>`);
+  const proposed = intakeData?.cards.filter((c) => c.state === "proposed") ?? [];
+  if (proposed.length) {
+    const next = proposed.map((c) => c.admitAt ?? "").sort()[0];
+    out.push(`<li class="item"><p class="what">${proposed.length} card${proposed.length > 1 ? "s wait" : " waits"} for your look</p><p class="why">The next joins ${esc(day(next))} unless you reject it. <a href="/evals/review/">Intake and review</a></p></li>`);
+  }
+  return out;
+}
+
 function needs() {
   if (!data) return;
   const host = $("#needs");
   const n = needsYou(data.ownerList, data.decisions, notes);
-  const count = yourTurn(n);
+  const pipe = pipelineNeeds();
+  const count = yourTurn(n) + pipe.length;
   document.title = count ? `(${count}) ${TITLE}` : TITLE;
   const held = n.items.filter((x) => x.held).length;
   const answered = n.items.filter((x) => !x.turn).length + n.chats.filter((t) => t.last?.who === "owner").length;
@@ -434,12 +449,12 @@ function needs() {
   const parts = [held && `${held} held for your call`, n.items.length - held && `${n.items.length - held} on the owner list`, replies && `${replies} answered by Claude`, answered && `${answered} waiting for Claude`];
   const active = document.activeElement;
   const caret = active instanceof HTMLTextAreaElement && host.contains(active) ? { key: active.dataset.key!, at: [active.selectionStart, active.selectionEnd] as const } : undefined;
-  const quiet = !n.items.length && !n.chats.length;
+  const quiet = !n.items.length && !n.chats.length && !pipe.length;
   const settled = [...n.settled.map((x) => [x.id, x.what] as const), ...n.closed.map((t) => [t.id, t.last?.text ?? ""] as const)];
   host.hidden = false;
   host.classList.toggle("quiet", quiet);
   host.innerHTML = `<div class="row"><h2>${quiet ? "Nothing needs you" : "Needs you"}${count ? ` <span class="badge" data-count>${count}</span>` : ""}</h2><span class="muted">${parts.filter(Boolean).join(" · ")}</span><span class="grow"></span><button data-open="new">New side chat</button></div>${form("new", false)}` +
-    `${n.items.length ? `<ol data-items>${n.items.map(itemHtml).join("")}</ol>` : ""}${n.chats.length ? `<h3>Side chats</h3><ol data-chats>${n.chats.map(chatHtml).join("")}</ol>` : ""}` +
+    `${pipe.length ? `<ol data-pipeline>${pipe.join("")}</ol>` : ""}${n.items.length ? `<ol data-items>${n.items.map(itemHtml).join("")}</ol>` : ""}${n.chats.length ? `<h3>Side chats</h3><ol data-chats>${n.chats.map(chatHtml).join("")}</ol>` : ""}` +
     `${settled.length ? `<details${settledOpen ? " open" : ""}><summary class="muted">Resolved here (${settled.length})${n.settled.length ? ": owner-list.md keeps them open until Claude ticks them there" : ""}</summary><ol>${settled.map(([id, what]) => `<li class="row"><b>${esc(id)}</b><span class="muted">${esc(what.slice(0, 140))}</span><button data-resolve="${esc(id)}" data-reopen>reopen</button></li>`).join("")}</ol></details>` : ""}` +
     `${notesError || sendError ? `<div class="stat bad">${esc(sendError ? `Not sent: ${sendError}` : `Threads unavailable here: ${notesError}`)}</div>` : ""}`;
   if (caret) {
@@ -524,20 +539,94 @@ async function pollNotes() {
   window.addEventListener("focus", () => void pollNotes());
 }
 
+// ---- The pipeline at a glance, and the playgrounds
+
+const day = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) : "");
+function overview(d: Data, i?: Intake) {
+  const host = $("#overview");
+  const st = (d.status.state?.run ?? {}) as Partial<Run>;
+  const n = (k: string) => i?.states[k] ?? 0;
+  const next = i?.cards.filter((c) => c.state === "proposed").map((c) => c.admitAt ?? "").sort()[0];
+  const pulled = i && [i.pull.live.pulledAt, i.pull.local.pulledAt].filter(Boolean).sort().at(-1);
+  const stage = (name: string, href: string, main: string, sub: string) => `<a class="stage-link" href="${href}"><span class="muted">${name}</span><b>${esc(main)}</b><span class="muted">${esc(sub)}</span></a>`;
+  host.innerHTML = `<div class="pipeline">${[
+    i ? stage("Pull", "/evals/review/", pulled ? ago(now() - Date.parse(pulled)) : "never", `${n("pulled")} new sends`) : "",
+    i ? stage("Intake", "/evals/review/?state=labeled", `${n("labeled")} being labeled`, `${n("skipped")} skipped`) : "",
+    i ? stage("Review", "/evals/review/", `${n("proposed")} waiting for you`, next ? `next joins ${day(next)}` : "none waiting") : "",
+    i ? stage("Bank", "/evals/review/?state=admitted", `${i.bank.driver} driver · ${i.bank.real} real`, "cases decisions measure") : "",
+    stage("Loop", "#loop", `${st.status ?? "stopped"}${st.code ? ` (${st.code})` : ""}`, st.phase ?? st.why ?? ""),
+    d.status.champion ? stage("Champion", "#loop", d.status.champion.sha.slice(0, 7), d.status.champion.unshipped === undefined ? "" : `${d.status.champion.unshipped} keeps not on master`) : "",
+    d.ships.length ? stage("Prod", "#loop", d.ships.at(-1)!.tag, `shipped ${day(d.ships.at(-1)!.at)}`) : "",
+  ].join("")}</div>`;
+}
+
+/** What each product playground is for, in the order they feed a send. They run on the dev server, where the product's API is. */
+const PLAYGROUND_USE: Record<string, string> = {
+  speech: "words with their times: a spoken send's input",
+  ink: "strokes with their times, the ink a case replays on the person's clock",
+  hittest: "what a stroke touches or encloses: the first reading of the ink",
+  marks: "each mark's reading (a loop, an arrow, a tap), as the drawing model is told it",
+  link: "ink tied to the words said while drawing it: a send's [ink n] markers",
+  describe: "shape descriptions good enough for \"that button\": what words are resolved against",
+  resolve: "words and ink to the shapes they mean: the resolver, and Jev's guess",
+  router: "the fast lane or the full one, per send",
+  board: "which pictures of the board are worth a model's look",
+  shot: "the screenshot the drawing model gets",
+  coords: "how the model writes places on the board",
+  draw: "the product's send end to end; ?record=1 records your sends for the human set U1",
+  ops: "the drawing model's op lines, applied as they stream: the engine every arm runs",
+  tidy: "the tidy pass after the ops: sizes, edges and gaps evened out",
+  picture: "a few words to a doodle: the picture model gold is drawn against",
+  camera: "camera moves the way a person means them",
+  render: "the board's renderer: what render time measures",
+};
+function playgrounds() {
+  const host = card("playgrounds", true);
+  let origin = "http://localhost:5173";
+  try {
+    origin = localStorage.getItem("hq.dev") ?? origin;
+  } catch {} // no storage here: the default
+  const names = new Map<string, string>(PLAYGROUNDS);
+  const list = () => Object.entries(PLAYGROUND_USE).map(([p, use]) => `<li><a href="${esc(origin)}/playgrounds/${p}/" target="_blank" rel="noopener">${esc(names.get(p) ?? p)}</a> <span class="muted">${esc(use)}</span></li>`).join("");
+  host.innerHTML = `<h2>The product's playgrounds</h2><p class="muted">Each tries one part of a send by hand. They open on the laptop's dev server (npm run dev), where the product's model API runs: <label>at <input data-origin value="${esc(origin)}" size="28"></label></p><ul data-list>${list()}</ul>`;
+  host.querySelector<HTMLInputElement>("[data-origin]")!.addEventListener("change", (e) => {
+    origin = (e.target as HTMLInputElement).value.replace(/\/$/, "");
+    try {
+      localStorage.setItem("hq.dev", origin);
+    } catch {} // kept for this view only
+    host.querySelector("[data-list]")!.innerHTML = list();
+  });
+}
+
+/** A view's heading in the page: its anchor, and one sentence on what its stage does and what it needs of the owner. */
+function view(id: string, title: string, blurb: string) {
+  const h = document.createElement("div");
+  h.className = "wide view";
+  h.id = id;
+  h.innerHTML = `<h2>${esc(title)}</h2><p class="muted">${esc(blurb)}</p>`;
+  $("#panels").append(h);
+}
+
 // ---- Load, draw, poll
 
 let data: Data | undefined;
+let intakeData: Intake | undefined;
 function draw() {
   if (!data) return;
   $("#panels").replaceChildren();
+  overview(data, intakeData);
   const x = xAxis(data);
   const evs = ownerSteps(data, x);
+  view("loop", "Loop", "The loop tries changes the analyst and critic propose, measures each against the champion on the bank's cases, and keeps what is faster with nothing worse. It needs you only for what it holds (Needs you).");
   const running = status(data);
+  decisions(data);
+  view("benchmarks", "Benchmarks", "Every few keeps, the champion against A0 on the frozen benches: B1 (the driver's held-out cases), U1 (your recorded sends) and R1 (testers' sends with gold, a report beside every keep).");
   quality(data, x, evs);
   latency(data, x, evs);
   health(data, x);
   cost(data, x);
-  decisions(data);
+  view("playgrounds", "Playgrounds", "The product's parts, one at a time, for trying a change by hand before the loop measures it.");
+  playgrounds();
   return running;
 }
 
@@ -546,6 +635,8 @@ async function refresh() {
   try {
     const h: History = SAMPLE ? await sample() : await (await fetch("/api/eval/history")).json();
     if (SAMPLE) sampleNotes ??= rowsOf<Note>(h.files["threads.jsonl"]);
+    // Intake is served on the PGX only: elsewhere the overview leaves it out.
+    intakeData = SAMPLE ? undefined : await fetch("/api/eval/intake").then((r) => (r.ok ? r.json() : undefined), () => undefined);
     data = parse(h);
     const running = draw();
     needs();

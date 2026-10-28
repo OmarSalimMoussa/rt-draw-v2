@@ -14,21 +14,31 @@ const ago = (iso: string) => {
   return min < 90 ? `${min} min ago` : `${(min / 60).toFixed(1)} h ago`;
 };
 
+/**
+ * Claude's reply on a thread (or `new`: a side chat). It goes only to a thread or an item that exists: a typo would start
+ * a thread no page shows.
+ */
+export function replyNote(thread: string, text: string, resolve: boolean, n = waitingNow()) {
+  if (!text && !resolve) throw new Error(`note ${thread}: say something ("<text>"), or --resolve`);
+  const id = thread === "new" ? chatId() : thread;
+  const known = thread === "new" || threadsOf(readNotes()).some((t) => t.id === id) || n.items.some((x) => x.id === id);
+  if (!known) throw new Error(`note: no thread or waiting item "${thread}" (rte note lists them; rte note new "<text>" starts a side chat)`);
+  return addNote({ thread: id, who: "claude", text, resolved: resolve ? true : undefined });
+}
+function waitingNow() {
+  const repo = paths().repo;
+  const decisions = (historyFile("decisions.jsonl", repo).text ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l) as DecisionRow);
+  return needsYou(historyFile("owner-list.md", repo).text ?? "", decisions, readNotes());
+}
+
 export async function noteCmd(rte: Rte) {
   const [, thread, ...words] = rte.o.pos;
   const resolve = rte.o.f.resolve;
   // `--resolve "<text>"` parses as the flag's value: the words all the same.
   const text = [...words, ...(typeof resolve === "string" ? [resolve] : [])].join(" ").trim();
-  const repo = paths().repo;
-  const decisions = (historyFile("decisions.jsonl", repo).text ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l) as DecisionRow);
-  const n = needsYou(historyFile("owner-list.md", repo).text ?? "", decisions, readNotes());
+  const n = waitingNow();
   if (thread) {
-    if (!text && !resolve) throw new Error(`note ${thread}: say something ("<text>"), or --resolve`);
-    // A reply goes to a thread or an item that exists (a typo would start a thread no page shows); "new" starts a side chat.
-    const id = thread === "new" ? chatId() : thread;
-    const known = thread === "new" || threadsOf(readNotes()).some((t) => t.id === id) || n.items.some((x) => x.id === id);
-    if (!known) throw new Error(`note: no thread or waiting item "${thread}" (rte note lists them; rte note new "<text>" starts a side chat)`);
-    const note = addNote({ thread: id, who: "claude", text, resolved: resolve ? true : undefined });
+    const note = replyNote(thread, text, !!resolve, n);
     rte.say(`note: ${note.thread}${note.text ? `, ${note.text.length} characters` : ""}${note.resolved ? ", resolved" : ""}`);
     return 0;
   }

@@ -1,9 +1,14 @@
-// The harness pages server: the progress and labeling pages with their endpoints
-// and nothing else (no model, TTS or STT plugin), for the PGX over Tailscale:
+// Eval HQ's server (evals/progress/hq.ts): its pages with their endpoints and nothing else (no model, TTS or STT
+// plugin), on the PGX over Tailscale only, since it serves testers' cards (rt-pages.service, evals/ops/units.sh):
 //   ./node_modules/.bin/vite --config evals/pages.vite.config.ts --host "$(tailscale ip -4)" --port 5181
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { type Plugin, defineConfig } from "vite";
-import { evalPages } from "./pages/plugin.ts";
+// The plugin's code reaches the product's `?url` and `?raw` imports (the board's font), which Vite's config bundler
+// can't load: node-hooks.mjs teaches node them, and the plugin is imported at run time, by a path the bundler leaves.
+import "./loop/node-hooks.mjs";
+
+const { evalPages }: typeof import("./pages/plugin.ts") = await import(pathToFileURL(join(import.meta.dirname, "pages/plugin.ts")).href);
 
 /** Voice is never part of the eval: a server the harness starts answers 403. */
 const noVoice: Plugin = {
@@ -17,11 +22,12 @@ const noVoice: Plugin = {
   },
 };
 
+const root = resolve(import.meta.dirname, "..");
 export default defineConfig({
-  root: resolve(import.meta.dirname, ".."),
+  root,
   // A folder with no .env: this server never loads the owner's keys.
   envDir: resolve(import.meta.dirname, "pages"),
-  plugins: [evalPages(), noVoice],
+  plugins: [evalPages(root), noVoice],
   // Opened by the PGX's name over Tailscale, which Vite's host check would refuse.
   server: { port: 5181, strictPort: true, allowedHosts: ["thinkstationpgx-0eea", ".ts.net"] },
 });

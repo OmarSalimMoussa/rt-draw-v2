@@ -14,7 +14,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, statfsSync, writeFileSync } from "node:fs";
-import { arch } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -463,7 +462,8 @@ function machine(p: Paths, managed: string) {
   if (inFactorySlice()) why.push("inside emberhub-factory.slice");
   if (onAC() === false) why.push("on battery");
   if (process.env.RT_EVAL_LAUNCHED !== "1") notes.push("not launched, inhibitor not checked");
-  else if (arch() === "arm64") notes.push("tmux launch (no inhibitor there)");
+  // launch.sh holds the inhibitor only where there's a battery; an always-on machine runs the unit detached.
+  else if (onAC() === undefined) notes.push("no battery: a detached unit, no inhibitor to hold");
   else {
     const list = execFileSync("systemd-inhibit", ["--list", "--no-pager", "--no-legend"], { encoding: "utf8" });
     if (!list.split("\n").some((l) => l.includes("rt eval") && l.includes("sleep"))) why.push("launched, but no 'rt eval' sleep inhibitor is held");

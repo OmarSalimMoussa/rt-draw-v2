@@ -4,7 +4,7 @@
 // call's prompt: words without ink replay exactly, as typed words; ink survives only as the product's reading
 // of it ("loop around tail"), so those sends are context for triage and gold, not replayable cases.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SendRecord } from "../../app/src/board/capture.ts";
 import { type View, asPage } from "../../src/core/board.ts";
@@ -17,7 +17,10 @@ export type Source = "live" | "local";
 /** exact: from the send log; typed: rebuilt, no ink, replays as typed words; ink: rebuilt, its ink is lost. */
 export type Replay = "exact" | "typed" | "ink";
 export type RealSend = {
-  /** `<session>#<n>`, n counting the session's sends from 1: the case id's root. */
+  /**
+   * `<session>#<id>`, stable across pulls: the send log's own id for a logged send (capture.ts sendId), `v<n>` for one
+   * rebuilt from the version n it saved. Triage, gold and the owner's verdicts are keyed by it.
+   */
   key: string;
   at: string;
   label: string;
@@ -70,6 +73,13 @@ function readLines<T>(f: string): T[] {
   });
 }
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+/** Written aside and renamed over: Eval HQ reads sessions while intake writes them. */
+const write = (f: string, text: string) => {
+  writeFileSync(`${f}.tmp`, text);
+  renameSync(`${f}.tmp`, f);
+};
+/** The part of a send's key after its session: the send log's id, or v<n>. */
+export const sendOf = (key: string) => key.slice(key.indexOf("#") + 1);
 const iso = (ms: number) => new Date(ms).toISOString();
 
 /** The board a new project starts with (app/src/projects/storage.ts' blankBoard). */
@@ -129,11 +139,10 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
       mkdirSync(dir, { recursive: true });
       const docs = new Map<number, SceneJSON>([[0, blankBoard()], ...versions.map((v) => [v.n, v.doc] as [number, SceneJSON])]);
       const sends: RealSend[] = [];
-      /** An exact send's own before board: two sends from one version (a stop, then a send after a hand edit) each have theirs. */
-      const own = new Map<RealSend, SceneJSON>();
+      /** A logged send's own before board, by key: two sends from one version (a stop, then a send after a hand edit) each have theirs. */
+      const own = new Map<string, SceneJSON>();
       const restores: Session["restores"] = [];
       const used = new Set<typeof draws[number]>();
-      const key = () => `${id}#${sends.length + 1}`;
       for (const [i, v] of versions.entries()) {
         const prevAt = i ? versions[i - 1].at : 0;
         if (/^Restored V\d+/.test(v.label)) {
@@ -142,9 +151,9 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
         }
         const exact = logged.find((s) => s.afterVersion === v.n && s.landed > 0);
         if (exact) {
-          const x: RealSend = { key: key(), at: exact.at, label: exact.label, kind: exact.kind, replay: "exact", words: exact.words, strokes: exact.strokes, enterAtMs: exact.enterAtMs, camera: exact.camera, marks: [], before: exact.beforeVersion, after: v.n, pictures: [], status: exact.status, error: exact.error };
+          const x: RealSend = { key: `${id}#${exact.id}`, at: exact.at, label: exact.label, kind: exact.kind, replay: "exact", words: exact.words, strokes: exact.strokes, enterAtMs: exact.enterAtMs, camera: exact.camera, marks: [], before: exact.beforeVersion, after: v.n, pictures: [], status: exact.status, error: exact.error };
           sends.push(x);
-          own.set(x, exact.before);
+          own.set(x.key, exact.before);
           continue;
         }
         // The latest unused drawing call that ended by this version's save and asked for what it's labeled with.
@@ -152,7 +161,7 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
         if (d) used.add(d);
         const pics = d ? pictures.filter((x) => x.end >= d.start && x.end <= v.at + 2000) : [];
         sends.push({
-          key: key(), at: iso(d?.start ?? v.at), label: v.label, kind: /^preview click/i.test(v.label) ? "build" : "send",
+          key: `${id}#v${v.n}`, at: iso(d?.start ?? v.at), label: v.label, kind: /^preview click/i.test(v.label) ? "build" : "send",
           // Ink shows as its Marks section, or (draw.sendMarks off) only as [ink n] in the words.
           replay: d?.p.marks.length || /\[ink \d+\]/.test(d?.p.request ?? "") ? "ink" : "typed", words: d ? d.p.request : v.label, strokes: [], enterAtMs: 0,
           camera: d?.p.camera, marks: d?.p.marks ?? [], refs: d?.p.refs, before: i ? versions[i - 1].n : 0, after: v.n, reply: d?.c.reply,
@@ -164,29 +173,31 @@ export function ingest(raw: string, source: Source, out: string): Session[] {
       }
       // Logged sends that changed nothing (a camera move, a failure, a stop): no version, but what happened.
       for (const s of logged.filter((s) => s.landed === 0)) {
-        const x: RealSend = { key: key(), at: s.at, label: s.label, kind: s.kind, replay: "exact", words: s.words, strokes: s.strokes, enterAtMs: s.enterAtMs, camera: s.camera, marks: [], before: s.beforeVersion, after: s.beforeVersion, pictures: [], status: s.status, error: s.error };
+        const x: RealSend = { key: `${id}#${s.id}`, at: s.at, label: s.label, kind: s.kind, replay: "exact", words: s.words, strokes: s.strokes, enterAtMs: s.enterAtMs, camera: s.camera, marks: [], before: s.beforeVersion, after: s.beforeVersion, pictures: [], status: s.status, error: s.error };
         sends.push(x);
-        own.set(x, s.before);
+        own.set(x.key, s.before);
       }
       sends.sort((a, b) => a.at.localeCompare(b.at));
-      sends.forEach((s, k) => (s.key = `${id}#${k + 1}`));
-      for (const [n, doc] of docs) if (n >= 0 && sends.some((s) => s.before === n || s.after === n)) writeFileSync(join(dir, `v${n}.json`), JSON.stringify(doc));
-      // An exact send's own before (the board as it was, which a version may not hold), as before-<key n>.json.
-      for (const [s, before] of own) if (before) writeFileSync(join(dir, `before-${s.key.split("#")[1]}.json`), JSON.stringify(before));
+      for (const [n, doc] of docs) if (n >= 0 && sends.some((s) => s.before === n || s.after === n)) write(join(dir, `v${n}.json`), JSON.stringify(doc));
+      // A logged send's own before (the board as it was, which a version may not hold), as before-<send id>.json; any
+      // other before-*.json is a send this session no longer has.
+      const befores = new Set([...own].filter(([, before]) => before).map(([key]) => `before-${sendOf(key)}.json`));
+      for (const [key, before] of own) if (before) write(join(dir, `before-${sendOf(key)}.json`), JSON.stringify(before));
+      for (const f of readdirSync(dir)) if (/^before-.*\.json$/.test(f) && !befores.has(f)) rmSync(join(dir, f));
       const session: Session = {
         id, source, person: `p-${sha(owner).slice(0, 8)}`, admin: source === "local" || !!who?.admin, project: { id: meta.id, name: meta.name }, sends, restores,
         feedback: feedback.filter((f) => who && f.person === who.id && f.project?.id === meta.id).map((f) => ({ at: iso(f.at), text: f.text, version: f.project?.version })),
       };
-      writeFileSync(join(dir, "session.json"), JSON.stringify(session, null, 1));
+      write(join(dir, "session.json"), JSON.stringify(session, null, 1));
       sessions.push(session);
     }
   }
   return sessions;
 }
 
-/** The before board of a send: its own (exact) or its starting version's. */
+/** The before board of a send: its own (a logged send's) or its starting version's. */
 export function beforeOf(dir: string, s: RealSend): SceneJSON {
-  const own = join(dir, `before-${s.key.split("#")[1]}.json`);
+  const own = join(dir, `before-${sendOf(s.key)}.json`);
   return JSON.parse(readFileSync(existsSync(own) ? own : join(dir, `v${s.before}.json`), "utf8"));
 }
 export const afterOf = (dir: string, s: RealSend): SceneJSON => JSON.parse(readFileSync(join(dir, `v${s.after}.json`), "utf8"));

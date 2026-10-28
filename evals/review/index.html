@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eval HQ · intake and review</title>
+  <style>
+    main.review { max-width: 1240px; margin: 0 auto; padding: 16px 20px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+    main.review > .wide { grid-column: 1 / -1; }
+    .funnel { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: baseline; }
+    .funnel b { font: 22px Excalifont, cursive; margin-right: 4px; }
+    .chip { font: 11px var(--mono); padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
+    .chip.proposed { border-color: var(--accent); color: var(--accent); }
+    .chip.admitted { border-color: var(--ok); color: var(--ok); }
+    .chip.rejected { border-color: var(--bad); color: var(--bad); }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .queue { display: grid; gap: 6px; }
+    .queue button.item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; text-align: left; align-items: baseline; padding: 8px 10px; background: #fff; }
+    .queue button.item:hover, .queue button.item:focus-visible { background: #fff4e6; }
+    .queue .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue .meta { grid-column: 2 / -1; font-size: 12px; }
+    .sheet { display: grid; gap: 12px; padding: 14px 16px; overflow: auto; height: 100%; box-sizing: border-box; align-content: start; }
+    .shots { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+    .shots figure { margin: 0; display: grid; gap: 4px; min-width: 0; }
+    .shots img { width: 100%; border: 1.5px solid var(--ink); border-radius: 6px; background: #fff; }
+    .shots figcaption { font: 15px Excalifont, cursive; }
+    .shots .none { aspect-ratio: 1.6; display: grid; place-items: center; border: 1.5px dashed var(--line); border-radius: 6px; color: var(--muted); }
+    .words { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 16px; }
+    .words span i { font: 11px var(--mono); color: var(--muted); font-style: normal; margin-right: 3px; }
+    .labels { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+    .labels section { display: grid; gap: 6px; align-content: start; min-width: 0; }
+    .labels h3 { margin: 0; font: 17px Excalifont, cursive; }
+    .labels textarea { font: 14px/1.45 system-ui, sans-serif; }
+    .labels ul { margin: 0; padding-left: 18px; }
+    .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .acts kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+    .chart { min-width: 0; }
+  </style>
+</head>
+<body>
+  <main class="review" id="panels"></main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

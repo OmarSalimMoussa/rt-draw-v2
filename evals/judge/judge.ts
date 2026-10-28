@@ -44,15 +44,16 @@ export function judgeId(role: Role, served: string | undefined, variant: P.Varia
 /** The model the API last said it served (message_start): existing expectations and miss checks are reused while their judgeId matches it. */
 let servedNow: string | undefined;
 export const lastServed = () => servedNow;
-/** An expectation from an owner-approved rubric (bench R1's gold, evals/real/shadow.ts): no judge made it, so none re-makes it. */
+/** Expectations no judge made, so none re-makes: gold's rubric (evals/real/gold.ts), and the owner's own edit of one (evals/real/cases.ts). */
 export const RUBRIC = "rubric";
-const current = (have: { judgeId: string } | undefined, role: Role) => !!have && (have.judgeId === RUBRIC || servedNow === undefined || have.judgeId === judgeId(role, servedNow));
+export const OWNER = "owner";
+const current = (have: { judgeId: string } | undefined, role: Role) => !!have && (have.judgeId === RUBRIC || have.judgeId === OWNER || servedNow === undefined || have.judgeId === judgeId(role, servedNow));
 
 export const calibrationFile = () => join(paths().history, "judge", "calibration.json");
 /**
  * The prompt variants calibration chose (§4.5): 1 until a check adopts 2. craftCalibrated false: craft-goal keeps go
  * to the owner list. illustrationsCalibrated false (the owner hasn't labeled illustrations yet): keeps that switch the
- * picture model go there too, and R1 decides nothing (LOOP-V2.md A5, C3).
+ * picture model go there too (LOOP-V2.md C3).
  */
 export function variants(): { fidelity: P.Variant; craft: P.Variant; craftCalibrated: boolean; illustrationsCalibrated: boolean } {
   const use = maybe<{ use?: { fidelity?: P.Variant | null; craft?: P.Variant | null; illustrations?: boolean } }>(calibrationFile())?.use;

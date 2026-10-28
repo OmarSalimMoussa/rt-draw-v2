@@ -13,6 +13,8 @@ case "${1:-}" in
     # The owner's word: a stop of theirs no longer holds it (rte wanted), and a unit that gave up after its restarts is reset.
     node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts wanted --set
     systemctl --user reset-failed rt-loop.service 2>/dev/null || true
+    # The loop does intake between its epochs from now: a pass of the timer's stops (what it paid for is cached).
+    systemctl --user stop rt-intake.service 2>/dev/null || true
     systemctl --user start --no-block rt-loop.service
     echo "rte run: the loop's unit is starting (readiness first, then loop --resume): bin/rte status, journalctl --user -fu rt-loop"
     ;;

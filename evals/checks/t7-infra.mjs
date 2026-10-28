@@ -322,7 +322,7 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
   check([true, false, undefined].includes(onAC()), `onAC(): ${onAC()}`);
   check(inFactorySlice() === false, "this check thinks it runs in the factory slice");
 
-  // ---- launch.sh for real: a systemd user unit around a probe run.ts (and the tmux path with a fake tmux).
+  // ---- launch.sh for real: a systemd user unit around a probe run.ts, under the sleep inhibitor where there's a battery.
   const layout = join(home, "launch");
   mkdirSync(join(layout, "evals/loop"), { recursive: true });
   for (const f of ["launch.sh", "node-hooks.mjs"]) copyFileSync(join(ROOT, "evals/loop", f), join(layout, "evals/loop", f));

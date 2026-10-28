@@ -8,7 +8,6 @@
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t19-ready.mjs
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { arch } from "node:os";
 import { join } from "node:path";
 import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
 
@@ -76,7 +75,7 @@ async function ready(args, { env = {}, during, prefix = [] } = {}) {
 }
 const show = (r) => r.out.trim().split("\n").slice(-4).join(" | ");
 // R7 refuses a busy machine (load1/cores, PSI cpu avg10): before a run that samples it, let this check's own load and other users' settle.
-const { quiet, sampleLoad } = await import("../loop/load.ts");
+const { onAC, quiet, sampleLoad } = await import("../loop/load.ts");
 async function settle() {
   for (let i = 0; i < 60 && !quiet(sampleLoad()); i++) await sleep(1000);
 }
@@ -88,7 +87,7 @@ const r7f = await ready(["--only", "R7"], { prefix: ["systemd-run", "--user", "-
 execFileSync("systemctl", ["--user", "stop", `${slice}.slice`]);
 check(r7f.lines.R7?.st === "FAIL" && /emberhub-factory\.slice/.test(r7f.lines.R7.rest), `a fake factory-slice cgroup didn't fail R7: ${show(r7f)}`);
 const r7l = await ready(["--only", "R7"], { env: { RT_EVAL_LAUNCHED: "1" } });
-if (arch() === "arm64") check(/tmux launch/.test(r7l.lines.R7?.rest), `R7 on aarch64: ${show(r7l)}`);
+if (onAC() === undefined) check(/no battery/.test(r7l.lines.R7?.rest), `R7 on a machine without a battery: ${show(r7l)}`);
 else {
   check(r7l.lines.R7?.st === "FAIL" && /no 'rt eval' sleep inhibitor/.test(r7l.lines.R7.rest), `launched with no inhibitor held didn't fail R7: ${show(r7l)}`);
   const inhibitor = spawn("systemd-inhibit", ["--what=sleep:idle:handle-lid-switch", "--why=rt eval", "sleep", "30"], { stdio: "ignore", detached: true });

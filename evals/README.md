@@ -144,7 +144,7 @@ flowchart TD
   end
   setup --> rounds
   KEEP --> CK["Checkpoint every 2 keeps: champion against the original on B1"]
-  CK --> PG["eval/history and the progress page"]
+  CK --> PG["eval/history and Eval HQ"]
 ```
 
 ### Simulated users and the bank
@@ -246,3 +246,17 @@ are never queued (a queue would read as model latency); each case slot pools its
 Byte-identical requests from both arms share one real call, each arm getting the chunks on its own clock
 (`loop/cache.ts`). An event-loop delay over 100 ms voids the case. `--cap n` refuses call n+1, so a loop or retry bug
 stops at the cap instead of burning a usage window.
+
+### Real sends
+
+The bank's cases are a driver's, so the loop could get good at what a model makes up. Intake (`real/README.md`) takes
+what testers did on the hosted app. Each send that replays becomes a card: Opus says what it meant and whether it
+landed, and draws gold for a clear miss. The owner can look at every card in Eval HQ. A card joins the bank after a
+two-day window unless they reject it. Then decisions measure on it like a driver's case, and its gold makes benchmark
+R1, scored beside every keep. Testers' words and drawings never leave the eval machine.
+
+## Running it
+
+The loop, Eval HQ and intake run on one always-on machine as systemd units, and restart by themselves. The owner looks
+at new cards, answers what the loop holds for them, and ships the champion with one command. Claude sessions run the
+rest through five MCP tools. `RUNBOOK.md` has the commands.

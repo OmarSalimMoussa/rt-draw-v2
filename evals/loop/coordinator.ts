@@ -1,6 +1,7 @@
 // The loop (§8.1): epochs of cards, §6.7's rules before each step, what it's doing for the status strip, checkpoints,
-// intake and the bank's refresh between epochs, the canary, the epoch's record; rte week and rte stop-after. Its
-// systemd unit (evals/ops/units.sh) restarts it after a crash; every other stop is the owner's to look at.
+// testers' new sends (evals/real/intake.ts) and the bank's refresh between epochs, the canary, the epoch's record;
+// rte week and rte stop-after. Its systemd unit (evals/ops/units.sh) restarts it after a crash; every other stop is the
+// owner's to look at.
 import { existsSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { arch } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ import { treeOf } from "./trees.ts";
 import type { AgentLog, Arm, DecisionRow, EpochRow, HypothesisCard } from "./types.ts";
 import { runCheckpoint, sync } from "./commands/checkpoint.ts";
 import { probed, readyOk } from "./commands/setup.ts";
+import { intake } from "../real/intake.ts";
 import { build, decideCard, rebased } from "./decide.ts";
 import { DAY, HOUR, type Rte, championArm, championPages, championSha, hasU1, maybe, msg, needBank, nextEpoch, sleep, tuningIdOf } from "./rte.ts";
 
@@ -173,9 +175,19 @@ async function loopCheckpoint(rte: Rte, gw: string, st: State): Promise<string> 
   return ck.id;
 }
 
-/** Between epochs: the owner's master (at most daily), a bank refresh (5 keeps, weekly, or queued), the judge canary. */
+/**
+ * Between epochs: the owner's master (at most daily), testers' new sends (intake: a week spent ends it, and the pause
+ * after this waits for the week), a bank refresh (5 keeps, weekly, or queued), the judge canary.
+ */
 async function between(rte: Rte, gw: string, st: State) {
   if (Date.now() - Date.parse(st.lastOwnerStep ?? "1970-01-01") >= LOOP.sync.minHours * HOUR) await sync(rte, gw, st);
+  phase(st, "between epochs: testers' new sends");
+  try {
+    await intake(rte, gw);
+  } catch (err) {
+    rte.say(`intake: ${err instanceof WeekSpent ? "every token is past its week; it goes on after the pause" : `stopped: ${msg(err)}; the next epoch's tries again`}`);
+  }
+  phase(st, "between epochs");
   const lastRefresh = st.lastRefresh ?? maybe<{ at: string }>(join(paths().home, "bank", "gates.json"))?.at;
   if (st.refreshQueued || st.keepsSinceRefresh >= LOOP.bank.refreshEveryKeeps || (lastRefresh && Date.now() - Date.parse(lastRefresh) >= 7 * DAY)) {
     const n = st.refreshes + 1;
@@ -400,9 +412,13 @@ export async function stopAfterCmd(rte: Rte) {
     if (existsSync(stopFile())) rmSync(stopFile());
     return void rte.say("stop-after: cancelled");
   }
+  rte.say(`stop-after: ${requestStop()}`);
+}
+/** Asks the running loop to stop before its next step; what that means now, in the owner's words. */
+export function requestStop(): string {
   put(stopFile(), { at: new Date().toISOString() });
   const h = holder();
-  rte.say(h?.live && h.cmd === "loop" ? "stop-after: the loop stops before its next step (what's in flight finishes first); rte run goes on from there" : "stop-after: no loop is running (its next start drops this request)");
+  return h?.live && h.cmd === "loop" ? "the loop stops before its next step (what's in flight finishes first); rte run goes on from there" : "no loop is running (its next start drops this request)";
 }
 
 /**

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rt-eval": {
+      "command": "node",
+      "args": ["evals/ops/mcp.ts"]
+    }
+  }
+}

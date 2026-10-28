@@ -58,14 +58,6 @@ export class Rte {
     this.o = o;
   }
 
-  /** The same command line with other positionals or cap (rte real update's steps), its fakes and tokens kept. */
-  with(o: Partial<Opts>): Rte {
-    const r = new Rte({ ...this.o, ...o });
-    r.fakes = this.fakes;
-    r.tokenCache = this.tokenCache;
-    return r;
-  }
-
   str(k: string): string | undefined {
     return typeof this.o.f[k] === "string" ? (this.o.f[k] as string) : undefined;
   }

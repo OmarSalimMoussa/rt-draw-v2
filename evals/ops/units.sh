@@ -6,8 +6,9 @@
 #                    for (rte stop-after) or one that is theirs to judge exits cleanly and stays stopped across a reboot
 #                    (rte wanted) until `rte run`.
 # rt-pages.service   Eval HQ (evals/pages.vite.config.ts) on this machine's Tailscale address, port 5181, always restarted.
-# rt-intake.timer    every 30 minutes, `rte intake` (evals/real/README.md): new sends pulled, ingested and, while the
-#                    loop isn't running, taken through intake (the running loop does that between its epochs).
+# rt-intake.timer    every 30 minutes, a pull of the hosted app's data (evals/real/pull.sh live), then `rte intake`
+#                    (evals/real/README.md): while the loop's unit isn't running, new sends become cards; while it is, the
+#                    loop does that between its epochs.
 # Each unit runs with the PATH this shell has (node, claude, pnpm), kept in $RT_EVAL_HOME/rt-units.env, and never with
 # this shell's other variables.
 # Checks install a set of their own: RT_UNIT_PREFIX (default rt), RT_UNIT_DIR, RT_RTE (the rte to run), RT_RESTART_SEC.
@@ -30,7 +31,7 @@ mkdir -p "$dir"
 envfile=$home/$prefix-units.env
 # Testers' data lives under it (real/): nobody else on the machine reads it.
 mkdir -p "$home" && chmod 700 "$home"
-printf 'RT_EVAL_HOME=%s\nPATH=%s\n' "$home" "$path" > "$envfile"
+printf 'RT_EVAL_HOME=%s\nRT_UNIT_PREFIX=%s\nPATH=%s\n' "$home" "$prefix" "$path" > "$envfile"
 env_lines="EnvironmentFile=$envfile"
 
 cat > "$dir/$prefix-loop.service" <<EOF
@@ -76,6 +77,8 @@ Description=imagine's eval intake: new sends pulled and proposed (evals/real/REA
 Type=oneshot
 WorkingDirectory=$repo
 $env_lines
+# A pull that fails (the box down) leaves the last snapshot, which intake still takes.
+ExecStartPre=-/bin/bash $repo/evals/real/pull.sh live
 ExecStart=$rte intake
 EOF
 

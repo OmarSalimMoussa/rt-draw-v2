@@ -1,12 +1,13 @@
-// T16's acceptance check: the eval pages' endpoints on a temp RT_EVAL_HOME (the
-// history from its worktree, else from `git show eval/history:` in a temp repo; run
-// files never outside the home; labels appended; human sends recorded) and the
-// labeling page driven by keyboard in one headless Chrome, every /api/* request
-// passed through a counted stub to the real endpoints. 0 model calls: there is no
-// model endpoint on this server, and the stubs answer only /api/eval/*.
+// T16's acceptance check: Eval HQ's endpoints on a temp RT_EVAL_HOME (the history from
+// its worktree, else from `git show eval/history:` in a temp repo; run files never outside
+// the home; labels appended; human sends recorded, on the owner's dev server too; intake's
+// cards refused for what isn't one) and the labeling page driven by keyboard in one
+// headless Chrome, every /api/* request passed through a counted stub to the real
+// endpoints. 0 model calls: there is no model endpoint on this server, and the stubs
+// answer only /api/eval/*. intake's cards themselves are t23's.
 //   node --import ./evals/loop/node-hooks.mjs evals/checks/t16-pages.mjs
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer } from "vite";
@@ -15,6 +16,7 @@ import { ROOT, check, cleanEnv, fail, finish, tempHome } from "./lib.mjs";
 
 const PORT = 5250; // this task's ports are 5250–5259
 const GIT_PORT = 5251;
+const DEV_PORT = 5252;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const put = (f, text) => (mkdirSync(dirname(f), { recursive: true }), writeFileSync(f, text));
 const lineCount = (f) => {
@@ -27,17 +29,21 @@ const lineCount = (f) => {
 
 const home = tempHome();
 const { evalPages, HISTORY_FILES } = await import("../pages/plugin.ts");
-const vite = (root, port, configFile) =>
-  createServer({ root, configFile: configFile ?? false, plugins: configFile ? [] : [evalPages()], cacheDir: join(home, "vite-cache", String(port)), logLevel: "error", clearScreen: false, server: { port, strictPort: true, host: "127.0.0.1", watch: null } });
+const { recordApi } = await import("../pages/record.ts");
+const vite = (root, port, configFile, plugins = [evalPages(root)]) =>
+  createServer({ root, configFile: configFile ?? false, plugins: configFile ? [] : plugins, cacheDir: join(home, "vite-cache", String(port)), logLevel: "error", clearScreen: false, server: { port, strictPort: true, host: "127.0.0.1", watch: null } });
 const server = await vite(ROOT, PORT, join(ROOT, "evals/pages.vite.config.ts"));
 await server.listen();
 const base = `http://127.0.0.1:${PORT}`;
 const get = (path, b = base) => fetch(b + path);
 const postJson = (path, body) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
-// ---- The owner's dev server registers the endpoints and builds the three eval pages.
+// ---- The owner's dev server takes only the record endpoint (testers' cards stay on the PGX) and builds the driver and bridge.
 const viteConfig = readFileSync(join(ROOT, "vite.config.ts"), "utf8");
-check(/plugins: \[[^\]]*evalPages\(\)/.test(viteConfig) && ["bridge", "label", "progress"].every((p) => viteConfig.includes(`"${p}"`)), "vite.config.ts doesn't register evalPages() or the eval pages' inputs");
+check(/plugins: \[[^\]]*recordApi\(\)/.test(viteConfig) && !viteConfig.includes("evalPages") && /\["driver", "bridge"\]/.test(viteConfig) && !/"label"|"progress"|"review"/.test(viteConfig),
+  "vite.config.ts doesn't take recordApi() alone, or builds an Eval HQ page");
+const pagesConfig = readFileSync(join(ROOT, "evals/pages.vite.config.ts"), "utf8");
+check(/plugins: \[evalPages\(root\), noVoice\]/.test(pagesConfig), "evals/pages.vite.config.ts doesn't serve evalPages(root) with voice off");
 
 // ---- /api/eval/history from the worktree: every §5.3 file as written, absent ones as null.
 const fake = Object.fromEntries(HISTORY_FILES.map((f) => [f, f.endsWith(".jsonl") ? `${JSON.stringify({ file: f, n: 1 })}\n${JSON.stringify({ file: f, n: 2 })}\n` : f.endsWith(".json") ? JSON.stringify([{ file: f }]) : `# ${f}\n- [ ] one open item\n`]));
@@ -138,6 +144,24 @@ check(files.length === 1 && files[0] === `${rec.id}.json`, `POST /api/eval/recor
 const stored = JSON.parse(readFileSync(join(home, "human", files[0]), "utf8"));
 check(stored.input === sendBody.input && JSON.stringify(stored.scene) === JSON.stringify(scene) && stored.view.y === -60 && stored.strokes.length === 1, "the recorded send isn't what was posted");
 check((await postJson("/api/eval/record", { strokes: [] })).status === 400 && readdirSync(join(home, "human")).length === 1, "a send without input or scene was recorded");
+// The owner's dev server answers the draw playground's ?record=1 the same, and nothing else of Eval HQ.
+const devServer = await vite(ROOT, DEV_PORT, undefined, [recordApi()]);
+await devServer.listen();
+const dev = `http://127.0.0.1:${DEV_PORT}`;
+const devRec = await (await fetch(`${dev}/api/eval/record`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(sendBody) })).json();
+check(/^h-/.test(devRec.id ?? "") && readdirSync(join(home, "human")).length === 2, `the dev server's POST /api/eval/record gave ${JSON.stringify(devRec)}`);
+for (const path of ["/api/eval/intake", "/api/eval/history", "/api/eval/human"]) {
+  const r = await fetch(dev + path);
+  check(!(r.headers.get("content-type") ?? "").includes("application/json"), `the dev server answers ${path}`);
+}
+await devServer.close();
+rmSync(join(home, "human", `${devRec.id}.json`), { force: true });
+
+// ---- Intake's endpoints with no pull yet: an empty queue, and nothing served or written for what isn't a card.
+const iv = await (await get("/api/eval/intake")).json();
+check(iv.lookDays === 2 && iv.cards?.length === 0 && Object.keys(iv.states).length === 0 && iv.bank?.real === 0 && "meaning" in iv.reasons, `GET /api/eval/intake with no pull: ${JSON.stringify(iv).slice(0, 200)}`);
+check((await get("/api/eval/card?key=nobody%231")).status === 404 && (await get("/api/eval/card-image?key=nobody%231&which=before")).status === 404 && (await get("/api/eval/card-image?key=x&which=..%2F..%2Fstate.json")).status === 404, "a card or image that isn't one was served");
+check((await postJson("/api/eval/verdict", { key: "nobody#1", verdict: "approve" })).status === 400 && (await postJson("/api/eval/verdict", {})).status === 400, "a verdict on no card was taken");
 
 // ---- The labeling page, by keyboard: 3 fidelity pairs (clear, undo, slight, tie) and one craft question.
 const asked = [];

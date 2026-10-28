@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The PGX's side of evals/ops/deploy.sh, run there in the unit rt-deploy (journalctl --user -u rt-deploy): stops the loop
-# after its card (rte stop-after) and waits for it, re-pins the loop clone's harness (init --refresh: fast-forward,
-# tag eval-harness-<n>), reinstalls the units and restarts Eval HQ, and starts the loop again if it was running (its unit
-# checks readiness at 0 calls first; a stopped loop gets the check here). The harness never changes under a running loop.
+# after its card (rte stop-after) and waits for it, stops an intake pass (what it paid for is cached; the next pass goes
+# on), re-pins the loop clone's harness (init --refresh: fast-forward, tag eval-harness-<n>), reinstalls the units and
+# restarts Eval HQ, and starts the loop again if it was running (its unit checks readiness at 0 calls first; a stopped
+# loop gets the check here). The harness never changes under a running loop or intake.
 set -euo pipefail
 export RT_EVAL_HOME=${RT_EVAL_HOME:-$HOME/rt-eval}
 cd "$RT_EVAL_HOME/repo"
@@ -15,6 +16,7 @@ case "$was" in
   # Still in its readiness check: nothing in flight to finish.
   activating) systemctl --user stop rt-loop.service ;;
 esac
+systemctl --user stop rt-intake.service 2>/dev/null || true
 bin/rte init --refresh
 bash evals/ops/units.sh
 systemctl --user restart rt-pages.service 2>/dev/null || true

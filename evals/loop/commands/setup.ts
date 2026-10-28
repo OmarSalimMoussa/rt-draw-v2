@@ -31,12 +31,13 @@ import { paths } from "../paths.ts";
 import { ready } from "../ready.ts";
 import { caseDir, put, runFile } from "../record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "../probe.ts";
-import { holder, lock, readState, stampNow } from "../state.ts";
+import { holder, lock, loopUnit, readState, stampNow } from "../state.ts";
 import { stubPictures } from "../stubs.ts";
 import { Slots } from "../tokens.ts";
 import { contentHash, treeOf } from "../trees.ts";
 import type { Arm, CaseInfo, Ratio, SendOutcome } from "../types.ts";
 import { aaPass } from "../verdict.ts";
+import { intakeView } from "../../real/review.ts";
 import { DAY, HOUR, IDENT, type Rte, banked, championArm, championPages, championSha, fakeTokens, git, initFrom, js, maybe, needBank, ordered, sleep, tryGit, tuningIdOf, upstream } from "../rte.ts";
 
 /** R8 and `aa`'s default: 16 cases, the champion against itself in timed replay. */
@@ -142,6 +143,13 @@ export async function exportTo(rte: Rte) {
   rte.say(`export: ${dirs.join(", ")} and eval/history (as eval/history-import) → ${there}; there: rte init --refresh`);
 }
 
+/** Intake at a glance (evals/real/README.md): each source's last pull and the cards by state, counts only. */
+function intakeLine() {
+  const v = intakeView();
+  const states = ["pulled", "labeled", "proposed", "admitted", "rejected", "skipped"].map((s) => `${v.states[s] ?? 0} ${s}`).join(", ");
+  return `intake: pulled live ${v.pull.live.pulledAt ?? "never"}, local ${v.pull.local.pulledAt ?? "never"}; cards ${states}`;
+}
+
 export async function status(rte: Rte) {
   const loaded = rte.tokens().length; // a tokens file at any mode but 600, or inside a repo, fails here
   const inhibit = spawnSync("systemd-inhibit", ["--list", "--no-pager"], { encoding: "utf8" });
@@ -159,7 +167,8 @@ export async function status(rte: Rte) {
       const h = holder();
       return h ? `${h.cmd} (pid ${h.pid}, since ${h.start}${h.live ? "" : ", dead: stale"})` : "free";
     })()}`,
-    `unit rt-loop: ${spawnSync("systemctl", ["--user", "is-active", "rt-loop"], { encoding: "utf8" }).stdout.trim() || "n/a"}`,
+    `unit rt-loop: ${loopUnit()}`,
+    intakeLine(),
   ]) rte.say(l);
   // Each token's use as the server last said it (meter/slots.json): the loop pauses at LOOP.fiveHourPauseAt and LOOP.weekSevenDayMax.
   const pct = (x?: number) => (x === undefined ? "no reading" : `${Math.round(x * 100)}%`);
@@ -182,8 +191,9 @@ export async function costCmd(rte: Rte) {
 }
 
 export async function readyCmd(rte: Rte) {
-  // Its arm servers and Chrome take the ports a loop's rig uses.
-  const held = await lock("ready");
+  // Its arm servers and Chrome take the ports a loop's rig uses. Waited for: in the loop's unit, an intake pass finishing
+  // must not fail the start.
+  const held = await lock("ready", { wait: true, say: (l) => rte.say(l) });
   let results: Awaited<ReturnType<typeof ready>>;
   try {
     results = await ready({ stub: !!rte.o.f.stub, mockApi: !!rte.o.f["mock-api"], port: rte.o.port, repo: initFrom(), aaCheck: () => aa(rte, AA_CASES) });
@@ -484,20 +494,21 @@ async function rerecord(rte: Rte) {
   const champ = championArm();
   const run = `rerecord-${stampNow()}`;
   const ids = banked(["tuning", "fresh", "heldout-gate", "heldout-chart", "real"]);
-  const n = (await recordOnChampion(rte, ids, run)).length;
+  const n = (await rte.withGateway((gw) => recordOnChampion(rte, gw, ids, run))).length;
   rte.say(`bank rerecord: ${n} of ${ids.length} cases recorded again on ${champ.sha.slice(0, 12)} (${run}); ${ids.length - n ? "the rest keep their old replies" : "every case"}`);
   return n === ids.length ? 0 : 1;
 }
 
 /**
- * Banked cases' replies recorded on today's champion (one live A/A with sharing, each call paid once); the ids recorded,
- * each passed to `recorded` as it's written. What finished is kept when the run throws (the call cap, a page that never
- * loads), so the same run name resumes the rest.
+ * Banked cases' replies recorded on today's champion through the gateway `gw` (one live A/A with sharing, each call paid
+ * once); the ids recorded, each passed to `recorded` as it's written. What finished is kept when the run throws (the
+ * call cap, a page that never loads), so the same run name resumes the rest.
  */
-export function recordOnChampion(rte: Rte, ids: string[], run: string, recorded?: (id: string) => void): Promise<string[]> {
+export function recordOnChampion(rte: Rte, gw: string, ids: string[], run: string, recorded?: (id: string) => void): Promise<string[]> {
   const champ = championArm();
   const want = new Set(ids);
-  return rte.withGateway((gw) => rte.withRig(gw, [champ.tree, champ.tree], async (rig) => {
+  if (!ids.length) return Promise.resolve([]);
+  return rte.withRig(gw, [champ.tree, champ.tree], async (rig) => {
     const done: string[] = [];
     try {
       await runAB(rig, { run, kind: "ab", arms: { A: champ, B: champ }, mode: "live", share: true, seed: run, cases: ids });
@@ -516,7 +527,7 @@ export function recordOnChampion(rte: Rte, ids: string[], run: string, recorded?
       }
     }
     return done;
-  }));
+  });
 }
 
 export async function benchCmd(rte: Rte) {

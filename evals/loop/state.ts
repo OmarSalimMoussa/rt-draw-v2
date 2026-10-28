@@ -2,8 +2,10 @@
 // stop rules count, and what the loop is doing now), loop.lock (one command with arm servers at a time) and §6.7's
 // stop and pause rules as one pure function, so each rule can be checked on a crafted condition. Cases keep no state
 // here: every case is file-done (§3.3), and rerunning a run id carries on at its next undone case.
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
+import { join } from "node:path";
 import { LOOP } from "./config.ts";
 import { paths } from "./paths.ts";
 import type { HypothesisCard } from "./types.ts";
@@ -23,7 +25,7 @@ export type Decided = { id: string; verdict: string; component: string; at: stri
   /** One value of this sweep (LOOP-V2.md D3): the dry well counts a sweep once. */
   sweep?: string };
 /**
- * What the loop is doing, for the progress page's status strip, `rte status` and the owner's notices: written as it
+ * What the loop is doing, for Eval HQ's status strip, `rte status`, `rte api status` and the owner's mail: written as it
  * changes. A stop's `code` says which rule stopped it (STOP_CODES); `why` is the harness's own words, never an error's
  * text (an error can quote a tester, and this reaches the page and the owner's mail).
  */
@@ -130,6 +132,27 @@ export async function lock(cmd: string, o: { wait?: boolean; say?: (line: string
   };
   return { stale, release: () => void (mine && --mine.depth === 0 && free()) };
 }
+/**
+ * The loop's systemd unit as systemd has it (evals/ops/units.sh; a check installs its own under RT_UNIT_PREFIX): active,
+ * activating (its readiness check, or a restart after a crash), inactive, failed, or "none" on a machine without units.
+ */
+export function loopUnit(): string {
+  const r = spawnSync("systemctl", ["--user", "is-active", `${process.env.RT_UNIT_PREFIX ?? "rt"}-loop.service`], { encoding: "utf8" });
+  return r.error ? "none" : r.stdout.trim() || "none";
+}
+/** The champion, and how many of its commits (the loop's keeps) the branch it follows doesn't have; undefined before init. */
+export function championStatus(): { sha: string; unshipped?: number } | undefined {
+  const { home, repo } = paths();
+  const git = (...a: string[]) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  try {
+    const f = join(home, "init.json");
+    const branch = existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")) as { branch?: string }).branch : undefined;
+    return { sha: git("rev-parse", "--short=12", "loop/champion"), unshipped: branch ? Number(git("rev-list", "--count", "--no-merges", `origin/${branch}..loop/champion`)) : undefined };
+  } catch {
+    return undefined; // no loop clone here, or no champion yet
+  }
+}
+
 /** Refuses while a live process holds the lock (`what` can't change under it); a dead holder's stale lock doesn't block. */
 export function notLocked(what: string) {
   const h = holder();

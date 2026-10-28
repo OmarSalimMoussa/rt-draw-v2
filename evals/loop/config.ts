@@ -70,8 +70,8 @@ export const LOOP = {
   // owner steps (§8.6)
   sync: { minHours: 24, sceneFailMax: 0.10 },
   // budget (§6.7). The token is shared with testers on prod (the owner, 2026-10-24): new work pauses at fiveHourPauseAt of
-  // the five-hour window (0.60 until the owner raised it on 2026-10-26) and stops at weekSevenDayMax of the week (0.50 until
-  // the owner raised it on 2026-10-27), both the server's reading of the whole account (every
+  // the five-hour window (0.60 until the owner raised it on 2026-10-26) and at weekSevenDayMax of the week (0.50 until the
+  // owner raised it on 2026-10-27; a stop until 2026-10-28, now read again until it's under), both the server's reading of the whole account (every
   // call on a slot brings one). A decision past state.ts' RULES.decisionMaxMin of measuring is void (overrun); --cap
   // bounds every step's calls.
   fiveHourPauseAt: 0.90, weekSevenDayMax: 0.70,

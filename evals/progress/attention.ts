@@ -1,7 +1,7 @@
 // What waits for the owner, for the progress page's "Needs you" and `rte note`: each open owner-list item (one per
 // decision or checkpoint it names), each decision held for his call (verdict "owner") that no later run re-decided, and
 // each side chat Claude answered last; beside each, its thread. Threads live in $RT_EVAL_HOME/notes/threads.jsonl, never
-// in history/ (eval/history is pushed to public GitHub): append-only, a line per message, the page writing the owner's
+// in history/ (eval/history is pushed to its remote): append-only, a line per message, the page writing the owner's
 // and `rte note` Claude's. An item is settled when its owner-list lines are ticked or its thread is resolved; nothing
 // here edits owner-list.md (the loop writes it). Pure, so the page, the pages server and rte note share it.
 import type { DecisionRow } from "../loop/types.ts";
