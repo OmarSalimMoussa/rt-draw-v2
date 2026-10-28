@@ -74,6 +74,9 @@ so each can be tried without it.
 | `/playgrounds/ink/` | records your pen strokes, with the time of every point | `src/core/ink.ts` |
 | `/playgrounds/hittest/` | works out which shapes a stroke touches, circles, starts on and ends on | `src/core/hittest.ts` |
 | `/playgrounds/marks/` | groups strokes into marks, decides if each is pointing or a sketch, and checks if it's an arrow (and which end is the tip) | `src/core/marks.ts`, `src/core/arrow.ts` |
+| `/playgrounds/course/` | a mockup of narrated courses: the Eval Harness Course replayed silently on its voice's timings, with a laser that moves to whatever each line is about, and Tweaks (T) to compare designs | `playgrounds/course/main.ts`, `playgrounds/course/lesson.ts`, `playgrounds/course/fork/` |
+| `/playgrounds/course-imagine/` | the same course in imagine's look, built from the app's own stylesheet and sketch helpers: the chapter is a hand-drawn page on the board, and while paused you circle anything in red pencil to ask about it | `playgrounds/course-imagine/main.ts` |
+| `/playgrounds/course-flow/` | a low-fidelity mockup of courses as part of imagine, end to end and a step at a time: bring in documents, ask for a course, imagine plans and draws it as pages, Preview plays it with a voice, and a question asked while it plays becomes a page of the course | `playgrounds/course-flow/main.ts` |
 
 ```
 npm install

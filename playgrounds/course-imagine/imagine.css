@@ -1,0 +1,182 @@
+/* The course in imagine's sketchbook look (app/src/styles.css does the rest): the chapter is a page on the board,
+   the course is the sidebar, the narration and your questions share the bar, new words are sticky notes beside the
+   page, and the pointer is imagine's red pencil. */
+
+[hidden] { display: none !important; }
+.cv { background-size: 24px 24px; }
+.pg-fold { display: none; }
+
+/* ---------- the page ---------- */
+.ci-page { position: absolute; z-index: 3; }
+.ci-name { position: absolute; left: 2px; bottom: 100%; margin-bottom: 8px; max-width: 100%; font-size: 38px; line-height: 1; color: #495057; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ci-frame { position: relative; width: 100%; aspect-ratio: 16 / 10; overflow: hidden; background: #fff; }
+.ci-edge { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 6; pointer-events: none; overflow: visible; }
+.ci-edge path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.canvas { position: absolute; left: 0; top: 0; width: 960px; height: 600px; transform-origin: 0 0; transform: scale(var(--k, 1)); }
+.canvas-in { position: absolute; inset: 0; }
+
+/* The stage drawings' tokens (../course/fork/stages.css), in Excalidraw's colors and imagine's Excalifont. */
+.ci-frame {
+  --surface: #fffdf8; --surface-2: #f3efe6; --paper: #ffffff; --grid: transparent;
+  --ink: #1e1e1e; --ink-2: #495057; --muted: #868e96; --line: #343a40;
+  --accent: #1971c2; --accent-soft: #e7f5ff; --on-accent: #ffffff; --link: #1971c2;
+  --signal: #f08c00; --signal-soft: #fff3bf; --marker: #e03131;
+  --good: #2f9e44; --good-soft: #ebfbee; --bad: #e03131; --bad-soft: #fff5f5; --warn: #e8590c; --warn-soft: #fff4e6;
+  --f-display: var(--hand); --f-body: var(--hand); --f-mono: var(--hand); --f-hand: var(--hand);
+}
+.ci-frame .stg { font-size: 14.5px; }
+.ci-frame :is(b, strong, h1, h2, h3, .stg-title, .lbl) { font-weight: 400; font-stretch: normal; letter-spacing: 0; }
+.ci-frame .stg-title { font-size: 28px; }
+.ci-frame .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ci-frame .term { border-bottom: 1.5px dashed currentColor; cursor: var(--cur-pointer, pointer); }
+.ci-frame .num { font-variant-numeric: tabular-nums; }
+[data-reveal="progressive"] .ci-frame.live .rv:not(.seen) { opacity: .2; }
+
+/* The drawing's outlines, redrawn by hand (main.ts: sketchify): three drawings each, the first shown. */
+.ci-sk { position: absolute; inset: 0; width: 960px; height: 600px; z-index: 1; pointer-events: none; overflow: visible; }
+.ci-sk path { stroke-linecap: round; stroke-linejoin: round; }
+.sk-box { transition: opacity .45s ease; }
+.sk-f + .sk-f { visibility: hidden; }
+.sk-box.boil .sk-f { animation: ic-boil 0.45s steps(1, end) infinite; }
+.sk-box.boil .sk-f:nth-child(2) { animation-delay: -0.3s; }
+.sk-box.boil .sk-f:nth-child(3) { animation-delay: -0.15s; }
+/* Under the pointer while paused, a thing on the page boils, as clickables do on imagine's board. */
+.ci-boil { animation: boil-placed 0.45s steps(1, end) infinite; }
+@media (prefers-reduced-motion: reduce) { .ci-boil, .sk-box.boil .sk-f { animation: none !important; } }
+
+/* Dim the rest: a lit window, with imagine's uneven corners, around what's being talked about. */
+.spot { position: absolute; z-index: 2; pointer-events: none; border-radius: var(--wobble-s); box-shadow: 0 0 0 2400px color-mix(in srgb, #fff calc(var(--dim, 0) * 100%), transparent);
+  transition: left .5s cubic-bezier(.45, 0, .2, 1), top .5s cubic-bezier(.45, 0, .2, 1), width .5s cubic-bezier(.45, 0, .2, 1), height .5s cubic-bezier(.45, 0, .2, 1); }
+
+/* ---------- the red pencil: the narrator's pointer, and your marks ---------- */
+.ci-ink { position: absolute; inset: 0; width: 960px; height: 600px; z-index: 3; pointer-events: none; overflow: visible; }
+.ci-ink path { fill: none; stroke: var(--bad); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.ci-ink path.mk-fill { stroke-width: 1; opacity: .25; }
+.ci-ink line { stroke: var(--bad); stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.ci-ink polyline { fill: none; stroke: var(--bad); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: .85; vector-effect: non-scaling-stroke; }
+.ci-ink circle { fill: var(--bad); }
+.canvas-in svg path { stroke-linecap: round; stroke-linejoin: round; }
+.ci-ink text { fill: var(--bad); font: 24px var(--hand); paint-order: stroke; stroke: #fff; stroke-width: 6px; stroke-linejoin: round; }
+/* The narrator's dot: imagine's tap, a red dot, with a ring going out from it while it rests. */
+.ci-dot { position: absolute; z-index: 4; left: 0; top: 0; width: calc(12px / var(--k, 1)); height: calc(12px / var(--k, 1)); margin: calc(-6px / var(--k, 1)) 0 0 calc(-6px / var(--k, 1)); border-radius: 50%; background: var(--bad); pointer-events: none; }
+.ci-dot.rest::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: calc(2px / var(--k, 1)) solid var(--bad); animation: ci-tap 1.6s ease-out infinite; }
+@keyframes ci-tap { from { transform: scale(1); opacity: .8; } to { transform: scale(3.4); opacity: 0; } }
+.ci-frame { cursor: var(--cur-pointer, pointer); }
+.ci-frame.asking { cursor: var(--cur-crosshair, crosshair); }
+.ci-frame.drawing { cursor: var(--cur-pencil, crosshair); }
+
+/* ---------- the chapter's start and end, over the page (as imagine's tour card) ---------- */
+.ci-over { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: 16px; background: rgb(251 248 241 / 0.78); cursor: var(--cur-default, default); }
+.ci-card { box-sizing: border-box; width: min(560px, 100%); padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.15); }
+.ci-card h2 { margin: 0; font-size: 30px; font-weight: 400; line-height: 1.1; }
+.ci-card p { margin: 0; font-size: 17px; color: var(--muted); }
+.ci-card .ci-kicker { font-size: 15px; color: var(--muted); }
+.ci-card .ci-go { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.ci-start { display: flex; align-items: center; gap: 8px; padding: 8px 20px; font-size: 18px; color: #fff; background: var(--accent); }
+.ci-start .ic { width: 20px; height: 20px; }
+.ci-saw { display: flex; flex-wrap: wrap; gap: 8px; }
+.ci-saw button { display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 9px; font-size: 16px; box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12); }
+.ci-saw button::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.ci-saw button:hover { background: #fff3bf; }
+.ci-link { border: 0; background: transparent; padding: 4px 6px; font-size: 16px; color: var(--muted); }
+.ci-link:hover { color: var(--text); }
+
+/* ---------- new words: sticky notes on the board beside the page ---------- */
+.ci-notes { position: absolute; z-index: 3; width: 230px; display: flex; flex-direction: column; gap: 16px; }
+.ci-notes:empty { display: none; }
+.ci-note { box-sizing: border-box; display: grid; gap: 4px; padding: 10px 13px 12px; background: #fff9db; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12); transform: rotate(var(--tilt, 0deg)); transition: opacity .3s ease; }
+.ci-note b { font-weight: 400; font-size: 19px; line-height: 1.15; }
+.ci-note p { margin: 0; font-size: 15px; line-height: 1.3; color: #495057; }
+.ci-note.now b { text-decoration: underline 2px var(--bad); text-underline-offset: 4px; }
+.ci-note:not(.now) { opacity: .8; }
+.ci-note.fresh { animation: ci-stick .45s cubic-bezier(.2, 1.4, .4, 1); }
+@keyframes ci-stick { from { opacity: 0; transform: rotate(var(--tilt, 0deg)) translateY(-12px) scale(.92); } }
+.ci-note .more { justify-self: start; border: 0; background: transparent; padding: 0; font-size: 14px; color: #1971c2; }
+.ci-note .deep { font-size: 14px; color: var(--muted); }
+.ci-empty-note { font-size: 15px; color: var(--muted); padding: 10px 13px; border: 2px dashed #c9bfae; border-radius: var(--wobble-s); }
+.ci-earlier { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
+.ci-earlier button { padding: 1px 8px; font-size: 14px; }
+
+/* ---------- the sidebar: chapters (as pages) and what's been said (as history) ---------- */
+.pg-panel { max-height: calc(100% - 24px); }
+.lp-project { gap: 8px; }
+.lp-project .lp-name { padding: 2px 0; }
+.ci-part { margin: 6px 0 1px; padding: 0 6px; font-size: 12px; color: var(--muted); }
+#chapters { max-height: 36vh; overflow-y: auto; overflow-x: hidden; padding: 1px; }
+.lp-tree .lp-glyph { width: 18px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.lp-tree .lp-glyph .ic { width: 15px; height: 15px; color: var(--ok); }
+.lp-history .lp-label { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.lp-history button { align-items: flex-start; }
+.lp-history .lp-n { min-width: 20px; }
+.ci-count { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+/* ---------- the status, the tip and the tools ---------- */
+.pg-state .ic { width: 24px; height: 24px; }
+.pg-hint { transform: none; z-index: 4; }
+.pg-hint button { display: grid; place-items: center; }
+.ci-words { position: fixed; top: 58px; right: 12px; z-index: 9; width: min(340px, calc(100% - 24px)); max-height: calc(100% - 250px); overflow: auto; }
+.ci-words-h { display: flex; align-items: center; justify-content: space-between; }
+.ci-x { border: 0; background: transparent; padding: 2px 4px; color: var(--muted); display: grid; place-items: center; }
+.ci-word-list { display: flex; flex-direction: column; gap: 8px; }
+.ci-word-list h3 { margin: 6px 0 0; font-size: 12px; font-weight: 400; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ci-word { padding: 6px 8px; border-radius: var(--wobble-s); }
+.ci-word b { font-weight: 400; font-size: 16px; }
+.ci-word p { margin: 2px 0 0; font-size: 13.5px; color: #495057; }
+.ci-word.flash { background: #fff3bf; }
+.st-models label { align-items: flex-start; }
+
+/* ---------- the bar: the line being said, the lines, and asking ---------- */
+.ci-bar { bottom: 18px; width: min(900px, calc(100% - 32px)); gap: 6px; padding: 10px 12px 10px; }
+.ci-said { padding: 0 4px; }
+.ci-prev { margin: 0; min-height: 1.3em; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ci-now { margin: 0; min-height: 2.6em; font-size: 21px; line-height: 1.3; }
+.ci-now .ci-hint { color: var(--muted); }
+mark.said { background: none; color: inherit; text-decoration: underline 2px var(--bad); text-underline-offset: 5px; text-decoration-skip-ink: none; }
+.ci-track { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+.ci-beats { flex: 1; min-width: 0; display: flex; gap: 4px; }
+.ci-beat { flex: var(--w) 1 0; min-width: 6px; height: 20px; padding: 6px 0; border: 0; background: transparent; border-radius: 0; }
+.ci-beat i { display: block; box-sizing: border-box; height: 8px; overflow: hidden; background: var(--panel); border: 1.5px solid var(--line); border-radius: var(--wobble-s); }
+.ci-beat i b { display: block; height: 100%; width: calc(var(--p, 0) * 100%); background: var(--text); }
+.ci-beat.cur i { border-color: var(--bad); }
+.ci-time { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ci-bar .pg-row { align-items: stretch; }
+.ci-ib { display: grid; place-items: center; width: 40px; padding: 0; box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12); }
+.ci-ib .ic { width: 22px; height: 22px; }
+.ci-play { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 96px; font-size: 17px; }
+.ci-play .ic { width: 20px; height: 20px; }
+.ci-about { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 2px; max-width: 200px; padding: 2px 2px 2px 10px; font-size: 14px; color: var(--bad); background: #fff5f5; border: 2px solid var(--bad); border-radius: var(--wobble-s); }
+.ci-about span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-about button { border: 0; background: transparent; padding: 0 2px; color: var(--bad); display: grid; place-items: center; }
+.ci-bar textarea { min-width: 0; }
+.ci-bar .pg-mic .ic { width: 22px; height: 22px; }
+/* The answer: a speech bubble over the bar, as imagine's next-move tip. */
+.ci-answer {
+  position: absolute; left: 50%; bottom: calc(100% + 14px); transform: translateX(-50%); z-index: 5; box-sizing: border-box;
+  width: max-content; max-width: min(620px, calc(100vw - 24px)); display: flex; align-items: flex-start; gap: 6px; padding: 8px 6px 8px 14px;
+  font-size: 16px; background: #fff9db; border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12);
+}
+.ci-answer::before, .ci-answer::after { content: ""; position: absolute; left: 50%; border: solid transparent; }
+.ci-answer::before { top: 100%; margin-left: -10px; border-width: 10px 10px 0; border-top-color: var(--line); }
+.ci-answer::after { top: calc(100% - 1px); margin-left: -7px; border-width: 8px 7px 0; border-top-color: #fff9db; }
+.ci-answer span { flex: 1; }
+.ci-answer b { font-weight: 400; color: #e8590c; }
+.ci-answer button { flex: none; border: 0; padding: 0 4px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+
+/* The pace, bottom left, as imagine's zoom. */
+.ci-pace .ci-pct { min-width: 64px !important; }
+
+/* ---------- phones and small windows: the sidebar folds into a button, as in imagine ---------- */
+@media (max-width: 640px), (max-height: 500px) {
+  .pg-fold { display: flex; }
+  #side:not(.open) { display: none; }
+  .ci-notes, .pg-hint { display: none !important; }
+  .ci-name { font-size: 24px; }
+  .ci-bar { bottom: 8px; width: calc(100% - 16px); }
+  .ci-bar .pg-row { flex-wrap: wrap; }
+  .ci-bar textarea { flex: 1 1 60%; order: 2; }
+  .ci-bar .ci-about { order: 1; }
+  .ci-bar .pg-mic, .ci-bar #sendBtn { order: 3; }
+  .ci-now { font-size: 17px; }
+  .ci-prev { display: none; }
+  .ci-pace { display: none; }
+}

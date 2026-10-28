@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>rt-draw v2 · course in imagine</title>
+</head>
+<body>
+  <div class="pg">
+    <div class="cv" id="board">
+      <div class="ci-page" id="page">
+        <div class="ci-name" id="pageName"></div>
+        <div class="ci-frame" id="stage">
+          <svg class="ci-edge" id="edge" aria-hidden="true"></svg>
+          <div class="canvas" id="canvas">
+            <div class="canvas-in" id="canvasIn"></div>
+            <svg class="ci-sk" id="sk" viewBox="0 0 960 600" aria-hidden="true"></svg>
+            <div class="spot" id="spot" hidden></div>
+            <svg class="ci-ink" id="ink" viewBox="0 0 960 600" aria-hidden="true"><g id="under"></g><g id="trail"></g><g id="pen"></g><g id="mine"></g></svg>
+            <div class="ci-dot" id="dot" hidden></div>
+          </div>
+          <div class="ci-over" id="over" hidden></div>
+        </div>
+      </div>
+      <div class="ci-notes" id="notes" aria-label="New words"></div>
+    </div>
+
+    <button class="pg-fold" id="fold" aria-expanded="false" aria-controls="side"><span id="foldName"></span></button>
+    <aside class="pg-panel" id="side" aria-label="Course">
+      <div class="lp-panel">
+        <div class="lp-project"><span id="logo"></span><span class="lp-name" id="courseName"></span></div>
+        <div class="lp-head"><span>Chapters</span><button id="wordsBtn2" title="Every word in the course">Words</button></div>
+        <ul class="lp-tree" id="chapters"></ul>
+        <div class="lp-head"><span>Said so far</span><span class="ci-count" id="saidCount"></span></div>
+        <ul class="lp-history" id="lines"></ul>
+      </div>
+    </aside>
+
+    <div class="pg-topline"><div class="pg-state" id="state"></div></div>
+    <div class="pg-hint" id="hint" hidden><span>Space pauses · ← → a line at a time · R says it again · circle anything to ask about it</span><button id="hintX" aria-label="Hide this tip"></button></div>
+
+    <div class="pg-tools">
+      <button class="pg-tool" id="wordsBtn" title="Words (W)" aria-label="Words"></button>
+      <button class="pg-tool" id="askBtn" title="Ask about this (A)" aria-label="Ask about this"></button>
+      <div class="st">
+        <button class="st-gear" id="gear" title="Tweaks (T)" aria-label="Tweaks" aria-expanded="false"></button>
+        <div class="st-menu" id="tweaks" hidden></div>
+      </div>
+    </div>
+    <aside class="st-menu ci-words" id="words" hidden aria-label="Words">
+      <div class="ci-words-h"><span class="st-title">Every word in the course</span><button class="ci-x" id="wordsX" aria-label="Close"></button></div>
+      <input type="search" id="wordSearch" placeholder="Find a word" aria-label="Find a word">
+      <div class="ci-word-list" id="wordList"></div>
+    </aside>
+
+    <div class="pg-bar ci-bar" id="bar">
+      <div class="ci-answer" id="answer" hidden></div>
+      <div class="ci-said" aria-live="polite"><p class="ci-prev" id="prev"></p><p class="ci-now" id="now"></p></div>
+      <div class="ci-track"><div class="ci-beats" id="beats" aria-label="Lines in this chapter"></div><span class="ci-time" id="time"></span></div>
+      <div class="pg-row">
+        <button class="ci-ib" id="backBtn" title="Previous line (←)" aria-label="Previous line"></button>
+        <button class="pg-send ci-play" id="playBtn"></button>
+        <button class="ci-ib" id="fwdBtn" title="Next line (→)" aria-label="Next line"></button>
+        <button class="ci-ib" id="againBtn" title="Say that again (R)" aria-label="Say that again"></button>
+        <span class="ci-about" id="about" hidden></span>
+        <textarea id="askInput" rows="1" placeholder="Ask about it, or circle something first"></textarea>
+        <button class="pg-mic" id="micBtn" title="Ask out loud" aria-label="Ask out loud"></button>
+        <button class="pg-send" id="sendBtn">Ask</button>
+      </div>
+    </div>
+
+    <div class="cv-zoom ci-pace" id="pace" aria-label="Pace"></div>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

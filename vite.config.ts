@@ -5,7 +5,7 @@ import { ttsApi } from "./dev/tts-plugin.ts";
 import { recordApi } from "./evals/pages/record.ts";
 import { sttToken } from "./playgrounds/speech/token-plugin.ts";
 
-const pages = ["render", "ops", "ink", "hittest", "marks", "speech", "link", "shot", "coords", "tidy", "describe", "resolve", "draw", "picture", "router", "board", "camera"];
+const pages = ["render", "ops", "ink", "hittest", "marks", "speech", "link", "shot", "coords", "tidy", "describe", "resolve", "draw", "picture", "router", "board", "camera", "course", "course-imagine", "course-flow"];
 
 export default defineConfig({
   // The eval's one endpoint here: the draw playground's ?record=1 sends. Eval HQ is the PGX's (evals/pages.vite.config.ts).

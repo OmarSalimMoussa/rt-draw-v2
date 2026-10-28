@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>rt-draw v2 · courses in imagine, end to end</title>
+</head>
+<body>
+  <!-- The mockup's own strip: the story, step by step. Everything under it is imagine. -->
+  <header class="cf-strip" aria-label="Mockup steps">
+    <div class="cf-what"><b>Mockup</b><span>Courses in imagine, end to end</span></div>
+    <ol class="cf-steps" id="steps"></ol>
+    <div class="cf-say"><b id="stepTitle"></b><span id="stepSay"></span></div>
+    <label class="cf-newtoggle"><input type="checkbox" id="showNew" checked> Mark what's new</label>
+    <div class="cf-nav"><button id="prevStep" aria-label="Previous step">‹</button><button id="nextStep" aria-label="Next step">›</button></div>
+  </header>
+
+  <div class="pg" id="app">
+    <div class="cv">
+      <svg class="cf-world" id="world" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+    </div>
+    <aside class="pg-panel"><div class="lp-panel" id="side"></div></aside>
+    <div class="pg-topline"><div class="pg-state" id="state" hidden></div></div>
+    <div class="pg-tools" id="tools"></div>
+    <div class="pg-bar" id="bar">
+      <div class="cf-tip" id="tip" hidden></div>
+      <div class="pg-row">
+        <textarea id="say" rows="2" readonly></textarea>
+        <button class="pg-mic cf-clip" id="clip" title="Bring in documents" aria-label="Bring in documents"></button>
+        <button class="pg-mic" id="mic" aria-label="Talk"></button>
+        <button class="pg-send" id="send">Send</button>
+      </div>
+    </div>
+    <div class="cv-zoom" id="zoom"></div>
+
+    <div class="pv" id="pv" hidden>
+      <header class="pv-bar" id="pvBar"></header>
+      <div class="pv-main"><div class="pv-stage cf-stage" id="pvStage"></div></div>
+      <div class="cf-narr" id="narr"></div>
+    </div>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

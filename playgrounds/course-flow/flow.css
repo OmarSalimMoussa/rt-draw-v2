@@ -1,0 +1,143 @@
+/* Courses in imagine, end to end: only what the mockup adds. imagine's own look comes from app/src/styles.css and
+   app/src/preview/preview.css, unchanged. The strip on top is the mockup talking, so it's in a plain font, not imagine's. */
+[hidden] { display: none !important; }
+:root { --strip: 84px; --new: #1971c2; }
+
+/* ---------- the mockup's strip ---------- */
+.cf-strip {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40; box-sizing: border-box; min-height: var(--strip);
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 18px; padding: 10px 16px;
+  background: #1e1e1e; color: #f1f3f5; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.cf-strip button { font: inherit; border-radius: 8px; }
+.cf-what { display: flex; flex-direction: column; line-height: 1.25; }
+.cf-what b { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #ffd43b; }
+.cf-what span { font-size: 13px; color: #adb5bd; white-space: nowrap; }
+.cf-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; }
+.cf-steps button {
+  width: 28px; height: 28px; padding: 0; border: 1.5px solid #495057; border-radius: 50%; background: transparent; color: #adb5bd;
+  font-variant-numeric: tabular-nums; animation: none !important;
+}
+.cf-steps button.past { background: #343a40; color: #dee2e6; }
+.cf-steps button.on { background: #f8f9fa; border-color: #f8f9fa; color: #1e1e1e; font-weight: 700; }
+.cf-steps button:hover:not(.on) { border-color: #dee2e6; color: #fff; }
+.cf-say { min-width: 0; display: flex; flex-direction: column; }
+.cf-say b { font-size: 15px; }
+.cf-say span { color: #ced4da; }
+.cf-newtoggle { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: #a5d8ff; cursor: pointer; }
+.cf-newtoggle input { accent-color: #4dabf7; margin: 0; }
+.cf-nav { display: flex; gap: 4px; }
+.cf-nav button { width: 34px; height: 34px; padding: 0; font-size: 20px; line-height: 1; border: 1.5px solid #495057; background: transparent; color: #f8f9fa; animation: none !important; }
+.cf-nav button:hover { border-color: #f8f9fa; }
+
+/* imagine sits under the strip. */
+.pg { top: var(--strip); }
+.pv { top: var(--strip); }
+
+/* ---------- what's new: a dashed blue outline and a "new" tag ---------- */
+body.show-new .cf-new { outline: 2px dashed var(--new); outline-offset: 4px; }
+body.show-new .cf-new:not(textarea, .cf-narr)::after {
+  content: "new"; position: absolute; top: -14px; right: -10px; padding: 0 5px; font: 700 11px/16px system-ui, sans-serif;
+  color: #fff; background: var(--new); border-radius: 4px; pointer-events: none;
+}
+body.show-new .cf-new:not(.cf-narr) { position: relative; }
+body.show-new .cf-narr.cf-new::after {
+  content: "new: narration"; position: absolute; top: -12px; left: 16px; padding: 0 6px; font: 700 11px/18px system-ui, sans-serif;
+  color: #fff; background: var(--new); border-radius: 4px;
+}
+body.show-new .cf-new-inline { color: var(--new); }
+body:not(.show-new) .cf-newsvg { display: none; }
+
+/* ---------- the board ---------- */
+.cf-world { position: absolute; overflow: visible; pointer-events: none; z-index: 1; }
+:is(.cf-world, .cf-page) { font-family: var(--hand); }
+:is(.cf-world, .cf-page) path { vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+:is(.cf-world, .cf-page) text { fill: #1e1e1e; }
+:is(.cf-world, .cf-page) text.muted { fill: #868e96; }
+:is(.cf-world, .cf-page) text.name { fill: #495057; }
+:is(.cf-world, .cf-page) text.link { fill: var(--new); text-decoration: underline; }
+:is(.cf-world, .cf-page) text.on-ink { fill: #fff; }
+:is(.cf-world, .cf-page) text.red { fill: var(--bad); font-weight: 700; }
+:is(.cf-world, .cf-page) text.blue { fill: var(--new); font-family: system-ui, sans-serif; font-weight: 700; }
+:is(.cf-world, .cf-page) text.green { fill: var(--ok); }
+.cf-cue text { fill: #fff !important; font-family: system-ui, sans-serif; font-weight: 700; }
+.cf-newsvg rect { vector-effect: non-scaling-stroke; }
+
+/* Documents drop onto the board; planned pages appear one by one; the chapter being drawn pulses. */
+.cf-drop { animation: cf-drop 0.5s cubic-bezier(.2, .9, .3, 1.2) both; }
+@keyframes cf-drop { from { opacity: 0; transform: translateY(-60px) rotate(-4deg); } }
+.cf-appear { animation: cf-appear 0.45s ease both; }
+@keyframes cf-appear { from { opacity: 0; } }
+.cf-pulse { animation: cf-pulse 1.4s ease-in-out infinite; }
+@keyframes cf-pulse { 50% { opacity: 0.45; } }
+
+/* imagine's bar, with the paperclip and the tip above it. */
+.pg-bar .pg-mic .ic { width: 24px; height: 24px; }
+.cf-tip { padding: 0 4px; font-size: 14px; color: var(--muted); }
+.cf-tip span::before { content: "Tip: "; color: #1971c2; }
+
+/* ---------- Preview, playing a course ---------- */
+.pv { padding-bottom: 200px; }
+.cf-stage { width: min(1100px, 100%, calc((100vh - var(--strip) - 330px) * 1.6)); aspect-ratio: 16 / 10; }
+.cf-page { display: block; width: 100%; height: 100%; }
+.cf-dot {
+  position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--bad); pointer-events: none;
+  box-shadow: 0 0 0 6px rgb(224 49 49 / 0.18), 0 0 18px rgb(224 49 49 / 0.5);
+  animation-duration: 7s; animation-iteration-count: infinite; animation-timing-function: ease-in-out;
+}
+.cf-narr {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 3; box-sizing: border-box; width: min(860px, calc(100% - 32px));
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--panel);
+  border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.15);
+}
+.cf-prev { margin: 0 4px; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cf-now { margin: 0 4px; min-height: 2.6em; font-size: 21px; line-height: 1.3; }
+mark.said { background: none; color: inherit; text-decoration: underline 2px var(--bad); text-underline-offset: 5px; text-decoration-skip-ink: none; }
+.cf-beats { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+.cf-beats i { flex: var(--w) 1 0; height: 8px; box-sizing: border-box; overflow: hidden; background: var(--panel); border: 1.5px solid var(--line); border-radius: var(--wobble-s); }
+.cf-beats b { display: block; height: 100%; background: var(--text); }
+.cf-beats span { margin-left: 6px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cf-narr .pg-row { align-items: stretch; }
+.cf-ib { display: grid; place-items: center; width: 40px; padding: 0; box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12); }
+.cf-ib .ic { width: 22px; height: 22px; }
+.cf-play { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 96px; font-size: 17px; }
+.cf-play .ic, .cf-back .ic { width: 20px; height: 20px; }
+.cf-narr textarea {
+  flex: 1; min-width: 0; resize: none; font: inherit; font-size: 16px; padding: 8px; background: #fff;
+  border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12);
+}
+.cf-narr .pg-mic .ic { width: 24px; height: 24px; }
+.cf-back {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 17px; font-weight: 700;
+  color: #fff; background: #1e1e1e; border-color: #1e1e1e;
+}
+
+/* ---------- phones ---------- */
+@media (max-width: 900px) {
+  .cf-strip { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "steps toggle nav" "say say say"; gap: 8px 12px; }
+  .cf-what { display: none; }
+  .cf-steps { grid-area: steps; }
+  .cf-newtoggle { grid-area: toggle; justify-self: end; }
+  .cf-nav { grid-area: nav; }
+  .cf-say { grid-area: say; }
+  .cf-say span { font-size: 13px; }
+}
+@media (max-width: 640px) {
+  .cf-strip { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "steps nav" "say say"; padding: 8px 12px; }
+  .cf-steps button { width: 26px; height: 26px; }
+  .cf-newtoggle { display: none; }
+  .pg-panel { display: none; }
+  .pv-bar select { max-width: 120px; }
+  .cf-stage { width: 100%; }
+  .cf-now { font-size: 17px; }
+  .cf-prev { display: none; }
+  .cf-narr { bottom: 8px; width: calc(100% - 16px); padding: 8px; }
+  /* The playing controls on one line, asking (or the way back) on the next. */
+  .cf-narr .pg-row { flex-wrap: wrap; }
+  .cf-narr .pg-row::before { content: ""; order: 4; flex-basis: 100%; }
+  .cf-narr textarea, .cf-back { order: 5; }
+  .cf-narr .pg-row > .pg-mic { order: 6; }
+  .cf-narr .pg-row > .pg-send:last-child { order: 7; }
+  .cf-back { flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .cf-drop, .cf-appear, .cf-pulse, .cf-dot { animation: none !important; } }

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>rt-draw v2 · course</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@700&display=swap">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <svg class="seal" viewBox="0 0 34 34" aria-hidden="true"><rect x="3" y="6" width="28" height="20" rx="4" fill="none" stroke="var(--accent)" stroke-width="2.4"/><circle cx="21" cy="15" r="3.2" fill="var(--marker)"/><path d="M9 21l5-6 4 4" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="brand-t"><div class="b-name" id="courseName"></div><div class="b-sub" id="where"></div></div>
+    </div>
+    <nav class="bar-acts" aria-label="Course tools">
+      <button class="tb" id="contentsBtn" aria-controls="contents">Contents</button>
+      <button class="tb" id="wordsBtn" aria-controls="words">Words</button>
+      <button class="tb" id="askBtn" aria-controls="ask">Ask</button>
+      <button class="tb quiet" id="tweaksBtn" aria-controls="tweaks">Tweaks</button>
+    </nav>
+  </header>
+  <nav class="map" id="map" aria-label="Chapters"></nav>
+
+  <main class="room">
+    <section class="theatre" aria-label="Lesson">
+      <div class="stage" id="stage">
+        <div class="canvas" id="canvas">
+          <div class="canvas-in" id="canvasIn"></div>
+          <div class="spot" id="spot" hidden></div>
+          <svg class="overlay" viewBox="0 0 960 600" aria-hidden="true"><g id="sweep"></g><g id="trail"></g><g id="pen"></g></svg>
+          <div class="laser" id="laser" hidden></div>
+        </div>
+        <div class="paused" id="paused" hidden>Paused · click anything in the picture to ask about it</div>
+        <p class="sub-on" id="subOn" aria-hidden="true"></p>
+        <div class="over" id="over" hidden></div>
+      </div>
+      <div class="sub" id="sub" aria-live="polite"><p class="sub-prev" id="subPrev"></p><p class="sub-now" id="subNow"></p></div>
+      <div class="ctl">
+        <div class="ctl-main">
+          <button class="ib" id="backBtn" aria-label="Previous line" title="Previous line (←)"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+          <button class="play" id="playBtn" aria-label="Play"><svg viewBox="0 0 24 24" class="i-play"><path d="M8 5.5v13l11-6.5z"/></svg><svg viewBox="0 0 24 24" class="i-pause"><path d="M8 5h3v14H8zM13 5h3v14h-3z"/></svg></button>
+          <button class="ib" id="fwdBtn" aria-label="Next line" title="Next line (→)"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+          <button class="ib" id="againBtn" aria-label="Say that again" title="Say that again (R)"><svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 1 0 2.1-5"/><path d="M5 4v4h4"/></svg></button>
+        </div>
+        <div class="beats" id="beats" aria-label="Lines in this chapter"></div>
+        <span class="time" id="time"></span>
+        <div class="seg" id="pace" role="radiogroup" aria-label="Pace"></div>
+      </div>
+    </section>
+
+    <aside class="notes" id="notes" aria-label="New words">
+      <div class="notes-h"><span class="lbl">New words</span><span class="lbl" id="noteCount"></span></div>
+      <div class="note-list" id="noteList"></div>
+      <div class="files" id="files"></div>
+    </aside>
+  </main>
+
+  <aside class="drawer left" id="contents" aria-label="Contents" hidden>
+    <div class="dr-h"><h2>Contents</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="dr-b" id="toc"></div>
+  </aside>
+  <aside class="drawer" id="words" aria-label="Words" hidden>
+    <div class="dr-h"><h2>Words</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <input type="search" id="wordSearch" placeholder="Find a word" aria-label="Find a word">
+    <div class="dr-b" id="wordList"></div>
+  </aside>
+  <aside class="drawer" id="ask" aria-label="Ask" hidden>
+    <div class="dr-h"><h2>Ask</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="ask-ctx" id="askCtx"></div>
+    <div class="dr-b ask-log" id="askLog"></div>
+    <div class="chips" id="askSug"></div>
+    <form class="ask-form" id="askForm"><textarea id="askInput" rows="2" placeholder="Ask in your own words"></textarea><button class="tb solid" type="submit">Ask</button></form>
+  </aside>
+  <aside class="tweaks" id="tweaks" aria-label="Tweaks" hidden>
+    <div class="dr-h"><h2>Tweaks</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <div id="tweakList"></div>
+    <p class="tw-note">Saved in this browser. Press T to show or hide.</p>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
