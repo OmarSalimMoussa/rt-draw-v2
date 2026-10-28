@@ -144,8 +144,17 @@ const AHEAD = 2;
 
 const lines = (t: string) => t.split("\n").map((l) => l.trim()).filter(Boolean);
 const checkCell = (c?: Check) => (c ? `<td class="${c.pass ? "ok" : "bad"}">${c.pass ? "✓" : `✗ ${esc(c.why)}`}</td>` : '<td class="muted">-</td>');
-const wordsHtml = (w: Card["send"]["words"], label: string) =>
-  typeof w === "string" ? `<span>${esc(w || label || "(nothing said)")}</span>` : w.length ? w.map((x) => `<span><i>${(x.t0 / 1000).toFixed(1)}s</i>${esc(x.word)}</span>`).join("") : `<span>${esc(label || "(nothing said)")}</span>`;
+/** What they said as plain text: the words carry their times, which only the replay needs. */
+const saidText = (w: Card["send"]["words"], label: string) => (typeof w === "string" ? w : w.map((x) => x.word).join(" ")) || label || "(nothing said)";
+/** A list's item is a field that grows with its text; Enter adds the next, Backspace on an empty one drops it. */
+const itemHtml = (f: string, t: string) => `<li><textarea data-edit="${f}" rows="1" placeholder="none" aria-label="${f === "should" ? "Should" : "Must not"}">${esc(t)}</textarea></li>`;
+/** Fields size to their text with CSS (field-sizing); where a browser can't yet, their height follows it from here. */
+const fit = (t: HTMLTextAreaElement) => {
+  if (CSS.supports("field-sizing", "content")) return;
+  t.style.height = "auto";
+  t.style.height = `${t.scrollHeight}px`;
+};
+const listHtml = (f: string, items: string[]) => `<ul class="rv-list ${f}">${(items.length ? items : [""]).map((t) => itemHtml(f, t)).join("")}</ul>`;
 const shots = (c: Card): [Which, string][] => [["before", "before, their ink numbered"], ["then", "what the app made then"], ["champion", c.champion ? `today's champion (${c.champion.sha.slice(0, 7)})` : "today's champion"], ["gold", "gold"]];
 
 /** A card and its images as blobs: the server sends them no-store, so the browser's cache can't hold the next ones ready. */
@@ -172,20 +181,29 @@ function cardHtml(l: Loaded) {
   const e = c.expectation.now;
   const checks = c.gold?.checks ?? [];
   const failing = (k: "then" | "now" | "gold") => checks.filter((x) => x[k] && !x[k]!.pass).length;
+  const context = [
+    c.previous && `The send before: “${esc(c.previous.said)}”`,
+    c.send.marks.length && `Ink, as the app read it: ${esc(c.send.marks.join("; "))}`,
+    c.send.refs && `What the app took them to mean: ${esc(c.send.refs)}`,
+    c.feedback.length && `Their written feedback on the project: ${c.feedback.map((f) => `“${esc(f.text)}”`).join("; ")}`,
+  ].filter(Boolean).map((t) => `<p>${t}</p>`).join("");
+  const said = saidText(c.send.words, c.send.label);
+  const why = c.gold?.why ?? c.gold?.error ?? "";
   return `<div class="rv-shots">${shots(c).map(([w, cap]) => `<figure><figcaption>${esc(cap)}</figcaption>${l.urls[w] ? `<img src="${l.urls[w]}" alt="${esc(cap)}" data-zoom="${w}">` : `<div class="none">${w === "gold" ? "no gold: the expectation judges it" : "none"}</div>`}</figure>`).join("")}</div>
     <div class="rv-side">
-      <div class="row"><span class="chip ${c.state}">${esc(statusOf(c))}</span><span class="muted">${esc(c.project)} · send ${c.send.n} of ${c.send.of} · ${c.tester ? `a tester's${c.split === "hold" ? " (R-hold: R1 only)" : ""}` : "yours"} · ${esc(new Date(c.at).toLocaleString())}${c.send.kind === "build" ? " · a preview click" : ""}${c.send.status && c.send.status !== "done" ? ` · ${esc(c.send.status)}` : ""}</span></div>
-      <div class="words">${wordsHtml(c.send.words, c.send.label)}</div>
-      ${c.previous ? `<p class="muted">The send before: “${esc(c.previous.said)}”</p>` : ""}${c.send.marks.length ? `<p class="muted">Ink, as the app read it: ${esc(c.send.marks.join("; "))}</p>` : ""}${c.send.refs ? `<p class="muted">What the app took them to mean: ${esc(c.send.refs)}</p>` : ""}
-      ${c.feedback.length ? `<p class="muted">Their written feedback on the project: ${c.feedback.map((f) => `“${esc(f.text)}”`).join("; ")}</p>` : ""}
-      ${c.triage ? `<p><b>Triage</b>: ${c.triage.landed === "yes" ? "landed" : c.triage.landed === "partly" ? "partly landed" : "missed"}${c.triage.categories.length ? ` · ${esc(c.triage.categories.join(", "))}` : ""} · ${esc(c.triage.evidence)}</p>` : ""}
-      <section><h3>Meant${c.meant.pinned ? " · your edit" : ""}</h3><textarea data-edit="meant" rows="2">${esc(c.meant.now)}</textarea>${c.meant.pinned && c.meant.drafted ? `<p class="muted">Triage said: ${esc(c.meant.drafted)} (clear yours to take it back)</p>` : ""}</section>
+      <div class="rv-meta"><span class="chip ${c.state}">${esc(statusOf(c))}</span><span class="muted">${esc(c.project)} · send ${c.send.n} of ${c.send.of} · ${c.tester ? `a tester's${c.split === "hold" ? " (R-hold: R1 only)" : ""}` : "yours"} · ${esc(new Date(c.at).toLocaleString())}${c.send.kind === "build" ? " · a preview click" : ""}${c.send.status && c.send.status !== "done" ? ` · ${esc(c.send.status)}` : ""}</span></div>
+      <p class="words${said.split(" ").length > 40 ? " long" : ""}">${esc(said)}</p>
+      <section><h3>Meant${c.meant.pinned ? " · your edit" : ""}</h3><textarea data-edit="meant" rows="1">${esc(c.meant.now)}</textarea>${c.meant.pinned && c.meant.drafted ? `<p class="muted">Triage said: ${esc(c.meant.drafted)} (clear yours to take it back)</p>` : ""}</section>
       <section><h3>Expectation${c.expectation.from === "owner" ? " · your edit" : c.expectation.from === "gold" ? " · gold's rubric" : c.expectation.from === "judge" ? " · drafted by the judge" : ""}</h3>
-        <label class="muted">Should, one a line</label><textarea data-edit="should" rows="3">${esc(e?.should.join("\n") ?? "")}</textarea>
-        <label class="muted">Must not, one a line</label><textarea data-edit="mustNot" rows="2">${esc(e?.mustNot.join("\n") ?? "")}</textarea>${c.expectation.pinned ? '<p class="muted">Clear both to take your edit back.</p>' : ""}</section>
-      ${c.gold ? `<p><b>Gold</b>: ${esc(c.gold.why ?? c.gold.error ?? "")}</p>${c.gold.problems.length ? `<p class="bad">${c.gold.problems.map(esc).join("<br>")}</p>` : ""}` : ""}
-      ${checks.length ? `<details><summary>Gold's free checks: ${checks.length}, failing then ${failing("then")}, now ${failing("now")}, on gold ${failing("gold")}</summary><div class="scroll"><table class="marks"><thead><tr><th>Check</th><th>then</th><th>now</th><th>gold</th></tr></thead><tbody>${checks.map((k) => `<tr><td><code>${esc(JSON.stringify(k.check))}</code></td>${checkCell(k.then)}${checkCell(k.now)}${checkCell(k.gold)}</tr>`).join("")}</tbody></table></div></details>` : ""}
-      <textarea data-note rows="2" placeholder="A note for yourself (N; saved as you type, kept with your verdicts under real/)">${esc(c.review.note ?? "")}</textarea>
+        <h4>Should</h4>${listHtml("should", e?.should ?? [])}
+        <h4>Must not</h4>${listHtml("mustNot", e?.mustNot ?? [])}${c.expectation.pinned ? '<p class="muted">Clear every item to take your edit back.</p>' : ""}</section>
+      <textarea data-note rows="1" placeholder="A note for yourself (N; saved as you type, kept with your verdicts under real/)">${esc(c.review.note ?? "")}</textarea>
+    </div>
+    <div class="rv-more muted">
+      ${context}
+      ${c.triage ? `<p><b>Triage</b>: ${c.triage.landed === "yes" ? "landed" : c.triage.landed === "partly" ? "partly landed" : "missed"}${c.triage.categories.length ? ` · ${esc(c.triage.categories.join(", "))}` : ""} · ${esc(c.triage.evidence)}</p>` : ""}
+      ${why ? `<p><b>Gold</b>: ${esc(why)}</p>` : ""}${c.gold?.problems.length ? `<p class="bad">${c.gold.problems.map(esc).join("<br>")}</p>` : ""}
+      ${checks.length ? `<details><summary>Gold's free checks: ${checks.length}, failing then ${failing("then")}, now ${failing("now")}, on gold ${failing("gold")}</summary><table class="marks"><thead><tr><th>Check</th><th>then</th><th>now</th><th>gold</th></tr></thead><tbody>${checks.map((k) => `<tr><td><code>${esc(JSON.stringify(k.check))}</code></td>${checkCell(k.then)}${checkCell(k.now)}${checkCell(k.gold)}</tr>`).join("")}</tbody></table></details>` : ""}
     </div>`;
 }
 
@@ -203,6 +221,7 @@ function actsHtml(c: Card) {
  * fails says so, and K goes back to it.
  */
 function review(keys: string[], start = 0) {
+  const was = scrollY;
   let i = start, changed = false, current: Loaded | undefined, zoomed: Which | undefined, loading: ReturnType<typeof setTimeout> | undefined;
   const tally = { approved: 0, rejected: 0, failed: 0 };
   const cache = new Map<string, Promise<Loaded>>();
@@ -268,7 +287,8 @@ function review(keys: string[], start = 0) {
     current = l;
     const c = l.card;
     main.innerHTML = cardHtml(l);
-    main.scrollTop = 0;
+    main.querySelectorAll("textarea").forEach(fit);
+    scrollTo(0, 0);
     acts.innerHTML = actsHtml(c);
     const el = main.querySelector<HTMLTextAreaElement>("[data-note]")!;
     const n: NonNullable<typeof note> = { el, sent: el.value };
@@ -277,12 +297,27 @@ function review(keys: string[], start = 0) {
     el.addEventListener("blur", () => void saveNote(c.key, n));
   };
   // Approve carries the edits: its label says so once a field differs from the card as shown.
-  main.addEventListener("input", () => {
+  const relabel = () => {
     const c = current?.card;
     const b = acts.querySelector<HTMLButtonElement>('[data-act="approve"]');
     if (c && b && c.state !== "skipped") b.innerHTML = `${Object.keys(edits(c)).length ? "Save my edits and approve" : "Approve"} <kbd>A</kbd>`;
+  };
+  main.addEventListener("input", (e) => (e.target instanceof HTMLTextAreaElement && fit(e.target), relabel()));
+  main.addEventListener("keydown", (e) => {
+    const t = e.target as HTMLElement, li = t.closest("li");
+    if (!(t instanceof HTMLTextAreaElement) || !li) return;
+    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      li.insertAdjacentHTML("afterend", itemHtml(t.dataset.edit!, ""));
+      li.nextElementSibling!.querySelector("textarea")!.focus();
+    } else if (e.key === "Backspace" && !t.value && li.parentElement!.children.length > 1) {
+      e.preventDefault();
+      (li.previousElementSibling ?? li.nextElementSibling)!.querySelector("textarea")!.focus();
+      li.remove();
+      relabel();
+    }
   });
-  const val = (f: string) => main.querySelector<HTMLTextAreaElement>(`[data-edit="${f}"]`)?.value ?? "";
+  const val = (f: string) => [...main.querySelectorAll<HTMLTextAreaElement>(`[data-edit="${f}"]`)].map((t) => t.value).join("\n");
   /** Only what differs from the card as shown: an untouched field keeps its label, and where it came from. */
   const edits = (c: Card) => {
     const out: Record<string, unknown> = {};
@@ -353,6 +388,7 @@ function review(keys: string[], start = 0) {
     if (current && note) void saveNote(current.card.key);
     host.remove();
     document.body.classList.remove("reviewing");
+    scrollTo(0, was);
     for (const p of cache.values()) forget(p);
     if (location.hash === "#go") history.replaceState(null, "", location.pathname + location.search);
     if (changed) void refresh();

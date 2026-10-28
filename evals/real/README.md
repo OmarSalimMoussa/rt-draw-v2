@@ -81,8 +81,9 @@ card at a time over the whole window. A card shows four boards:
 - **now:** the champion's replay;
 - **gold.**
 
-Beside them are what they said and when, the meaning and expectation it will be judged by, and gold's checks on
-each board.
+Beside them are what they said and the meaning and expectation it will be judged by, as text you can edit in place
+(each list item its own line; <kbd>Enter</kbd> adds one). Under them are the send before, triage's evidence, gold's
+reasons and its checks on each board. Nothing scrolls but the page, and the actions stay at the bottom of the window.
 
 Keys: <kbd>A</kbd> approves, with any edit to the meaning or expectation (<kbd>Ctrl</kbd>+<kbd>Enter</kbd> from a
 field); <kbd>1</kbd>–<kbd>6</kbd> reject for that reason; <kbd>J</kbd> / <kbd>K</kbd> step; <kbd>Z</kbd> zooms a board
