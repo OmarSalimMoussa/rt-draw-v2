@@ -1,5 +1,5 @@
-// The gear at the top right of the editor, and its menu: who is signed in, and starting
-// from scratch; for the admin (and on the dev server) also which model draws and the
+// The gear at the top right of the editor, and its menu: who is signed in, the tour, and
+// starting from scratch; for the admin (and on the dev server) also which model draws and the
 // latency overlay. A tester never sees the models or how it works inside.
 // (v1's SettingsMenu.tsx, with v2's models.)
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -11,7 +11,8 @@ import { Icon } from "./sketch/Icon.tsx";
 
 const usd = (n: number) => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
 
-export function SettingsMenu() {
+/** `onTour`: shows the editor's tour again (onboarding/Onboarding.tsx). */
+export function SettingsMenu({ onTour }: { onTour(): void }) {
   const [open, setOpen] = useState(false);
   const model = useSyncExternalStore(onSettings, getModel);
   const [wiping, setWiping] = useState<"ask" | "busy" | null>(null);
@@ -75,6 +76,16 @@ export function SettingsMenu() {
               </label>
             </>
           )}
+          <button
+            type="button"
+            className="st-tour"
+            onClick={() => {
+              setOpen(false);
+              onTour();
+            }}
+          >
+            Watch the tour
+          </button>
           {wiping ? (
             <div className="st-wipe" role="group" aria-label="Start from scratch">
               <span>Delete all your projects and settings, and start over?</span>

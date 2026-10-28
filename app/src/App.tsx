@@ -8,7 +8,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type Clock, watch } from "../../evals/bridge/timing.ts";
 import { SCREEN, fitView, homeOf, pageName, pageTop, pagesOf, union } from "../../src/core/board.ts";
-import { groupStrokes } from "../../src/core/marks.ts";
+import { HitIndex } from "../../src/core/hittest.ts";
+import { groupStrokes, readMark } from "../../src/core/marks.ts";
 import { CALLS_EVENT, calls, forgetCallsBefore, modelOf, warmModel } from "../../src/core/model.ts";
 import { promptOf, thinkingOf } from "../../src/core/prompts.ts";
 import type { Box, Shape } from "../../src/core/scene.ts";
@@ -30,6 +31,8 @@ import { toStroke } from "./canvas/strokes.ts";
 import { type Rect, type View, boardRect, glideAt, sendView, toScene, viewShowing } from "./canvas/view.ts";
 import { isCompact, useCompact } from "./compact.ts";
 import { LatencyOverlay } from "./LatencyOverlay.tsx";
+import { Starters, Tip, Tour } from "./onboarding/Onboarding.tsx";
+import { type TipId, doneTip, nextTip, seeTour, tipsDone, tourSeen } from "./onboarding/tips.ts";
 import { type Building, Preview } from "./preview/Preview.tsx";
 import { buildEnded, buildJob } from "./preview/build.ts";
 import { hitClickable, previewHash, previewOfHash } from "./preview/preview.ts";
@@ -43,7 +46,7 @@ import { StatusBadge } from "./StatusBadge.tsx";
 import { Icon } from "./sketch/Icon.tsx";
 import { Logo } from "./sketch/Logo.tsx";
 import { MarkSketch } from "./sketch/MarkSketch.tsx";
-import { Voice, onInkClock, plainVoiceError } from "./speech/voice.ts";
+import { type Take, Voice, onInkClock, plainVoiceError } from "./speech/voice.ts";
 import { keepWarm } from "./warm.ts";
 
 /** Height kept clear at the top for the toolbar. */
@@ -326,6 +329,24 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     else if (sel && (el.selectionStart !== sel[0] || el.selectionEnd !== sel[1])) el.setSelectionRange(sel[0], sel[1]);
   });
 
+  // Onboarding (onboarding/tips.ts): the tour over an empty board the first time this browser opens one (and
+  // again from the settings), then one move to try at a time, each checked off the first time it's done.
+  const [touring, setTouring] = useState(() => !tourSeen() && empty);
+  const endTour = () => {
+    seeTour();
+    setTouring(false);
+  };
+  const [done, setDone] = useState(tipsDone);
+  const learn = (id: TipId) => {
+    if (done.has(id)) return;
+    doneTip(id);
+    setDone((d) => new Set(d).add(id));
+  };
+  const pageCount = pagesOf(board.shown()).length;
+  useEffect(() => {
+    if (pageCount > 1) learn("page");
+  }, [pageCount]);
+
   /**
    * A click in the preview that leads nowhere yet: a send that builds its page (build.ts), queued like any
    * other. The preview goes to the page at once, blank and pulsing, and fills in as the model draws it.
@@ -351,13 +372,23 @@ export function App({ hidden = false }: { hidden?: boolean }) {
     showPreview(b.to);
   }
 
-  function submit() {
+  /** `starter`: sent in place of the box (a starter, offered while the box is empty). */
+  function submit(starter?: string) {
     const taken = strokesRef.current;
-    if (!prompt.trim() && !taken.length) return;
+    if (!starter && !prompt.trim() && !taken.length) return;
+    // A circle around something, or an arrow, sent: those moves are learned.
+    if (taken.length && !(done.has("circle") && done.has("arrow"))) {
+      const hits = new HitIndex(board.scene);
+      for (const m of groupStrokes(taken, board.tuning)) {
+        const how = readMark(m, hits, board.tuning).how;
+        if (how === "loop") learn("circle");
+        if (how === "arrow") learn("arrow");
+      }
+    }
     const enter = performance.now();
     const ep = epoch.current;
-    // The box as it stands, its said words timed (the last of them may still be on their way from Scribe).
-    const { text, spoken, words } = voice.take(enter);
+    // The box as it stands, its said words timed (the last of them may still be on their way from Scribe); a starter is typed words.
+    const { text, spoken, words }: Take = starter ? { text: starter, spoken: false, words: Promise.resolve(starter) } : voice.take(enter);
     sender.enqueue({ label: text || "(drawing only)", spoken, strokes: taken, words: words.then((ws) => (typeof ws === "string" ? ws : onInkClock(ws, ep))), enter, clock0: ep });
     setStrokes([]);
     epoch.current = performance.now();
@@ -409,6 +440,8 @@ export function App({ hidden = false }: { hidden?: boolean }) {
   // What a visitor could click boils under the pointer on the board too, as in v1; the pen still draws.
   const [hovered, setHovered] = useState<string>();
   const holding = useRef(false);
+
+  const tip = nextTip(done);
 
   // Lost on the canvas: none of the pages is in view.
   const box = pagesBox();
@@ -490,7 +523,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
         <a className="pg-tool" href="/projects" title="All your projects" aria-label="All your projects">
           <Icon name="projects" size={18} />
         </a>
-        <SettingsMenu />
+        <SettingsMenu onTour={() => setTouring(true)} />
       </div>
 
       {compact && (
@@ -533,6 +566,8 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           submit();
         }}
       >
+        {empty && !strokes.length && !prompt.trim() && !busy && !board.busy && !touring && <Starters onPick={submit} />}
+        {tip && !empty && !busy && !board.busy && !previewing && !prompt.trim() && !voice.error && !touring && <Tip tip={tip} onSkip={() => learn(tip.id)} />}
         {voice.error && (
           <div className="pg-captions" aria-live="polite">
             <div className="bad">{seesInternals() ? voice.error : plainVoiceError(voice.error)}</div>
@@ -549,7 +584,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
                 : voice.listening
                   ? "Listening: talk and draw. Your words appear here to edit; press Enter to send."
                   : empty
-                    ? "Think out loud about your page, e.g. “a landing page for rubber ducks, big yellow hero with a duck photo…”"
+                    ? "Think out loud about anything: a website, a phone app, a whole desktop, a diagram, a drawing…"
                     : "Keep going: “make the hero blue”, “add pricing under that”, or circle something and say “move this up”…"
             }
             onChange={(e) => voice.type(e.target.value, e.target.selectionStart, e.target.selectionEnd)}
@@ -565,7 +600,11 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           <button
             type="button"
             className={voice.listening ? "pg-mic on" : "pg-mic"}
-            onClick={() => void (voice.listening ? voice.stop() : voice.start())}
+            onClick={() => {
+              if (voice.listening) return void voice.stop();
+              learn("talk");
+              void voice.start();
+            }}
             title={voice.listening ? "Stop listening" : "Talk; draw while you speak, then press Enter"}
             aria-label={voice.listening ? "Stop listening" : "Talk"}
             aria-pressed={voice.listening}
@@ -592,8 +631,14 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           board={board}
           page={pv}
           building={building}
-          onGo={showPreview}
-          onBuild={startBuild}
+          onGo={(page) => {
+            learn("preview");
+            showPreview(page);
+          }}
+          onBuild={(shape, from) => {
+            learn("preview");
+            startBuild(shape, from);
+          }}
           onLinked={() => !busy && void board.settle({ glideMs: 0 })}
           onEdit={editPage}
           onExit={exitPreview}
@@ -604,6 +649,7 @@ export function App({ hidden = false }: { hidden?: boolean }) {
           }}
         />
       )}
+      {touring && <Tour onClose={endTour} />}
     </div>
   );
 }

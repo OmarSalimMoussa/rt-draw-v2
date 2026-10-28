@@ -10,6 +10,7 @@ import { runScript } from "../../src/core/ops.ts";
 import { Scene, type SceneJSON } from "../../src/core/scene.ts";
 import type { Board } from "./board/board.ts";
 import { COMPACT } from "./compact.ts";
+import { STARTERS } from "./onboarding/tips.ts";
 import { setElk } from "./board/layout.ts";
 import type { LatencyLog } from "./board/latency.ts";
 import type { Sender } from "./board/sender.ts";
@@ -216,6 +217,62 @@ describe("the editor", () => {
     await act(() => sender.idle());
     expect(log.sends[0].status).toBe("done");
     expect(log.sends[0].ttfcMs).toBeUndefined();
+  });
+});
+
+describe("onboarding", () => {
+  beforeEach(() => {
+    localStorage.removeItem("rt-draw.tour");
+    localStorage.removeItem("rt-draw.tips");
+  });
+  const tip = () => document.querySelector(".ob-tip")?.textContent ?? "";
+
+  it("an empty board shows the tour once, then first drawings that send in one tap", async () => {
+    const a = project();
+    await open(a);
+    expect(document.querySelector(".ob-tour")).not.toBeNull();
+    expect(document.querySelector(".ob-starters")).toBeNull();
+    await act(async () => document.querySelector<HTMLButtonElement>(".ob-start")!.click());
+    expect(document.querySelector(".ob-tour")).toBeNull();
+    expect([...document.querySelectorAll(".ob-starter")].map((b) => b.textContent)).toEqual(STARTERS.map((s) => s.label));
+
+    fake.send = async (scene: Scene, _input, _tuning, hooks) => {
+      runScript(BOX_A, scene);
+      hooks.onOp?.({ line: BOX_A, ok: true, ms: 1 });
+      return sent;
+    };
+    await act(async () => document.querySelector<HTMLButtonElement>(".ob-starter")!.click());
+    await act(() => app()!.sender.idle());
+    await until(() => loadVersions(a).length === 1);
+    expect(loadVersions(a)[0].label).toBe(STARTERS[0].prompt);
+    expect(document.querySelector(".ob-starters")).toBeNull();
+    // Drawn: the first move to try, in the bubble.
+    await until(() => tip().includes("circle"));
+
+    // The tour doesn't come back on the next empty board, but the settings show it again.
+    await act(async () => navigate(`/?p=${project()}`));
+    await until(() => app()!.board.project !== a);
+    expect(document.querySelector(".ob-tour")).toBeNull();
+    expect(document.querySelector(".ob-starters")).not.toBeNull();
+    await act(async () => document.querySelector<HTMLButtonElement>(".st-gear")!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>(".st-tour")!.click());
+    expect(document.querySelector(".ob-tour")).not.toBeNull();
+  });
+
+  it("the bubble suggests one move at a time: × skips one, and doing one checks it off", async () => {
+    await open(project(doc(BOX_A)));
+    expect(document.querySelector(".ob-tour")).toBeNull();
+    expect(tip()).toContain("circle");
+    await act(async () => document.querySelector<HTMLButtonElement>(".ob-tip button")!.click());
+    expect(tip()).toContain("another screen");
+
+    // A board with two pages has done that one; the mic checks off talking.
+    localStorage.setItem("rt-draw.tips", '["circle","preview"]');
+    await act(async () => navigate(`/?p=${project(doc(BOX_A, `shape(p2, frame, 1500 0 1280 800, "a second page, empty")`))}`));
+    await until(() => tip().includes("mic"));
+    await act(async () => document.querySelector<HTMLButtonElement>(".pg-mic")!.click());
+    await until(() => tip().includes("arrow"));
+    expect(JSON.parse(localStorage.getItem("rt-draw.tips")!).sort()).toEqual(["circle", "page", "preview", "talk"]);
   });
 });
 

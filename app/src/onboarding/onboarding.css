@@ -1,0 +1,42 @@
+/* The tour over the board, the first drawings and the next move over the bar (Onboarding.tsx), in the sketchbook look. */
+.ob-scrim { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgb(251 248 241 / 0.75); }
+.ob-tour {
+  box-sizing: border-box; width: min(720px, 100%); max-height: 100%; overflow: auto; padding: 20px 22px;
+  display: flex; flex-direction: column; gap: 10px; background: var(--panel);
+  border: 2px solid var(--line); border-radius: var(--wobble); box-shadow: 3px 4px 0 rgb(43 43 43 / 0.15);
+}
+.ob-tour h2 { margin: 0; font-size: 26px; font-weight: 400; }
+.ob-tour p { margin: 0; font-size: 17px; color: var(--muted); }
+.ob-video { display: block; box-sizing: border-box; width: 100%; aspect-ratio: 1440 / 996; background: #fff; border: 2px solid var(--line); border-radius: var(--wobble-s); }
+.ob-go { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ob-start { padding: 8px 20px; font-size: 18px; color: #fff; background: var(--accent); }
+
+/* Over the bar: the first drawings to pick from, and the next move in a speech bubble pointing down at it. */
+.ob-starters, .ob-tip { position: absolute; left: 50%; bottom: calc(100% + 12px); transform: translateX(-50%); }
+.ob-starters { width: max-content; max-width: calc(100vw - 24px); display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; }
+.ob-try { color: var(--muted); font-size: 16px; }
+.ob-starter {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px 5px 8px; font-size: 16px;
+  box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12);
+}
+.ob-starter:hover { background: #fff3bf; }
+.ob-tip {
+  box-sizing: border-box; width: max-content; max-width: min(560px, calc(100vw - 24px)); display: flex; align-items: flex-start; gap: 6px;
+  padding: 8px 6px 8px 14px; font-size: 16px; background: #fff9db;
+  border: 2px solid var(--line); border-radius: var(--wobble-s); box-shadow: 2px 3px 0 rgb(43 43 43 / 0.12);
+}
+.ob-tip b { font-weight: 400; color: #e8590c; }
+/* The bubble's tail: an ink triangle, and the bubble's paper over its base. */
+.ob-tip::before, .ob-tip::after { content: ""; position: absolute; left: 50%; border: solid transparent; }
+.ob-tip::before { top: 100%; margin-left: -10px; border-width: 10px 10px 0; border-top-color: var(--line); }
+.ob-tip::after { top: calc(100% - 1px); margin-left: -7px; border-width: 8px 7px 0; border-top-color: #fff9db; }
+.ob-tip button { flex: none; border: 0; padding: 0 6px; background: transparent; color: var(--muted); }
+.ob-tip button:hover { color: var(--text); }
+
+@media (max-width: 640px), (max-height: 500px) {
+  .ob-tour { padding: 14px; }
+  .ob-tour h2 { font-size: 22px; }
+  .ob-tour p { font-size: 15px; }
+  .ob-try { display: none; }
+  .ob-starter, .ob-tip { font-size: 14px; }
+}

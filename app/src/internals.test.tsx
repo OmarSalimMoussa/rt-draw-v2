@@ -39,12 +39,12 @@ const status = { running: false, queued: 0, ops: 0, settling: false, done: true,
 describe("a tester", () => {
   beforeEach(() => signedInAs({ email: "ada@example.com", admin: false }));
 
-  it("has settings with who they are, Sign out and Start from scratch, and nothing about models or latency", async () => {
-    await show(<SettingsMenu />);
+  it("has settings with who they are, Sign out, the tour and Start from scratch, and nothing about models or latency", async () => {
+    await show(<SettingsMenu onTour={() => {}} />);
     await openSettings();
     const menu = el.querySelector('[role="dialog"]')!;
     expect(menu.textContent).toContain("Signed in as ada@example.com");
-    expect([...menu.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Sign out", "Start from scratch…"]);
+    expect([...menu.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Sign out", "Watch the tour", "Start from scratch…"]);
     expect(readable()).not.toMatch(INSIDE);
   });
 
@@ -67,7 +67,7 @@ describe("the admin", () => {
   beforeEach(() => signedInAs({ email: "omar@example.com", admin: true }));
 
   it("has the models, the latency overlay and the people page in settings", async () => {
-    await show(<SettingsMenu />);
+    await show(<SettingsMenu onTour={() => {}} />);
     await openSettings();
     const menu = el.querySelector('[role="dialog"]')!;
     expect(menu.textContent).toContain("Claude Sonnet 5.5");
@@ -90,7 +90,7 @@ describe("the admin", () => {
 describe("the dev server (no invites)", () => {
   it("shows everything, as before", async () => {
     await signedInAs(undefined);
-    await show(<SettingsMenu />);
+    await show(<SettingsMenu onTour={() => {}} />);
     await openSettings();
     expect(el.textContent).toContain("Claude Sonnet 5.5");
     expect(el.textContent).toContain("Latency overlay");
