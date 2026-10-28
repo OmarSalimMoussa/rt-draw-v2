@@ -17,6 +17,7 @@ import { historyRows } from "./history.ts";
 import type { Machine } from "./load.ts";
 import { paths } from "./paths.ts";
 import { ARM_PORT } from "./servers.ts";
+import { lock } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { treeOf } from "./trees.ts";
@@ -107,12 +108,18 @@ export class Rte {
     return this.o.mockApi ? { baseUrl: this.o.mockApi, deadProxyPort: await closedPort() } : undefined;
   }
 
+  /** Arm servers and Chrome for `f`, under loop.lock (state.ts lock): they share ports and the bank with any other rig. */
   async withRig<T>(gw: string, trees: string[], f: (rig: Rig) => Promise<T>, slots = slotsHere()): Promise<T> {
-    const rig = await openRig({ trees, gateway: gw, slots, port: this.o.port });
+    const held = await lock(this.o.cmd);
     try {
-      return await f(rig);
+      const rig = await openRig({ trees, gateway: gw, slots, port: this.o.port });
+      try {
+        return await f(rig);
+      } finally {
+        await rig.close();
+      }
     } finally {
-      await rig.close();
+      held.release();
     }
   }
 

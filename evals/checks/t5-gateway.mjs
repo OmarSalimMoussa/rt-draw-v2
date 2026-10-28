@@ -274,7 +274,7 @@ const under = s2r.why(1);
 s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.91 } });
 check(!under && /five-hour/.test(s2r.why(1) ?? ""), `the server's five-hour reading doesn't pause at 0.90: ${under} / ${s2r.why(1)}`);
 const s3 = new Slots([1, 2, 3], undefined, () => now);
-// The loop's week stops at 70% of the account's (LOOP.weekSevenDayMax 0.70): 0.69 runs, 0.71 parks.
+// The loop pauses past 70% of the account's week (LOOP.weekSevenDayMax 0.70): 0.69 runs, 0.71 parks.
 const s3w = new Slots([1], undefined, () => now);
 s3w.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.69 } });
 check(!s3w.why(1), `a week at 0.69 is parked: ${s3w.why(1)}`);

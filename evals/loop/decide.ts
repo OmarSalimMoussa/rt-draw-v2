@@ -264,16 +264,17 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
 /** A knob card's commit: the defaults in tuning.ts set to the card's values, within each knob's range. */
 /**
  * A token for an engineer session once a slot is under the five-hour pause (LOOP.fiveHourPauseAt): builds run beside
- * the decisions, so a pause waits here for the reset instead of dropping the card. Undefined when the budget stops the loop.
+ * the decisions, so a pause waits here for the reset instead of dropping the card. Undefined when every token is past
+ * its week: the card stays unbuilt, and the loop pauses until a week is read again.
  */
 async function freeSlot(rte: Rte, gw: string): Promise<Token | undefined> {
   for (;;) {
-    const s = (await gatewayStatus(gw)) as { pace: Facts["pace"] };
-    if (s.pace.stop) return undefined;
+    const { pace } = (await gatewayStatus(gw)) as { pace: Facts["pace"] };
+    if (!pace.ok && pace.week) return undefined;
     try {
       return await agents.slotToken(rte.tokens(), gw);
     } catch {
-      await sleep(Math.max(60_000, (s.pace.pauseUntil ?? 0) - Date.now()));
+      await sleep(Math.max(60_000, (pace.ok ? 0 : pace.pauseUntil) - Date.now()));
     }
   }
 }

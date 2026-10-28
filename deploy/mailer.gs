@@ -3,13 +3,14 @@
  * the Workspace account, so it comes from omar@emberhub.dev with no mail service or password in
  * between. Adapted from the Ember site's call request form (ember-site, web/apps-script).
  *
- * Two kinds of mail:
+ * Three kinds of mail:
  *   waitlist  someone asked to try imagine: mailed to ADMIN (and a row in the sheet, if there is one)
  *   invite    the admin invited someone: mailed to them, with their link (invite() says how it's written)
+ *   notice    the eval loop needs the admin (evals/loop/notify.ts): mailed to ADMIN, never anyone else
  *
- * Only the imagine server may call it: every request carries SECRET, which lives in Script
- * Properties here and in MAILER_SECRET on the server. Without it, anyone could mail anyone as you.
- * An invite's link must also be one of imagine's own.
+ * Only imagine's server and its eval loop may call it: every request carries SECRET, which lives in
+ * Script Properties here, in MAILER_SECRET on the server and in the loop's notify.env. Without it,
+ * anyone could mail anyone as you. An invite's link must also be one of imagine's own.
  *
  * This file isn't part of any build. It is pasted into a standalone Apps Script project and deployed
  * as a web app; deploy/README.md says how.
@@ -39,6 +40,16 @@ function doPost(e) {
     var f = JSON.parse(e.postData.contents);
     var secret = prop('SECRET');
     if (!secret || secret.length < 32 || f.secret !== secret) return json({ ok: false, error: 'not allowed' });
+
+    if (f.action === 'notice') {
+      var subject = String(f.subject || '').trim().slice(0, 200);
+      var text = String(f.text || '').trim().slice(0, 5000);
+      if (!subject) return json({ ok: false, error: 'a notice needs a subject' });
+      var noticeRef = 'Ref ' + Utilities.getUuid().slice(0, 8).toUpperCase();
+      GmailApp.sendEmail(ADMIN, 'imagine eval: ' + subject, text + '\n\n' + noticeRef, { name: 'imagine eval' });
+      return json({ ok: true, inboxed: toInbox(noticeRef) });
+    }
+
     var email = String(f.email || '').trim();
     if (!/^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/.test(email)) return json({ ok: false, error: 'bad email' });
 

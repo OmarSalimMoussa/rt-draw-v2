@@ -53,7 +53,7 @@ export async function realCmd(rte: Rte) {
   else if (step === "bank") {
     // The loop's lock for the whole step: a loop started meanwhile would see cases turn done mid-epoch. Counts and ids
     // only in the log: what people said stays under real/.
-    const held = lock();
+    const held = await lock("real");
     try {
       const w = real.writeRealBank(since, { held: true });
       rte.say(`real bank: ${w.cases} real sends in the bank (${w.merged} repeats merged; left out: ${w.inkWaiting} waiting for synthesized ink, ${w.pending} on a board still waiting for a picture, ${w.held} by R-hold's people), ${w.todo.length} to record on the champion`);

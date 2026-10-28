@@ -13,6 +13,7 @@
 import { openModal } from "../../src/modal.ts";
 import { $, shell } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
+import type { Run } from "../loop/state.ts";
 import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, SmokeRow } from "../loop/types.ts";
 import { type Item, type Note, type Thread, chatId, isChat, needsYou, yourTurn } from "./attention.ts";
 import { type Dot, type Frame, INK, type XY, frame, legend } from "./charts.ts";
@@ -61,7 +62,7 @@ async function sample(): Promise<History> {
   const files: Record<string, string> = {};
   for (const [path, load] of Object.entries(raw)) files[path.split("/").pop()!] = (await load()) as string;
   const now = Date.parse(rowsOf<EpochRow>(files["epochs.jsonl"]).at(-1)!.at) + 300_000;
-  return { source: "sample", files, status: { now, heartbeat: { wall: now - 4000 }, state: { status: "running", phase: "e21-h1 measuring, look 32", slot: 2 }, disk: { freeGb: 84.2, weekGrowthGb: 16.9, daysLeft: 30.6, ownerGb: LOOP.diskOwnerGb, pauseGb: LOOP.diskPauseGb } } };
+  return { source: "sample", files, status: { now, heartbeat: { wall: now - 4000 }, state: { run: { status: "running", at: new Date(now - 60_000).toISOString(), phase: "e21-h1: deciding (latency, draw)", slot: 2 } }, disk: { freeGb: 84.2, weekGrowthGb: 16.9, daysLeft: 30.6, ownerGb: LOOP.diskOwnerGb, pauseGb: LOOP.diskPauseGb } } };
 }
 
 // ---- The x axis: epochs, with everything that has a time placed between them.
@@ -318,14 +319,15 @@ function status(d: Data) {
   const s = d.status;
   const hb = timeOf(s.heartbeat?.wall ?? s.heartbeat?.at);
   const age = Number.isNaN(hb) ? undefined : s.now - hb;
-  const st = s.state ?? {};
+  const st = (s.state?.run ?? {}) as Partial<Run>;
   const running = age !== undefined && age < STALE_MS;
-  const said = String(st.status ?? (running ? "running" : "stopped"));
-  const state = running ? said : said === "running" ? "stopped (no heartbeat)" : said;
-  const slot = Number(st.slot) || d.epochs.at(-1)?.slots.find((x) => x.status === "active")?.slot;
+  const said = st.status ?? (running ? "running" : "stopped");
+  // A loop that died without a word (a kill, a reboot) still says running: its heartbeat says otherwise.
+  const state = running || said === "stopped" ? `${said}${st.code ? ` (${st.code})` : ""}` : "stopped (no heartbeat)";
+  const slot = st.slot ?? d.epochs.at(-1)?.slots.find((x) => x.status === "active")?.slot;
   const use = d.epochs.at(-1)?.slots.find((x) => x.slot === slot);
   const disk = s.disk;
-  host.innerHTML = `<div class="strip"><b>${esc(state)}</b>${st.why ? `<span>${esc(st.why)}</span>` : ""}<span>phase: ${esc(st.phase ?? "-")}</span>
+  host.innerHTML = `<div class="strip"><b>${esc(state)}</b>${st.why ? `<span>${esc(st.why)}</span>` : ""}${st.until ? `<span>until ${esc(st.until.slice(11, 16))} UTC</span>` : ""}<span>phase: ${esc(st.phase ?? "-")}</span>
     <span>token ${slot ?? "-"}${use ? `: 5-hour ${use.fiveHour !== undefined ? pct(use.fiveHour) : "?"}, 7-day ${use.sevenDay !== undefined ? pct(use.sevenDay) : "?"}` : ""}</span>
     <span>heartbeat ${age === undefined ? "none" : ago(age)}</span><span>owner list: ${d.ownerOpen} open</span>
     <span class="${disk && disk.freeGb < disk.ownerGb ? "bad" : ""}">${disk ? `disk ${disk.freeGb.toFixed(0)} GB free · ${disk.daysLeft === null || disk.daysLeft > 365 ? "days left: plenty" : `~${disk.daysLeft.toFixed(0)} days left`} (to the ${disk.pauseGb} GB pause at last week's ${disk.weekGrowthGb.toFixed(1)} GB)` : "free disk: unknown here"}</span>

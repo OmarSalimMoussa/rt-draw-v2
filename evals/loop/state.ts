@@ -1,8 +1,8 @@
 // The coordinator's own state (spec §7.7): state.json (the epoch, its cards and how far each got, what the
-// stop rules count), loop.lock (one loop at a time) and §6.7's stop and pause rules as one pure function, so
-// each rule can be checked on a crafted condition. Cases keep no state here: every case is file-done (§3.3),
-// and rerunning a run id carries on at its next undone case.
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+// stop rules count, and what the loop is doing now), loop.lock (one command with arm servers at a time) and §6.7's
+// stop and pause rules as one pure function, so each rule can be checked on a crafted condition. Cases keep no state
+// here: every case is file-done (§3.3), and rerunning a run id carries on at its next undone case.
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { LOOP } from "./config.ts";
 import { paths } from "./paths.ts";
@@ -22,8 +22,15 @@ export type CardState = {
 export type Decided = { id: string; verdict: string; component: string; at: string; v9?: boolean;
   /** One value of this sweep (LOOP-V2.md D3): the dry well counts a sweep once. */
   sweep?: string };
+/**
+ * What the loop is doing, for the progress page's status strip, `rte status` and the owner's notices: written as it
+ * changes. A stop's `code` says which rule stopped it (STOP_CODES); `why` is the harness's own words, never an error's
+ * text (an error can quote a tester, and this reaches the page and the owner's mail).
+ */
+export type Run = { status: "running" | "paused" | "stopped"; at: string; phase?: string; why?: string; code?: StopCode; slot?: number; until?: string };
 export type State = {
   epoch: number;
+  run?: Run;
   /** The epoch's run-id prefix (2026-10-17T03-12): its runs are <stamp>-e<E>-h<n>-<stage>. */
   stamp: string;
   cards: CardState[];
@@ -69,27 +76,64 @@ const alive = (pid: number) => {
   }
 };
 
-/**
- * loop.lock ({pid, host, start}): refused while a live loop on this host holds it. A dead holder's lock is
- * stale: it is taken over and the caller resumes (§7.7).
- */
-export function lock(): { stale: boolean; release(): void } {
+/** Who holds loop.lock: its process, host, start and command (`loop`, `ready`, `real`, …). */
+export type Holder = { pid: number; host: string; start: string; cmd: string };
+/** The lock's holder, whether it lives (always false for another host's: this host can't tell). */
+export function holder(): (Holder & { live: boolean }) | undefined {
   const f = paths().lock;
-  const mine = JSON.stringify({ pid: process.pid, host: hostname(), start: new Date().toISOString() });
-  let stale = false;
+  if (!existsSync(f)) return undefined;
+  const h = JSON.parse(readFileSync(f, "utf8")) as Holder;
+  return { ...h, live: h.host !== hostname() || alive(h.pid) };
+}
+
+let mine: { text: string; depth: number } | undefined;
+const LOCK_POLL_MS = 10_000;
+/**
+ * loop.lock: one command at a time that starts arm servers and Chrome or changes the bank (the loop, readiness, the
+ * real-use steps), since they share ports and the bank. Taken again inside the process that holds it, it nests. Held by
+ * another live process: refused, or with `wait` (the loop's unit, which a running intake or readiness must not fail)
+ * waited for. A dead holder's lock is stale and taken over; `stale` is true only when that holder was a loop, which the
+ * caller then resumes (§7.7): another command's crash says nothing about the loop.
+ */
+export async function lock(cmd: string, o: { wait?: boolean; say?: (line: string) => void } = {}): Promise<{ stale: boolean; release(): void }> {
+  if (mine) {
+    mine.depth++;
+    return { stale: false, release: () => void (mine && --mine.depth === 0 && free()) };
+  }
+  const f = paths().lock;
+  mkdirSync(paths().home, { recursive: true });
+  const text = JSON.stringify({ pid: process.pid, host: hostname(), start: new Date().toISOString(), cmd } satisfies Holder);
+  let stale = false, said = false;
   for (;;) {
     try {
-      writeFileSync(f, mine, { flag: "wx" });
+      writeFileSync(f, text, { flag: "wx" });
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const held = JSON.parse(readFileSync(f, "utf8")) as { pid: number; host: string; start: string };
-      if (held.host !== hostname() || alive(held.pid)) throw new Error(`another loop holds ${f} (pid ${held.pid} on ${held.host}, since ${held.start})`);
-      unlinkSync(f);
-      stale = true;
+      const h = holder();
+      if (!h) continue; // freed between the two reads
+      if (!h.live) {
+        unlinkSync(f);
+        stale ||= h.cmd === "loop";
+        continue;
+      }
+      const why = `${f} is held by ${h.cmd} (pid ${h.pid} on ${h.host}, since ${h.start})`;
+      if (!o.wait || h.cmd === "loop") throw new Error(why);
+      if (!said) o.say?.(`${cmd}: waiting: ${why}`), (said = true);
+      await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
     }
   }
-  return { stale, release: () => existsSync(f) && readFileSync(f, "utf8") === mine && unlinkSync(f) };
+  mine = { text, depth: 1 };
+  const free = () => {
+    if (existsSync(f) && readFileSync(f, "utf8") === text) unlinkSync(f);
+    mine = undefined;
+  };
+  return { stale, release: () => void (mine && --mine.depth === 0 && free()) };
+}
+/** Refuses while a live process holds the lock (`what` can't change under it); a dead holder's stale lock doesn't block. */
+export function notLocked(what: string) {
+  const h = holder();
+  if (h?.live && mine === undefined) throw new Error(`${paths().lock} is held by ${h.cmd} (pid ${h.pid}): ${what} can't change under it`);
 }
 
 // ---- §6.7's stop and pause rules
@@ -107,8 +151,8 @@ export const overrun = (minutes: number, slots: number) => minutes > RULES.decis
 
 export type Facts = {
   now: number;
-  /** The gateway's pace (tokens.ts): a stop, or a pause until the earliest reset. */
-  pace: { ok: boolean; stop?: string; pauseUntil?: number };
+  /** The gateway's pace (tokens.ts): a pause until a token frees up, `week` when every token is past its week. */
+  pace: Pace;
   recent: Decided[];
   /** When the last checkpoint ran: a dry well counts only the decisions since (the checkpoint unpauses). */
   checkpointAt?: number;
@@ -125,27 +169,36 @@ export type Facts = {
   /** When product calls failed as overloaded (529). */
   overloads: number[];
   diskGb: number; daysLeft?: number; onAC?: boolean;
+  /** The token slot new work goes to now. */
+  slot?: number;
 };
-export type Action = { do: "stop" | "pause" | "owner" | "skip"; why: string; until?: number; component?: string };
+/** tokens.ts' pace, as the gateway serves it. */
+export type Pace = { ok: true } | { ok: false; pauseUntil: number; week: boolean };
+/**
+ * Why the loop stopped: `asked` (rte stop-after) and `done` (its --epochs ran) are the owner's own; `crashed` is the unit's
+ * (a step threw past its restarts); the rest are §6.7's stops, each the owner's to look at.
+ */
+export const STOP_CODES = ["asked", "done", "crashed", "voids", "v9", "ready", "calib", "cap", "aborted", "blocked", "empty"] as const;
+export type StopCode = (typeof STOP_CODES)[number];
+export type Action = { do: "stop" | "pause" | "owner" | "skip"; why: string; code?: StopCode; until?: number; component?: string };
 
 /** Every rule of §6.7 that fires on these facts (none: carry on). Pauses carry the time to look again. */
 export function rules(f: Facts): Action[] {
   const out: Action[] = [];
   const last = (n: number, xs: Decided[] = f.recent) => (xs.length >= n ? xs.slice(-n) : undefined);
-  // Budget: the server's readings of every slot (tokens.ts).
-  if (f.pace.stop) out.push({ do: "stop", why: `budget: ${f.pace.stop}` });
-  if (!f.pace.stop && f.pace.pauseUntil) out.push({ do: "pause", why: `every slot is past ${Math.round(LOOP.fiveHourPauseAt * 100)}% of its five-hour window`, until: f.pace.pauseUntil });
+  // Budget: the server's readings of every slot (tokens.ts). Never a stop: the loop goes on when a token frees up.
+  if (!f.pace.ok) out.push({ do: "pause", why: f.pace.week ? `every token is past ${Math.round(LOOP.weekSevenDayMax * 100)}% of its week; its week is read again then` : `every token is past ${Math.round(LOOP.fiveHourPauseAt * 100)}% of its five-hour window`, until: f.pace.pauseUntil });
   // Harness suspects (an overrun is a void too).
-  if (last(RULES.voidsInRow, f.recent.filter((d) => Date.parse(d.at) >= (f.ownerStepAt ?? 0)))?.every((d) => d.verdict === "void")) out.push({ do: "stop", why: `${RULES.voidsInRow} void decisions in a row` });
-  if (f.recent.at(-1)?.v9) out.push({ do: "stop", why: `a V9 invariant tripped in ${f.recent.at(-1)!.id}` });
-  if (f.ready === false) out.push({ do: "stop", why: "readiness failed or is stale: rte ready --stub --mock-api" });
-  if (f.calib === "stop") out.push({ do: "stop", why: "calibration failed with both frozen prompt variants: the judge prompt is the owner's to change" });
+  if (last(RULES.voidsInRow, f.recent.filter((d) => Date.parse(d.at) >= (f.ownerStepAt ?? 0)))?.every((d) => d.verdict === "void")) out.push({ do: "stop", code: "voids", why: `${RULES.voidsInRow} void decisions in a row` });
+  if (f.recent.at(-1)?.v9) out.push({ do: "stop", code: "v9", why: `a V9 invariant tripped in ${f.recent.at(-1)!.id}` });
+  if (f.ready === false) out.push({ do: "stop", code: "ready", why: "readiness failed or is stale: rte ready --stub --mock-api" });
+  if (f.calib === "stop") out.push({ do: "stop", code: "calib", why: "calibration failed with both frozen prompt variants: the judge prompt is the owner's to change" });
   // §11 gates each step on the one before: no decision rests on a fidelity judge the owner's labels haven't passed.
-  else if (!["pass", "pass-no-craft", "dry"].includes(f.calib ?? "")) out.push({ do: "stop", why: `the judge isn't calibrated (${f.calib ?? "never checked"}): label at /evals/label/, then rte calib --check must pass` });
-  if (f.capped) out.push({ do: "stop", why: `the step's --cap is reached${f.error ? `: ${f.error}` : ""}` });
-  if (f.error && /requested|\/api\/(tts|stt)/.test(f.error)) out.push({ do: "stop", why: `aborted: ${f.error}` });
-  if (f.blocked) out.push({ do: "stop", why: `paused for the owner: ${f.blocked}` });
-  if ((f.emptyEpochs ?? 0) >= RULES.emptyEpochs) out.push({ do: "stop", why: `${f.emptyEpochs} epochs in a row decided nothing: the critic's cards were missing or all dropped (paused, --quality-only, owner-only)` });
+  else if (!["pass", "pass-no-craft", "dry"].includes(f.calib ?? "")) out.push({ do: "stop", code: "calib", why: `the judge isn't calibrated (${f.calib ?? "never checked"}): label in Eval HQ's Judge view, then rte calib --check must pass` });
+  if (f.capped) out.push({ do: "stop", code: "cap", why: "the step's --cap is reached" });
+  if (f.error && /requested|\/api\/(tts|stt)/.test(f.error)) out.push({ do: "stop", code: "aborted", why: "a request the harness never makes was asked for (the log has which)" });
+  if (f.blocked) out.push({ do: "stop", code: "blocked", why: `paused for the owner: ${f.blocked}` });
+  if ((f.emptyEpochs ?? 0) >= RULES.emptyEpochs) out.push({ do: "stop", code: "empty", why: `${f.emptyEpochs} epochs in a row decided nothing: the critic's cards were missing or all dropped (paused, --quality-only, owner-only)` });
   // A dry well: the optimizer keeps proposing what doesn't work. A sweep's values are one try: kept if any value kept.
   const since = f.recent.filter((d) => Date.parse(d.at) >= (f.checkpointAt ?? 0)).reduce<Decided[]>((acc, d) => {
     const prev = acc.at(-1);
@@ -162,33 +215,5 @@ export function rules(f: Facts): Action[] {
   if (f.diskGb < LOOP.diskPauseGb) out.push({ do: "pause", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskPauseGb}`, until: f.now + RULES.recheckMs });
   if (f.diskGb < LOOP.diskOwnerGb) out.push({ do: "owner", why: `free disk ${f.diskGb.toFixed(1)} GB < ${LOOP.diskOwnerGb}${f.daysLeft !== undefined ? `, ~${f.daysLeft.toFixed(1)} days left at this pace` : ""}` });
   if (f.onAC === false) out.push({ do: "pause", why: "on battery: new cases wait for AC", until: f.now + RULES.recheckMs });
-  return out;
-}
-
-/** What the owner's notices are read from: this leg (the loop since it last started or resumed). */
-export type NoticeFacts = {
-  now: number;
-  leg: { start: number; usd: number; decisions: number; checkpoints: string[] };
-  every: { decisions: number; minutes: number; usd: number; checkpoint: number; soon: number };
-};
-export type Notice = { key: string; kind: "soon" | "reached" | "checkpoint" | "stopped"; why: string };
-
-/**
- * The owner's notices due on these facts and not yet `sent` (by key): a heads-up as each step of `every` comes near (its
- * `soon` share) and a notice when it's reached; one per checkpoint. None of them stops anything.
- */
-export function notices(f: NoticeFacts, sent: Set<string>): Notice[] {
-  const out: Notice[] = [];
-  const add = (key: string, kind: Notice["kind"], why: string) => !sent.has(key) && !out.some((n) => n.key === key) && out.push({ key, kind, why });
-  const steps = (name: string, value: number, step: number, unit: (x: number) => string, soon: boolean) => {
-    if (!(step > 0)) return;
-    const k = Math.floor(value / step);
-    if (k >= 1) add(`${name}:${k}`, "reached", `${unit(value)} this leg (a notice every ${unit(step)})`);
-    if (soon && value >= (k + f.every.soon) * step) add(`${name}:${k + 1}:soon`, "soon", `${unit(value)} this leg; ${unit((k + 1) * step)} soon`);
-  };
-  steps("usd", f.leg.usd, f.every.usd, (x) => `$${x.toFixed(2)} list`, true);
-  steps("minutes", (f.now - f.leg.start) / 60_000, f.every.minutes, (x) => `${Math.round(x)} min`, true);
-  steps("decisions", f.leg.decisions, f.every.decisions, (x) => `${x} decision${x === 1 ? "" : "s"}`, false);
-  if (f.every.checkpoint > 0) for (const id of f.leg.checkpoints) add(`checkpoint:${id}`, "checkpoint", `checkpoint ${id} ran`);
   return out;
 }

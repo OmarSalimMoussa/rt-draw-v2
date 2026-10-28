@@ -13,7 +13,7 @@ import { calib, checkpointCmd, packetsCmd, syncCmd } from "./commands/checkpoint
 import { noteCmd } from "./commands/note.ts";
 import { realCmd } from "./commands/real.ts";
 import { aaCmd, bakeCmd, bankCmd, benchCmd, costCmd, exportTo, gc, humanCmd, init, ladderCmd, probeCmd, readyCmd, smoke, status } from "./commands/setup.ts";
-import { loop, stopAfterCmd, weekCmd } from "./coordinator.ts";
+import { loop, stopAfterCmd, unitFailedCmd, wantedCmd, weekCmd } from "./coordinator.ts";
 import { decideCmd } from "./decide.ts";
 import { remetric } from "./remetric.ts";
 import { Rte, js, msg, parse } from "./rte.ts";
@@ -29,9 +29,9 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
   checkpoint [--zero] --cap n          calib --contrast k=v [--more n] --cap n | --check [--cap n] [--variant 2] | --fake-labels (a dry run)
        | --illustrations --contrast picture.k=v [--cases n] --cap n | --check --illustrations   (the judge on pictures: labels/illustrations/)
   sync --cap n                         export <host | /dir>                 decide <branch> [--goal latency --metric ttfd|render | --card <decision id>] [--owner-ok] --cap n
-  loop [--epochs n] [--seed-cards f] [--quality-only] [--resume]
-       [--notify-decisions n] [--notify-minutes m] [--notify-usd x] [--notify-checkpoint 0|1]   (owner notices; 0 is off)
+  loop [--epochs n] [--seed-cards f] [--quality-only] [--resume]   (on the PGX its unit runs it: rte run, rte stop-after)
   stop-after [--cancel]   (the running loop stops before its next step: nothing lost, loop --resume goes on)
+  unit-failed | wanted [--set]   (the loop's unit: it gave up after its restarts; whether it should run, or now should)
   week --cap n            (reads again the weekly use of each token parked on an old reading, one one-word call each)
   status (each token's use too)        cost <run>… (calls and list $, sub-runs included)   remetric <run>   gc --trees
   packets <run>… (frames the changes a run's after captures missed, 0 calls)
@@ -41,7 +41,7 @@ const USAGE = `usage: rte <command> [--cap n] [--tokens f | --dev-token] …   (
 /** Each command, given the command line (rte.ts' Rte): the commands are in commands/, decide.ts and coordinator.ts. */
 const COMMANDS: Record<string, (rte: Rte) => Promise<number | void>> = {
   init, ready: readyCmd, ladder: ladderCmd, smoke, bake: bakeCmd, probe: probeCmd, bank: bankCmd, aa: aaCmd, bench: benchCmd, human: humanCmd, real: realCmd,
-  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, week: weekCmd, status,
+  checkpoint: checkpointCmd, calib, sync: syncCmd, export: exportTo, decide: decideCmd, loop, "stop-after": stopAfterCmd, "unit-failed": unitFailedCmd, wanted: wantedCmd, week: weekCmd, status,
   remetric: async (rte) => void rte.say(`remetric: ${js(remetric(rte.o.pos[1]))}`), gc, packets: packetsCmd, cost: costCmd, note: noteCmd,
 };
 

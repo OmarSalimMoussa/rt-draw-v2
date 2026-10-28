@@ -5,7 +5,7 @@
 // logs or writes a token: the slot state on disk holds slot numbers and numbers.
 //
 // Rotation: new work moves off a slot at the first of the server's five-hour utilization ≥ LOOP.fiveHourPauseAt
-// (0.60: the token is shared with testers on prod), an allowed_warning, a rejected event or a 429, or its weekly
+// (the token is shared with testers on prod), an allowed_warning, a rejected event or a 429, or its weekly
 // utilization past LOOP.weekSevenDayMax. Every call on a slot brings the server's reading; a slot with none yet is
 // unspent. Two slots reporting the same resetsAt are one account.
 import { execFileSync } from "node:child_process";
@@ -16,6 +16,7 @@ import { parseEnv } from "node:util";
 import type { RateLimit } from "../../dev/claude.ts";
 import { LOOP, WEEK_CHECK } from "./config.ts";
 import { ownerCheckout } from "./paths.ts";
+import type { Pace } from "./state.ts";
 
 export type SlotN = 1 | 2 | 3;
 export type Token = { slot: SlotN; token: string };
@@ -181,11 +182,16 @@ export class Slots {
     for (const a of known) for (const b of known) if (a.slot < b.slot && a.resetsAt === b.resetsAt) return [a.slot, b.slot];
   }
 
-  /** What run.ts and each paying step pace by: stop (every slot past its week) or pause until the earliest five-hour reset (LOOP-V2.md A4). */
-  pace(): { ok: true } | { ok: false; stop?: string; pauseUntil?: number } {
-    if (this.s.every((s) => this.week(s))) return { ok: false, stop: "every slot past its weekly allowance" };
-    if (this.s.every((s) => this.why(s.slot))) return { ok: false, pauseUntil: Math.min(...this.s.map((s) => (s.resetsAt ? s.resetsAt * 1000 : (s.windowStart ?? this.now()) + FIVE_H))) };
-    return { ok: true };
+  /**
+   * What the loop and each paying step pace by (LOOP-V2.md A4): ok, or a pause until the first token frees up, at its
+   * five-hour reset or, for a token parked on its week, when that week is read again (stale()). `week`: every token is
+   * past its week, which a step in flight doesn't wait out (nothing reads the week again inside a step): it ends there
+   * and is decided again after the pause.
+   */
+  pace(): Pace {
+    if (!this.s.every((s) => this.why(s.slot))) return { ok: true };
+    const free = (s: SlotState) => (this.week(s) ? (s.sevenDayAt ?? 0) + WEEK_CHECK.afterH * 3600_000 : s.resetsAt ? s.resetsAt * 1000 : (s.windowStart ?? this.now()) + FIVE_H);
+    return { ok: false, pauseUntil: Math.max(this.now() + 60_000, Math.min(...this.s.map(free))), week: this.s.every((s) => this.week(s)) };
   }
 
   /** Numbers only, for /status and budget.jsonl. */

@@ -41,7 +41,7 @@ const epochs = rows("epochs.jsonl");
 const at = (e) => epochs.find((x) => x.epoch === e).at;
 put(join(home, "history/health.jsonl"), [{ at: at(2), kind: "calib", pass: true, detail: {} }, { at: at(12), kind: "canary", pass: true, detail: {} }].map((r) => JSON.stringify(r)).join("\n") + "\n");
 put(join(home, "heartbeat.json"), JSON.stringify({ wall: Date.now(), mono: 1 }));
-put(join(home, "state.json"), JSON.stringify({ status: "running", phase: "e21-h1 measuring", slot: 2 }));
+put(join(home, "state.json"), JSON.stringify({ run: { status: "running", at: new Date().toISOString(), phase: "e21-h1 measuring", slot: 2 } }));
 
 // The latest decision's raw run: two cases, a packet, three calls and their reply cache entries.
 const dec = rows("decisions.jsonl").at(-1);

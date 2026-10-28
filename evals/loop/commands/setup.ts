@@ -31,7 +31,7 @@ import { paths } from "../paths.ts";
 import { ready } from "../ready.ts";
 import { caseDir, put, runFile } from "../record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "../probe.ts";
-import { readState, stampNow } from "../state.ts";
+import { holder, lock, readState, stampNow } from "../state.ts";
 import { stubPictures } from "../stubs.ts";
 import { Slots } from "../tokens.ts";
 import { contentHash, treeOf } from "../trees.ts";
@@ -91,6 +91,15 @@ function pin(): string {
 }
 
 export async function init(rte: Rte) {
+  // A refresh moves the trees a running rig serves.
+  const held = await lock("init");
+  try {
+    await initLocked(rte);
+  } finally {
+    held.release();
+  }
+}
+async function initLocked(rte: Rte) {
   const p = paths();
   const before = rte.o.f.refresh ? tryGit(p.repo, "describe", "--tags", "--abbrev=0", "--match", "eval-harness-*", "HEAD") : undefined;
   if (rte.o.f.refresh) {
@@ -144,13 +153,19 @@ export async function status(rte: Rte) {
     `launched: ${process.env.RT_EVAL_LAUNCHED === "1" ? "yes" : "no"}`,
     `inhibitor: ${inhibit.status === 0 ? (inhibit.stdout.includes("rt eval") ? "held ('rt eval')" : "not held") : "n/a"}`,
     `home: ${p.home}; champion ${tryGit(p.repo, "rev-parse", "--short", "loop/champion") ?? "none (init first)"}`,
-    `loop: ${st ? `epoch ${st.epoch}, ${st.cards.filter((c) => c.status === "done").length} of ${st.cards.length} cards decided${st.blocked ? `; blocked: ${st.blocked}` : ""}` : "not started"}; lock ${existsSync(p.lock) ? readFileSync(p.lock, "utf8") : "free"}`,
+    `loop: ${st ? `epoch ${st.epoch}, ${st.cards.filter((c) => c.status === "done").length} of ${st.cards.length} cards decided${st.blocked ? `; blocked: ${st.blocked}` : ""}` : "not started"}`,
+    `run: ${st?.run ? `${st.run.status}${st.run.code ? ` (${st.run.code})` : ""} since ${st.run.at}${st.run.phase ? `; ${st.run.phase}` : ""}${st.run.why ? `; ${st.run.why}` : ""}` : "never"}`,
+    `lock: ${(() => {
+      const h = holder();
+      return h ? `${h.cmd} (pid ${h.pid}, since ${h.start}${h.live ? "" : ", dead: stale"})` : "free";
+    })()}`,
+    `unit rt-loop: ${spawnSync("systemctl", ["--user", "is-active", "rt-loop"], { encoding: "utf8" }).stdout.trim() || "n/a"}`,
   ]) rte.say(l);
-  // Each token's use as the server last said it (meter/slots.json): the loop pauses at LOOP.fiveHourPauseAt and stops at LOOP.weekSevenDayMax.
+  // Each token's use as the server last said it (meter/slots.json): the loop pauses at LOOP.fiveHourPauseAt and LOOP.weekSevenDayMax.
   const pct = (x?: number) => (x === undefined ? "no reading" : `${Math.round(x * 100)}%`);
   const ago = (ms: number) => `${((Date.now() - ms) / HOUR).toFixed(1)} h ago`;
   for (const s of new Slots(rte.tokens().map((t) => t.slot), join(p.home, "meter", "slots.json")).status())
-    rte.say(`token ${s.slot}: five-hour ${pct(s.fiveHour)}${s.resetsAt ? ` (window ${s.resetsAt * 1000 < Date.now() ? "reset since" : `resets ${new Date(s.resetsAt * 1000).toISOString().slice(11, 16)} UTC`})` : ""}, week ${pct(s.sevenDay)}${s.sevenDayAt ? ` (read ${ago(s.sevenDayAt)})` : ""}; the loop pauses at ${pct(LOOP.fiveHourPauseAt)} and stops at ${pct(LOOP.weekSevenDayMax)}${s.why ? `; parked: ${s.why}` : ""}`);
+    rte.say(`token ${s.slot}: five-hour ${pct(s.fiveHour)}${s.resetsAt ? ` (window ${s.resetsAt * 1000 < Date.now() ? "reset since" : `resets ${new Date(s.resetsAt * 1000).toISOString().slice(11, 16)} UTC`})` : ""}, week ${pct(s.sevenDay)}${s.sevenDayAt ? ` (read ${ago(s.sevenDayAt)})` : ""}; the loop pauses past ${pct(LOOP.fiveHourPauseAt)} of five hours or ${pct(LOOP.weekSevenDayMax)} of the week${s.why ? `; parked: ${s.why}` : ""}`);
 }
 
 /** What runs cost (rte cost <run>…): upstream calls and list $ by role, each run with its sub-runs (<run>-g2, <run>~warm, …). */
@@ -167,7 +182,14 @@ export async function costCmd(rte: Rte) {
 }
 
 export async function readyCmd(rte: Rte) {
-  const results = await ready({ stub: !!rte.o.f.stub, mockApi: !!rte.o.f["mock-api"], port: rte.o.port, repo: initFrom(), aaCheck: () => aa(rte, AA_CASES) });
+  // Its arm servers and Chrome take the ports a loop's rig uses.
+  const held = await lock("ready");
+  let results: Awaited<ReturnType<typeof ready>>;
+  try {
+    results = await ready({ stub: !!rte.o.f.stub, mockApi: !!rte.o.f["mock-api"], port: rte.o.port, repo: initFrom(), aaCheck: () => aa(rte, AA_CASES) });
+  } finally {
+    held.release();
+  }
   const failed = results.filter((r) => !r.ok).map((r) => r.id);
   if (existsSync(join(paths().repo, ".git"))) {
     openHistory();

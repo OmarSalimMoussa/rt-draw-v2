@@ -3,7 +3,8 @@
 // and a canned critic, engineer and judge (--fakes). A dry loop of two epochs decides a knob card (kept), a code
 // patch (reverted, its patch saved) and a no-op (reverted at 0 calls), then a frozen-path card (owner list); a
 // second loop is refused by the lock; a SIGKILL mid-case and `loop --resume` re-pay nothing, after pausing until
-// the slots' resetsAt. The owner's stop-after stops a running loop between steps, with a notice. Then sync (an owner step, a conflict, a scene-format change), export to a fake host, the
+// the slots' resetsAt. The owner's stop-after stops a running loop between steps, its stop in state.json. Then sync (an
+// owner step, a conflict, a scene-format change), export to a fake host, the
 // --cap refusals, `launch.sh status` in a real systemd unit, and every §6.7 rule on crafted facts. Ports 5330–5339.
 //   TMPDIR=<work dir> node --import ./evals/loop/node-hooks.mjs evals/checks/t21-loop-dry.mjs
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -84,7 +85,7 @@ const ownerCommit = (file, edit, msg) => {
 };
 const C = await import("../loop/checkpoint.ts");
 const { harnessTag } = await import("../loop/ab.ts");
-const { notices, rules, RULES } = await import("../loop/state.ts");
+const { rules, RULES } = await import("../loop/state.ts");
 // B1 from toy-shop cases only (blank ones held back), so the scene-format sync below leaves the yardstick loadable.
 const blank = (id) => json(join(p.bankCase(id), "case.json")).start === "blank";
 const held = readdirSync(p.bankCases).filter((id) => !id.includes(".void") && blank(id));
@@ -141,7 +142,7 @@ if (!lines(join(p.history, "checkpoints.jsonl")).some((c) => c.id === "ck-00")) 
 const first = rte(["loop", "--epochs", "2", ...FLAGS]);
 await until(() => first.out().includes("loop: starting") || first.child.exitCode !== null, 120_000, "the loop to start");
 const second = await rte(["loop", "--epochs", "1", ...FLAGS]).done;
-check(second.code !== 0 && /another loop holds/.test(second.out), `a second loop wasn't refused by the lock (exit ${second.code}): ${short(second.out)}`);
+check(second.code !== 0 && /held by loop/.test(second.out), `a second loop wasn't refused by the lock (exit ${second.code}): ${short(second.out)}`);
 
 // SIGKILL while a case of the knob card's A/B has paid calls but isn't done.
 const midCase = () => upstream(lines(p.calls)).find((l) => /-e1-h1-ab$/.test(l.run) && l.case && !existsSync(join(p.run(l.run), "cases", l.case, "done")));
@@ -157,8 +158,8 @@ check(!existsSync(join(p.run(hit.run), "cases", hit.case, "done")), `case ${hit.
 const now = Math.floor(Date.now() / 1000);
 writeFileSync(join(p.home, "meter", "slots.json"), JSON.stringify([1, 2, 3].map((slot) => ({ slot, status: "allowed", fiveHour: 0.95, sevenDay: 0.1, resetsAt: now + 6 + slot, windowStart: (now + 6 + slot) * 1000 - 5 * 3600_000, usdWindow: 1, limited: false, hours: {} }))));
 const resumed = await rte(["loop", "--resume", ...FLAGS]).done;
-check(resumed.code === 0 && /loop: done/.test(resumed.out), `loop --resume didn't finish (exit ${resumed.code}): ${short(resumed.out)}`);
-check(/pause until .*every slot is past 90% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
+check(resumed.code === 0 && /STOP \(done\)/.test(resumed.out), `loop --resume didn't finish (exit ${resumed.code}): ${short(resumed.out)}`);
+check(/pause until .*every token is past 90% of its five-hour window/.test(resumed.out), "the resumed loop didn't pause for the spent slots");
 const after = api.requests.slice(reqsAtKill);
 check(after.length > 0 && after[0].at >= (now + 7) * 1000, `the first call after the resume came at ${after[0]?.at}, before the earliest resetsAt ${(now + 7) * 1000}`);
 const all = lines(p.calls);
@@ -191,22 +192,19 @@ check(lines(join(H, "epochs.jsonl")).map((e) => e.epoch).join() === "1,2" && lin
 check(!git("-C", H, "status", "--porcelain"), "the history worktree has uncommitted files");
 
 // ---- The owner's stop-after: asked while no loop runs, the next start drops it; asked while one runs, it stops before its
-// next step, says so, leaves a "stopped" notice and spends nothing more; the epoch and the lock are as they were.
-const noticesOf = () => lines(join(p.home, "notices.jsonl"));
+// next step, says so, records the stop in state.json and spends nothing more; the epoch and the lock are as they were.
 const asked = await rte(["stop-after", ...FLAGS]).done;
 check(asked.code === 0 && /no loop is running/.test(asked.out) && existsSync(join(p.home, "stop.request")), `stop-after with no loop: ${short(asked.out)}`);
-const r0 = api.requests.length, n0 = noticesOf().length;
+const r0 = api.requests.length;
 const running = rte(["loop", "--epochs", "1", ...FLAGS]);
 await until(() => running.out().includes("loop: starting") || running.child.exitCode !== null, 120_000, "the loop to start");
 check(/an old stop-after request was dropped/.test(running.out()), "the start didn't drop the old stop-after request");
 writeFileSync(join(p.home, "stop.request"), "{}"); // what stop-after writes, the moment the loop is up
 const stopped = await running.done;
-const last = noticesOf().slice(n0).at(-1);
-check(stopped.code === 0 && /STOP: as the owner asked \(rte stop-after\)/.test(stopped.out) && !/loop: done/.test(stopped.out) && !existsSync(join(p.home, "stop.request")) && !existsSync(p.lock),
+check(stopped.code === 0 && /STOP \(asked\): stopped as asked \(rte stop-after\)/.test(stopped.out) && !/STOP \(done\)/.test(stopped.out) && !existsSync(join(p.home, "stop.request")) && !existsSync(p.lock),
   `stop-after didn't stop the running loop between steps (exit ${stopped.code}): ${short(stopped.out)}`);
-check(last?.kind === "stopped" && /as asked/.test(last.why) && last.epoch === 3 && json(p.state).epoch === 3 && api.requests.length === r0, `the stop's notice: ${JSON.stringify(last)?.slice(0, 300)}, ${api.requests.length - r0} requests`);
-const bad = await rte(["loop", "--resume", ...FLAGS, "--notify-usd", "-1"]).done;
-check(bad.code !== 0 && /--notify-usd takes a number/.test(bad.out), `--notify-usd -1 wasn't refused: ${short(bad.out)}`);
+const run = json(p.state).run;
+check(run?.status === "stopped" && run.code === "asked" && json(p.state).epoch === 3 && api.requests.length === r0, `the stop in state.json: ${JSON.stringify(run)}, ${api.requests.length - r0} requests`);
 
 // ---- week: a token parked for its week on a 27-hour-old reading gets one one-word call; one parked on a fresh reading
 // gets none. The server's answer brings the first back, and every slot goes to budget.jsonl with when it was read.
@@ -216,7 +214,7 @@ const slot = (n, o) => ({ slot: n, status: "allowed", usdWindow: 0, limited: fal
 writeFileSync(slotsFile, JSON.stringify([slot(1, { sevenDay: 0.1, sevenDayAt: wNow }), slot(2, { sevenDay: 0.94, sevenDayAt: oldRead }), slot(3, { sevenDay: 0.8, sevenDayAt: wNow - 3600_000 })]));
 const w0 = api.requests.length;
 const wk = await rte(["week", "--cap", "5", ...FLAGS]).done;
-check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(the loop stops at 70%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
+check(wk.code === 0 && /token 2's week read again: 94% to 11% of its weekly limit \(the loop pauses past 70%\); back in use/.test(wk.out) && api.requests.length === w0 + 1,
   `week (exit ${wk.code}, ${api.requests.length - w0} requests): ${short(wk.out)}`);
 const wb = lines(join(H, "budget.jsonl")).slice(-3);
 check(wb.map((b) => b.slot).join() === "1,2,3" && wb[1].sevenDay === 0.11 && wb[1].sevenDayAt >= wNow && /^(ok|allowed)$/.test(wb[1].status) && wb[2].status === "weekly allowance" && wb[2].sevenDayAt === wNow - 3600_000,
@@ -270,9 +268,8 @@ const copied = ["bank/cases", "cache/replies", "cache/blobs", "labels/labels.jso
 check(!copied.length, `export didn't copy ${copied.join(", ")}`);
 
 // ---- launch.sh in a real systemd unit: the child reports the slots and the cap; a mode-644 tokens file is refused.
-// On aarch64 launch.sh opens a tmux window and returns at once, with none of the child's output: the PGX's launcher is
-// proven by its own ladder run, never by a window opened here in the owner's session.
-if (process.arch === "x64") {
+// On a machine with no battery launch.sh returns at once with none of the child's output (t7 checks that path).
+if (existsSync("/sys/class/power_supply") && readdirSync("/sys/class/power_supply").some((d) => d.startsWith("BAT"))) {
   const sHome = mkdtempSync(join(tmpdir(), "rt-eval-status-"));
   const sTokens = join(sHome, "tokens.env");
   copyFileSync(tokens, sTokens);
@@ -284,15 +281,15 @@ if (process.arch === "x64") {
   chmodSync(sTokens, 0o644);
   const l2 = launch();
   check(l2.status !== 0 && /chmod 600/.test(l2.stdout + l2.stderr), `a mode-644 tokens file wasn't refused: exit ${l2.status}: ${short(l2.stdout + l2.stderr)}`);
-} else console.log(`note: launch.sh status is checked on the laptop (this is ${process.arch})`);
+} else console.log("note: launch.sh status is checked on a machine with a battery (the laptop)");
 
 // ---- Every §6.7 rule on crafted facts.
 const T = Date.now();
 const base = { now: T, pace: { ok: true }, recent: [], ready: true, calib: "pass", overloads: [], diskGb: 500, onAC: true };
 const d = (verdict, o = {}) => ({ id: "x", verdict, component: "draw", at: new Date(T).toISOString(), ...o });
 const fires = {
-  "slots spent → pause": [{ pace: { ok: false, pauseUntil: T + 5000 } }, "pause", /five-hour/],
-  "weekly allowance → stop": [{ pace: { ok: false, stop: "every slot past its weekly allowance" } }, "stop", /weekly/],
+  "slots spent → pause": [{ pace: { ok: false, pauseUntil: T + 5000, week: false } }, "pause", /five-hour/],
+  "weekly allowance → pause": [{ pace: { ok: false, pauseUntil: T + 6 * 3600_000, week: true } }, "pause", /week/],
   "2 voids in a row → stop": [{ recent: [d("keep"), d("void"), d("void")] }, "stop", /2 void/],
   "V9 → stop": [{ recent: [d("void", { v9: true })] }, "stop", /V9/],
   "readiness → stop": [{ ready: false }, "stop", /readiness/],
@@ -312,20 +309,6 @@ const fires = {
   "battery → pause": [{ onAC: false }, "pause", /battery/],
 };
 
-// ---- The owner's notices on crafted facts: a heads-up as a step comes near, one when it's reached, each once, never a stop.
-const every = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
-const nf = (o = {}) => ({ now: T, every, ...o, leg: { start: T - 60_000, usd: 0, decisions: 0, checkpoints: [], ...o.leg } });
-const due = (f, sent = new Set()) => notices(f, sent).map((n) => `${n.kind} ${n.key}`).join();
-const want = {
-  quiet: [nf(), ""], "$16.50 → soon": [nf({ leg: { usd: 16.5 } }), "soon usd:1:soon"], "$20.20 → reached": [nf({ leg: { usd: 20.2 } }), "reached usd:1"],
-  "$37 → reached, the next soon": [nf({ leg: { usd: 37 } }), "reached usd:1,soon usd:2:soon"], "97 min → soon": [nf({ leg: { start: T - 97 * 60_000 } }), "soon minutes:1:soon"],
-  "1 decision → none": [nf({ leg: { decisions: 1 } }), ""], "2 decisions → reached": [nf({ leg: { decisions: 2 } }), "reached decisions:1"],
-  "a checkpoint → one": [nf({ leg: { checkpoints: ["ck-01"] } }), "checkpoint checkpoint:ck-01"], "a checkpoint, notices off → none": [nf({ every: { ...every, checkpoint: 0 }, leg: { checkpoints: ["ck-01"] } }), ""],
-  "everything off → none": [nf({ every: { decisions: 0, minutes: 0, usd: 0, checkpoint: 0, soon: 0 }, leg: { usd: 999, decisions: 9, checkpoints: ["ck-01"], start: T - 999 * 60_000 } }), ""],
-};
-for (const [name, [f, keys]] of Object.entries(want)) check(due(f) === keys, `notices, ${name}: ${due(f)} (want ${keys || "none"})`);
-check(due(nf({ leg: { usd: 37 } }), new Set(["usd:1", "usd:2:soon"])) === "", "a notice already sent was sent again");
-check(notices(nf({ leg: { usd: 37 } }), new Set()).every((n) => !/stop/.test(n.kind)), "a notice is a stop");
 check(!rules(base).length, `rules fire on quiet facts: ${JSON.stringify(rules(base))}`);
 for (const [name, [facts, act, why]] of Object.entries(fires)) {
   const out = rules({ ...base, ...facts });
