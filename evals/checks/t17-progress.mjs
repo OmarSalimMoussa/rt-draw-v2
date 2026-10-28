@@ -3,7 +3,8 @@
 // /api/eval/history) under the HQ header and the pipeline's overview, with its views
 // and every panel at 1280 and 390 px, its owner steps, era and marker ticks, a band
 // and line per era, hollow points and the slower-than-A0 ring where §5.4 puts them,
-// a decision row opens its cases and calls, and "Needs you" lists what waits for the
+// the Loop view folded until a link to it opens it and its decisions a page at a time
+// (a redraw keeps both), a decision row opens its cases and calls, and "Needs you" lists what waits for the
 // owner (held first, the count in the tab title), sends his note, shows Claude's reply
 // at the next poll with a half-typed answer kept, and resolves an item. One headless
 // Chrome; every /api/* request goes through a counted stub to the pages server's
@@ -106,8 +107,12 @@ const READ = `(() => {
     status: P("status")?.textContent ?? "",
     qualityTitle: P("quality")?.querySelector("h2")?.textContent ?? "",
     decisions: n("decisions", "tr[data-decision]"),
+    loop: [document.getElementById("loop")?.open, document.querySelector("#loop > summary")?.innerText.replace(/\\s+/g, " ").trim() ?? ""],
+    pager: [...(P("decisions")?.querySelector(".pager")?.children ?? [])].map((c) => c.textContent).join(" "),
   };
 })()`;
+const PAGE = 20; // DECISIONS_PAGE in main.ts
+const decided = rows("decisions.jsonl").length;
 const verify = (w) => {
   const r = got[w];
   check(JSON.stringify(r.panels) === JSON.stringify(PANELS), `${w} px: panels ${r.panels}`);
@@ -134,7 +139,8 @@ const verify = (w) => {
   check(!/window per decision|estimated from list/.test(r.cost[2]), `${w} px: the cost panel still shows a five-hour-window share or a list-$ weekly estimate`);
   check(/running/.test(r.status) && /\d+ GB free/.test(r.status) && /~\d+ days left|days left: plenty/.test(r.status) && /owner list: 5 open/.test(r.status) && /token 2/.test(r.status), `${w} px: status strip reads "${r.status.replace(/\s+/g, " ").trim()}"`);
   check(/against A0/.test(r.qualityTitle) && !/anchor/.test(r.qualityTitle), `${w} px: the quality title reads "${r.qualityTitle}", not against A0`);
-  check(r.decisions === rows("decisions.jsonl").length, `${w} px: ${r.decisions} decision rows`);
+  check(r.decisions === Math.min(PAGE, decided) && r.pager === `newer 1–${PAGE} of ${decided} older`, `${w} px: ${r.decisions} decision rows, pager "${r.pager}"`);
+  check(r.loop[0] === false && r.loop[1] === `Loop running · ${decided} decisions`, `${w} px: the Loop view ${r.loop[0] ? "open" : "folded"} at first, its summary "${r.loop[1]}"`);
 };
 const got = {};
 await page.goto(`http://127.0.0.1:${PORT}/evals/progress/`);
@@ -147,9 +153,26 @@ await sleep(200);
 got[390] = await page.eval(READ);
 verify(390);
 
-// ---- A decision row opens its run's cases, a case its packet and every call, a call its exact request and reply.
+// ---- The Loop view: the overview's link opens it; older and newer page its decisions; a redraw keeps the fold and the page.
+const LOOP = `(() => { const P = document.querySelector('[data-panel="decisions"]'); return { open: document.getElementById("loop").open, rows: P.querySelectorAll("tr[data-decision]").length,
+  pager: [...P.querySelector(".pager").children].map((c) => c.textContent).join(" "), newer: P.querySelector('[data-page="-1"]').disabled, older: P.querySelector('[data-page="1"]').disabled }; })()`;
+const pages = Math.ceil(decided / PAGE);
+check(pages > 2, `the sample's ${decided} decisions make ${pages} pages, too few to page through`);
+await page.eval(`document.querySelector('#overview a[href="#loop"]').click()`);
+await waitFor(`document.getElementById("loop").open`, "the Loop view opened by the overview's Loop stage");
+for (let i = 1; i < pages; i++) await page.eval(`document.querySelector('[data-panel="decisions"] [data-page="1"]').click()`);
+let l = await page.eval(LOOP);
+const lastFrom = PAGE * (pages - 1) + 1;
+check(l.rows === decided - lastFrom + 1 && l.pager === `newer ${lastFrom}–${decided} of ${decided} older` && !l.newer && l.older, `the last page of decisions: ${JSON.stringify(l)}`);
+await page.eval(`document.querySelector('[data-panel="decisions"] [data-page="-1"]').click()`);
 await page.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
 await sleep(200);
+l = await page.eval(LOOP);
+check(l.open && l.rows === PAGE && l.pager === `newer ${lastFrom - PAGE}–${lastFrom - 1} of ${decided} older` && !l.newer && !l.older, `the Loop view after a redraw: ${JSON.stringify(l)}`);
+for (let i = 2; i < pages; i++) await page.eval(`document.querySelector('[data-panel="decisions"] [data-page="-1"]').click()`);
+check((await page.eval(LOOP)).pager.startsWith("newer 1–"), "back on the first page of decisions");
+
+// ---- A decision row opens its run's cases, a case its packet and every call, a call its exact request and reply.
 await page.eval(`document.querySelector('tr[data-decision="${dec.id}"] td').click()`);
 await waitFor(`document.querySelectorAll("[data-cases] button[data-case]").length === 2`, "the decision's cases");
 await page.eval(`document.querySelector('[data-cases] button[data-case="c-b1-s01-1"]').click()`);

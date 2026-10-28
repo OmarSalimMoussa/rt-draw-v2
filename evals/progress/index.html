@@ -31,8 +31,14 @@
     .pipeline .stage-link:hover { background: #fff4e6; }
     .pipeline b { font: 17px Excalifont, cursive; overflow-wrap: anywhere; }
     main.progress > .view { padding-top: 6px; }
-    main.progress > .view h2 { font: 24px Excalifont, cursive; margin: 0; }
-    main.progress > .view p { margin: 2px 0 0; }
+    main.progress > .view > h2, main.progress > .view > summary > h2 { font: 24px Excalifont, cursive; margin: 0; }
+    main.progress > .view > p { margin: 2px 0 0; }
+    main.progress > .fold > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; cursor: pointer; list-style: none; }
+    main.progress > .fold > summary::-webkit-details-marker { display: none; }
+    main.progress > .fold > summary::before { content: "▸"; font-size: 18px; }
+    main.progress > .fold[open] > summary::before { content: "▾"; }
+    main.progress > .fold > .fold-body { display: grid; gap: 14px; margin-top: 12px; }
+    .pager { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 8px; }
     #needs { border: 2.5px solid var(--bad); overflow-wrap: anywhere; }
     #needs.quiet { border: 1.5px dashed var(--line); padding: 8px 12px; }
     #needs.quiet h2 { font-size: 16px; color: var(--muted); }

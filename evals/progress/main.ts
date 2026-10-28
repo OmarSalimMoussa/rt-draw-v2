@@ -1,7 +1,7 @@
 // Eval HQ's home (§5.4, frozen measuring side): the pipeline at a glance (pull, intake, review, bank, loop, champion, prod),
 // "Needs you" (attention.ts: what waits for the owner, each with a thread they write in and Claude answers through
-// `rte note`, $RT_EVAL_HOME/notes/threads.jsonl outside git, read every 20 s), the loop (its status and the decisions
-// with every case and call behind them), the benchmarks (quality against A0, checkpoint 0's champion, which never moves,
+// `rte note`, $RT_EVAL_HOME/notes/threads.jsonl outside git, read every 20 s), the loop (folded until opened: its status
+// and the decisions a page at a time, with every case and call behind them), the benchmarks (quality against A0, checkpoint 0's champion, which never moves,
 // each era of the yardstick charted apart; R1 on testers' sends; latency against A0 in the same run; cost and speed
 // against v1; health), and the playgrounds. Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the
 // eval/history branch) and /api/eval/intake; the page holds no state and polls every 60 s, and again when its tab comes
@@ -145,11 +145,11 @@ const voids = (host: HTMLElement, cks: CheckpointRow[]) => {
   const v = cks.filter((c) => c.trust === "void");
   if (v.length) host.insertAdjacentHTML("beforeend", `<div class="stat bad">void, not drawn: ${v.map((c) => `${esc(c.id)} (e${c.epoch})`).join(", ")}</div>`);
 };
-const card = (panel: string, wide = false) => {
+const card = (panel: string, wide = false, parent: HTMLElement = $("#panels")) => {
   const c = document.createElement("section");
   c.className = `card${wide ? " wide" : ""}`;
   c.dataset.panel = panel;
-  $("#panels").append(c);
+  parent.append(c);
   const chart = document.createElement("div");
   chart.className = "chart";
   c.append(chart);
@@ -314,8 +314,10 @@ function cost(d: Data, x: ReturnType<typeof xAxis>) {
   host.insertAdjacentHTML("beforeend", `<div class="strip stat">${slots.join("")}<span>decisions this week: ${thisWeek}</span></div>`);
 }
 
-function decisions(d: Data) {
-  const host = card("decisions", true);
+/** Decisions a page shows, the latest first; older ones are a click away. */
+const DECISIONS_PAGE = 20;
+function decisions(d: Data, parent: HTMLElement) {
+  const host = card("decisions", true, parent);
   const comp = (r: DecisionRow) => (r.kind === "owner-step" ? "<b>owner step</b>" : esc(r.card?.component ?? "-"));
   const trustColor = { green: "ok", amber: "", void: "bad" };
   // Keyed by place, not id: a card decided again (rte decide --card) has a row per run under one id.
@@ -323,10 +325,21 @@ function decisions(d: Data) {
     const n = r.counts.wins + r.counts.losses + r.counts.ties;
     return `<tr data-decision="${esc(r.id)}" data-i="${i}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>${r.real?.share === undefined ? "-" : r.real.share.toFixed(2)}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
   });
-  host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th title="R1 at a keep: the candidate's share against the champion on testers' sends (reported, never deciding)">R1</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="13" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
+  const pages = Math.max(1, Math.ceil(rows.length / DECISIONS_PAGE));
+  const render = () => {
+    decisionsPage = Math.max(0, Math.min(decisionsPage, pages - 1));
+    const from = decisionsPage * DECISIONS_PAGE;
+    const shown = rows.slice(from, from + DECISIONS_PAGE);
+    const pager = pages > 1 ? `<div class="pager"><button data-page="-1"${decisionsPage === 0 ? " disabled" : ""}>newer</button><span class="muted">${from + 1}–${from + shown.length} of ${rows.length}</span><button data-page="1"${decisionsPage === pages - 1 ? " disabled" : ""}>older</button></div>` : "";
+    host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th title="R1 at a keep: the candidate's share against the champion on testers' sends (reported, never deciding)">R1</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${shown.join("") || '<tr><td colspan="13" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>${pager}`;
+  };
+  render();
   host.addEventListener("click", (e) => {
-    const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-decision]");
-    if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions[Number(tr.dataset.i)]);
+    const t = e.target as HTMLElement;
+    const step = t.closest<HTMLElement>("button[data-page]")?.dataset.page;
+    if (step) return (decisionsPage += Number(step)), render();
+    const tr = t.closest<HTMLElement>("tr[data-decision]");
+    if (tr && !t.closest("a")) void drill(d.decisions[Number(tr.dataset.i)]);
   });
 }
 
@@ -355,8 +368,8 @@ function loopNow(s: Status) {
   return { st, age, state };
 }
 
-function status(d: Data) {
-  const host = card("status", true);
+function status(d: Data, parent: HTMLElement) {
+  const host = card("status", true, parent);
   const s = d.status;
   const { st, age, state } = loopNow(s);
   const slot = st.slot ?? d.epochs.at(-1)?.slots.find((x) => x.status === "active")?.slot;
@@ -660,21 +673,45 @@ function view(id: string, title: string, blurb: string) {
   $("#panels").append(h);
 }
 
+/** The Loop view, folded until the owner opens it or comes by its link: its status strip, then its decisions. */
+function loopView(d: Data) {
+  const fold = document.createElement("details");
+  fold.className = "wide view fold";
+  fold.id = "loop";
+  fold.open = loopOpen;
+  const n = d.decisions.length;
+  fold.innerHTML = `<summary><h2>Loop</h2><span class="muted">${esc(loopNow(d.status).state)} · ${n} decision${n === 1 ? "" : "s"}</span></summary><p class="muted">The loop tries changes the analyst and critic propose, measures each against the champion on the bank's cases, and keeps what is faster with nothing worse. It needs you only for what it holds (Needs you).</p><div class="fold-body"></div>`;
+  fold.addEventListener("toggle", () => (loopOpen = fold.open));
+  $("#panels").append(fold);
+  const body = fold.querySelector<HTMLElement>(".fold-body")!;
+  status(d, body);
+  decisions(d, body);
+}
+// A link to the Loop view (the header's, the overview's stages) opens it: landing on the fold alone would show nothing.
+document.addEventListener("click", (e) => {
+  const a = (e.target as HTMLElement).closest("a");
+  if (a?.hash !== "#loop" || a.pathname !== location.pathname) return;
+  loopOpen = true;
+  const fold = document.querySelector<HTMLDetailsElement>("details#loop");
+  if (fold) fold.open = true;
+});
+
 // ---- Load, draw, poll
 
 let data: Data | undefined;
 let intakeData: Intake | undefined;
 let intakeError: string | undefined;
 let prodHealth: ProdHealth | undefined;
+/** The Loop view's fold and its page of decisions: a redraw (every poll, a resize) keeps both. */
+let loopOpen = location.hash === "#loop";
+let decisionsPage = 0;
 function draw() {
   if (!data) return;
   $("#panels").replaceChildren();
   overview(data, intakeData);
   const x = xAxis(data);
   const evs = ownerSteps(data, x);
-  view("loop", "Loop", "The loop tries changes the analyst and critic propose, measures each against the champion on the bank's cases, and keeps what is faster with nothing worse. It needs you only for what it holds (Needs you).");
-  status(data);
-  decisions(data);
+  loopView(data);
   view("benchmarks", "Benchmarks", "Every few keeps a checkpoint measures the champion against A0 on the frozen benches: B1 (the driver's held-out and tuning cases), U1 (your recorded sends) and R1 (testers' sends with gold). They only report: a champion surely slower than A0, or overfitting, comes to you in Needs you.");
   quality(data, x, evs);
   realBench(data, x);
