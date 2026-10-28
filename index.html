@@ -7,7 +7,7 @@
 </head>
 <body>
   <main class="home">
-    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. Pages 1-10 call no model (Speech and Ink ↔ words call Scribe, paid, only when you press Talk or Start). Pages 11-15 call Claude on your subscription, only when you press their run button.</p>
+    <p class="muted">Each building block of the v2 canvas, tested on its own before anything is assembled. Pages 1-10, 16 and 18-20 call no model (Speech and Ink ↔ words call Scribe, paid, only when you press Talk or Start). Pages 11-15 and 17 call Claude on your subscription, only when you press their run button.</p>
     <a class="card" href="/playgrounds/render/"><h2>1. Renderer</h2><span>A scene of layered shapes drawn in the doodle style: text inside shapes, picture placeholders, fade, z order, groups, optional grid and id tags.</span></a>
     <a class="card" href="/playgrounds/ops/"><h2>2. Ops stream</h2><span>Op lines streamed in token-sized chunks and applied the moment each line completes. Prose, unknown ids and cut-off lines show up as errors.</span></a>
     <a class="card" href="/playgrounds/ink/"><h2>3. Ink</h2><span>Draw with the pen: smooth strokes with a time on every point, ready to be matched to your words.</span></a>
@@ -25,13 +25,16 @@
     <a class="card" href="/playgrounds/router/"><h2>15. Router</h2><span>Which lane each send takes (fast or full), by rules first, over labeled sends.</span></a>
     <a class="card" href="/playgrounds/board/"><h2>16. Board shots</h2><span>An infinite board of pages: what a model can be shown of it. Views picked for the send and captured side by side (what you see, close-ups of marks, pages you named, the whole board) next to the site map as text, with what each costs. No model call.</span></a>
     <a class="card" href="/playgrounds/camera/"><h2>17. Camera</h2><span>"Zoom out", "go to the shop page", "a little to the left": can a model move the camera the way a person means? Cases scored by rules, or type your own and watch it glide. Calls Claude on your subscription.</span></a>
+    <a class="card" href="/playgrounds/course/"><h2>18. Course</h2><span>A mockup of narrated courses: the Eval Harness Course replayed silently on its voice's timings, a laser moving to whatever each line is about, and Tweaks (T) to compare designs. No model call.</span></a>
+    <a class="card" href="/playgrounds/course-imagine/"><h2>19. Course in imagine</h2><span>The same course in imagine's look: each chapter a hand-drawn page on the board, and while it's paused you circle anything in red pencil to ask about it. No model call.</span></a>
+    <a class="card" href="/playgrounds/course-flow/"><h2>20. Courses in imagine, end to end</h2><span>A low-fidelity flow, a step at a time: bring in documents, ask for a course, imagine plans and draws it as pages, Preview plays it with a voice, and a question asked while it plays becomes a page of the course. No model call.</span></a>
     <h2 style="font:22px Excalifont, cursive;margin:8px 0 0">Evals</h2>
     <a class="card" href="/evals/driver/"><h2>Driver</h2><span>A model plays a user (first-timer with a site in mind, explorer, or breaker): it looks at the screen, talks and scribbles (synthesized, seeded), presses Enter, and rates what it got. Calls Claude on your subscription.</span></a>
     <p class="muted">Eval HQ (the loop's progress, the review of real sends, the judge's labels) runs on the eval machine beside the loop, not here: see evals/RUNBOOK.md.</p>
   </main>
   <script type="module">
     import { shell } from "/src/ui.ts";
-    shell("", "Playgrounds for the building blocks, each tested alone. None of them call a model.");
+    shell("", "Playgrounds for the building blocks, each tested alone.");
   </script>
 </body>
 </html>

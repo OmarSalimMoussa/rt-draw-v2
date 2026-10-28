@@ -51,9 +51,12 @@ In about 22 hours of running (19 to 20 October 2026), for a typical request:
 The drawings were just as good.
 
 - `evals/` is the loop itself. `evals/README.md` tells the story, with charts,
-  and `evals/RUNBOOK.md` explains how to run it.
-- The `loop/champion` branch is the best version the loop found.
-- The `eval/history` branch is its record of every change it tried, kept or not.
+  `evals/RUNBOOK.md` is what its owner decides and does, and
+  `evals/ops/README.md` explains how to set it up and run it.
+- The loop keeps two branches in its own clone on the eval machine, not in this
+  repository: `loop/champion`, the best version it found, and `eval/history`,
+  its record of every change it tried, kept or not. The champion's changes reach
+  `master` when they're shipped (`evals/ops/ship.sh`).
 
 ## Try it
 
