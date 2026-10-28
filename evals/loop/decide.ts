@@ -16,7 +16,7 @@ import { type ScanResult, sameOnTheClock, scan } from "./diffscan.ts";
 import { type DriveCtx, type Pages, continueFrom } from "./drive.ts";
 import { decisionRow, historyRows, openHistory, realLine, recordDecision } from "./history.ts";
 import { appendRow, meterOf, readRows, rowOf } from "./metrics.ts";
-import { paths } from "./paths.ts";
+import { isRealCase, paths } from "./paths.ts";
 import { caseDir, put, runFile } from "./record.ts";
 import { TriedConflict, applyKnobs, applyTried, triedPatch } from "./search.ts";
 import { type CardState, type Decided, type Facts, RULES, type State, newState, overrun, readState, saveState } from "./state.ts";
@@ -99,7 +99,8 @@ async function toppedUp(run: string, banked: string[], judge: Judge, cls: Row["c
 async function lessons(gw: string, run: string, rows: Row[]) {
   if (!existsSync(runFile(run, "rows.jsonl"))) return;
   writeLossDigest(run);
-  const lost = rows.filter((r) => !r.void && !r.lost && r.s < 0).slice(0, 12);
+  // The driver's cases only: a real send's never reaches the failure analyst (failureDigest), so it can't take a place.
+  const lost = rows.filter((r) => !r.void && !r.lost && r.s < 0 && !isRealCase(r.case)).slice(0, 12);
   if (lost.length && ((await gatewayStatus(gw)) as { pace: { ok: boolean } }).pace.ok) put(runFile(run, "failures.json"), await agents.failureAnalyst(failureDigest(lost.map((r) => ({ case: r.case, run }))), run).catch(() => []));
 }
 
@@ -111,11 +112,13 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   const base = championSha();
   const cand = c.cand!;
   const t0 = Date.now(), paused0 = budgetPausedMs();
-  const affected = { tuning: 0, of: 0, topUp: 0 };
+  const affected: DecisionRow["affected"] = { tuning: 0, of: 0, topUp: 0 };
   const record = (d: Decision, at: string, result: Omit<ABResult, "invariants"> = { rows: [] }, owner: string[] = []) => {
     const row = decisionRow({ id, epoch: st.epoch, card: c.card, candSha: cand, baseSha: base, run: at, judgeId: judgeId("fidelity", lastServed(), variants().fidelity), result: { ...result, decision: d }, affected });
     if (d.verdict === "keep") git(p.repo, "branch", "-f", "loop/champion", cand);
-    if (!historyRows("decisions.jsonl").some((x) => x.id === id)) recordDecision(row, { owner });
+    // Once per run: a resumed decision isn't recorded twice, and `rte decide --card` again on the same branch (a new run)
+    // is (d-cand-e80-h3's second re-decide, on the funnel audit's rules, went unrecorded under its id alone).
+    if (!historyRows("decisions.jsonl").some((x) => x.id === id && x.run === at)) recordDecision(row, { owner });
     c.run = at;
     rte.say(`${id}: ${d.verdict} (${d.class}, ${d.goal}): ${[...d.reasons, ...d.vetoes].join("; ")}`);
     return row;
@@ -138,7 +141,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     record(d, run("g0"), undefined, o.owner ?? (verdict === "owner" ? reasons : []));
     return settle({ id, verdict, component: c.card.component, at: new Date().toISOString() });
   };
-  // Past 30 min of measuring at 8 slots: harness suspect (§6.7). Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
+  // Past RULES.decisionMaxMin of measuring at 8 slots: harness suspect (§6.7). Hours waiting out the budget's pause (ab.ts budgetGate) aren't measuring.
   const overBy = (slots: number) => {
     const minutes = (Date.now() - t0 - (budgetPausedMs() - paused0)) / 60_000;
     return overrun(minutes, slots) ? `overran: ${minutes.toFixed(0)} min of measuring (${RULES.decisionMaxMin} at 8 slots)` : undefined;
@@ -171,9 +174,11 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
   return rte.withRig(gw, [arms.A.tree, arms.B.tree], async (rig) => {
     // G1: the diffscan at 0 calls (a finished scan is read back on resume).
     const scanRun = run("scan");
-    const sc = maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) }));
-    const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? [])];
-    Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length });
+    // Knobs a code card adds or moves in tuning.ts, as its own knobs are: e88-h3's jev.copies came that way.
+    const moved = [...git(p.repo, "diff", base, cand, "--", "src/core/tuning.ts").matchAll(/^\+\s*K\("([\w.]+)"/gm)].map((m) => m[1]);
+    const sc = hedgeScan(c.card, maybe<ScanResult>(runFile(scanRun, "scan.json")) ?? (await scan(rig, { run: scanRun, arms, seed: scanRun, card: c.card, cases: scanCases(scanRun) })), moved);
+    const tuning = [...(sc.affected.tuning ?? []), ...(sc.affected.fresh ?? []), ...(sc.affected.real ?? [])];
+    Object.assign(affected, { tuning: tuning.length, of: sc.cases.filter((x) => x.set !== "heldout-gate").length, real: sc.affected.real?.length ?? 0 });
     if (rte.o.f["quality-only"] && sc.class === "S") {
       rte.say(`${id}: a schedule change (S): latency-goal cards wait for the PGX (--quality-only)`);
       return settle({ id, verdict: "deferred", component: c.card.component, at: new Date().toISOString() });
@@ -184,7 +189,7 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     const more = tops && affected.of ? (LOOP.topUpMaxSends * tuning.length) / affected.of : 0;
     if (sc.class !== "N" && sc.class !== "S" && tuning.length + more < LOOP.rareMin) {
       const why = `too rare to measure: ${tuning.length} affected cases${tops ? `, ~${more.toFixed(0)} more from ${LOOP.topUpMaxSends} top-up sends` : ""} (< ${LOOP.rareMin})`;
-      return gate("revert", [why], { owner: [why], cls: sc.class });
+      return gate("revert", [why], { cls: sc.class });
     }
     let at: string, result: ABResult;
     if (sc.class === "N" || sc.class === "S") {
@@ -227,7 +232,6 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
     // A void goes to the owner list, never rerun (§1.4 item 9): in history every rerun of a void voided again, the same
     // harness asymmetry each time. The owner re-decides it with rte decide --card once the cause is fixed.
     if (d.verdict === "void") owner.push(`void: ${d.reasons.join("; ")}`);
-    if (d.ownerList) owner.push(`too rare to measure: ${result.rows.filter((r) => !r.void).length} affected cases`);
     if (d.verdict === "owner") owner.push(...d.vetoes);
     if (d.verdict === "keep") {
       const hold = [...new Set([
@@ -260,18 +264,33 @@ export async function decideCard(rte: Rte, gw: string, st: State, c: CardState):
 /** A knob card's commit: the defaults in tuning.ts set to the card's values, within each knob's range. */
 /**
  * A token for an engineer session once a slot is under the five-hour pause (LOOP.fiveHourPauseAt): builds run beside
- * the decisions, so a pause waits here for the reset instead of dropping the card. Undefined when the budget stops the loop.
+ * the decisions, so a pause waits here for the reset instead of dropping the card. Undefined when every token is past
+ * its week: the card stays unbuilt, and the loop pauses until a week is read again.
  */
 async function freeSlot(rte: Rte, gw: string): Promise<Token | undefined> {
   for (;;) {
-    const s = (await gatewayStatus(gw)) as { pace: Facts["pace"] };
-    if (s.pace.stop) return undefined;
+    const { pace } = (await gatewayStatus(gw)) as { pace: Facts["pace"] };
+    if (!pace.ok && pace.week) return undefined;
     try {
       return await agents.slotToken(rte.tokens(), gw);
     } catch {
-      await sleep(Math.max(60_000, (s.pace.pauseUntil ?? 0) - Date.now()));
+      await sleep(Math.max(60_000, (pace.ok ? 0 : pace.pauseUntil) - Date.now()));
     }
   }
+}
+
+/**
+ * A hedge (more copies of a call, or sooner: draw.copies, picture.copyAfterMs, …) answers nothing in a scan or a replay
+ * (gateway.ts: a copy is live only), so the scan reads it as no effect or a schedule change: e74-h2, e76-h1 and e76-h2
+ * were decided at 0 calls that way. It goes live on every scanned case, none from the cache: each arm's first call is
+ * one shared live call, B's copies fresh ones, and the first to stream wins.
+ */
+export function hedgeScan(card: HypothesisCard, sc: ScanResult, moved: string[] = []): ScanResult {
+  const hedge = [...Object.keys(card.knobs ?? {}), ...moved].some((k) => /\.(copies|copyAfterMs)$/.test(k));
+  if (!hedge || (sc.class !== "N" && sc.class !== "S")) return sc;
+  const affected: ScanResult["affected"] = {};
+  for (const x of sc.cases) (affected[x.set] ??= []).push(x.case);
+  return { ...sc, class: "Q", affected, cached: [] };
 }
 
 /** Builds a card on its branch (cand/e<E>-h<n>, off the champion): a commit, or the champion itself when nothing changed. */
@@ -280,11 +299,11 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
     const wt = worktreeOf(c.branch);
     if (git(wt, "status", "--porcelain")) git(wt, "reset", "-q", "--hard"), git(wt, "clean", "-qfd");
     if (Number(git(wt, "rev-list", "--count", "loop/champion..HEAD")) === 0) {
-      const engineer = async (note?: string) => {
+      const engineer = async (note?: string, role = "engineer") => {
         const token = await freeSlot(rte, gw);
         // The budget stopped the loop: the card stays to build when it resumes.
         if (!token) return false;
-        await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-engineer`, token, mockApi: await rte.agentMock(), note });
+        await rte.engine().engineer({ card: c.card, branch: c.branch, run: `${st.stamp}-${c.id}-${role}`, token, mockApi: await rte.agentMock(), note });
         return true;
       };
       let built = true;
@@ -300,9 +319,20 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
           built = await engineer(`Its tried patches don't apply one after another on today's champion (they edit the same lines, or the code moved). Make all of them together by hand, each one's intent kept:\n\n${patches}`);
         }
       } else built = await engineer();
+      // G0's diff gates, free, once as built: a reject its engineer can fix (e88-h4's `const HEX = 16` outside tuning.ts)
+      // goes back to it once with the reasons, rather than reverting the card unmeasured.
+      if (built && c.card.kind !== "knob" && git(wt, "status", "--porcelain")) {
+        commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
+        const g = g0({ diff: diffOf(wt, "loop/champion", "HEAD") });
+        if (g.verdict === "reject") {
+          rte.say(`${c.id}: the gate rejects it as built (${g.reasons.join("; ").slice(0, 200)}): its engineer fixes it once`);
+          built = await engineer(`The gate rejects this change as built. Fix what it names and keep the change's intent:\n- ${g.reasons.join("\n- ")}`, "engineer-fix");
+        }
+      }
       if (!built) return void rte.say(`${c.id}: not built now: the budget stopped the loop`);
-      if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
     }
+    if (git(wt, "status", "--porcelain")) commitAll(wt, `${c.card.change}\n\n${c.id}: a ${c.card.kind} card on ${c.card.component} (goal ${c.card.goal}), written by the eval loop`);
+    knobbed(c);
     Object.assign(c, { cand: git(wt, "rev-parse", "HEAD"), status: "built" });
   } catch (err) {
     rte.say(`${c.id}: not built: ${msg(err)}`);
@@ -312,7 +342,29 @@ export async function build(rte: Rte, gw: string, st: State, c: CardState) {
 }
 
 /** The candidate on top of today's champion (a keep moved it); a conflict rebuilds it once (the engineer once more). */
+/**
+ * A card's knobs are what B runs, on a branch built now or before (a resumed card, `rte decide --card`): an engineer
+ * that wrote prompt variant 3 but left its default (e83-h4's {"draw.prompt": 3}), or a new knob at 0 (e83-h3's
+ * draw.inlinePictures), had B run today's behaviour, read as no effect at 0 calls. Already set, it changes nothing.
+ */
+function knobbed(c: CardState) {
+  if (c.card.kind === "knob" || !Object.keys(c.card.knobs ?? {}).length) return;
+  const wt = worktreeOf(c.branch);
+  applyKnobs(wt, c.card.knobs!);
+  if (!git(wt, "status", "--porcelain")) return;
+  commitAll(wt, `${c.id}: its card's knobs set, ${JSON.stringify(c.card.knobs)}`);
+  c.cand = git(wt, "rev-parse", "HEAD");
+}
+
 export async function rebased(rte: Rte, gw: string, st: State, c: CardState): Promise<boolean> {
+  try {
+    knobbed(c);
+  } catch (err) {
+    rte.say(`${c.id}: not built: ${msg(err)}`);
+    c.status = "dropped";
+    saveState(st);
+    return false;
+  }
   const champ = championSha();
   if (isAncestor(champ, c.cand!)) return true;
   const wt = worktreeOf(c.branch);

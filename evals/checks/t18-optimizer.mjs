@@ -22,7 +22,7 @@ const put = (file, data) => (mkdirSync(join(file, ".."), { recursive: true }), w
 const sha12 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
 const { g0, parseDiff, diffOf, cardOwnerReasons } = await import("../optimizer/gates.ts");
-const { analystDigest, failureDigest, tokensOf, writeLossDigest, writeMissDigest, DIGEST } = await import("../optimizer/digest.ts");
+const { analystDigest, decisionLines, failureDigest, tokensOf, writeLossDigest, writeMissDigest, DIGEST } = await import("../optimizer/digest.ts");
 const { OVERUSE, PATTERNS, tracePatterns } = await import("../optimizer/patterns.ts");
 const { BASH_ALLOW, CAPS, analyst, critic, engineer, engineerCanUseTool, failureAnalyst, readCards, slotToken, toolRule } = await import("../optimizer/agents.ts");
 const prompts = await import("../optimizer/prompts.ts");
@@ -78,6 +78,13 @@ for (const [file, added, removed] of [["src/core/render.ts", ["    roughness: 0,
   check(verdict(diff(file, added, removed)).verdict === "owner", `a crisp outline in ${file} isn't an owner-list item: ${verdict(diff(file, added, removed)).reasons}`);
 check(verdict(diff("src/core/render.ts", [`${KNOB} // the shape's own style first`], [KNOB])).verdict === "pass", "a render edit that keeps the knob read isn't passed");
 check(verdict(diff("src/core/prompts.ts", ["When the ink is a rough box, fill that box with the shape it stands for."], [])).verdict === "pass", "a prompt line about the user's rough ink is held as a look change");
+check(verdict(diff("src/core/prompts.ts", ['<circle cx="60" cy="60" r="34" fill="#ffd43b" stroke="#1e1e1e" stroke-width="3"/>'], [])).verdict === "pass"
+  && verdict(diff("src/core/prompts.ts", ["Draw every outline at a thinner stroke width so the page reads clean."], [])).verdict === "owner"
+  && verdict(diff("src/core/prompts.ts", ["Set strokeWidth=1 on every shape."], [])).verdict === "owner", "an SVG element's stroke-width (the picture prompt's own) is held, or an op's stroke width asked for isn't");
+// No caps on a picture's elements or colors (LOOP-V2.md B1): setting one is a reject, taking one off passes.
+const capLine = (v) => `  K("picture.colors", ${v}, 0, 10, 1, "and at most this many colors (0: as many as it needs)"),`;
+check(verdict(diff("src/core/tuning.ts", [capLine(4)], [capLine(0)])).verdict === "reject", `a picture colour cap isn't refused: ${verdict(diff("src/core/tuning.ts", [capLine(4)], [capLine(0)])).reasons}`);
+check(verdict(diff("src/core/tuning.ts", [capLine(0)], [capLine(4)])).verdict === "pass", `taking a picture colour cap off is refused: ${verdict(diff("src/core/tuning.ts", [capLine(0)], [capLine(4)])).reasons}`);
 
 // ---- G0 in a candidate tree: the typecheck with the bridge, and the scene round trip (0 calls)
 const tree = join(home, "trees", "cand");
@@ -163,9 +170,14 @@ const sp = (name, s, e, o = {}) => ({ name, traceId: "t", spanId: o.id ?? name, 
 const armFiles = (run, c, a, failedOps) => {
   const d = join(p.run(run), "cases", c, a);
   put(join(d, "result.json"), { ops: [{ line: "shape(h, rect)", ok: true, ms: 10 }, ...(failedOps ? [{ line: "shape(x, blob)", ok: false, error: "unknown kind blob", ms: 20 }] : [])], reply: "shape(h, rect)", stopReasons: [], calls: [{ role: "draw", reqHash: a === "A" ? "d1" : "d2", shared: "-", mode: "live", ms: 5000, thinkingTokens: 10 }, { role: "draw-refs", reqHash: "r1", shared: "leader", mode: "live", ms: 3000 }] });
-  put(join(d, "timing.json"), { enterAt: 0, ttfcMs: 1200, ttdMs: 6000, firstTextMs: 900, resolverMs: 3000, picturesMs: 2000, renders: 3, longTasksMs: 0, quiescedAt: 6000, heapMb: 50, gatewayLoopP99Ms: 1 });
+  put(join(d, "timing.json"), { enterAt: 0, ttfcMs: 1200, ttdMs: 6000, ttfdMs: 5050, renderP50Ms: 0.9, firstTextMs: 900, resolverMs: 3000, picturesMs: 2000, renders: 3, longTasksMs: 0, quiescedAt: 6000, heapMb: 50, gatewayLoopP99Ms: 1 });
   put(join(d, "changes.json"), [a === "A" ? "resized 'header'" : "added rect 'promo'"]);
-  put(join(d, "spans.json"), [sp("build the prompt", 0, 3600, { id: "bp" }), sp("resolve references", 0, 3500, { id: "rr", parent: "bp" }), sp("model call · draw-refs · haiku", 0, 3500, { id: "mr", parent: "rr", attrs: { from: "draw-refs", model: "haiku" } }), sp("board screenshots", 3510, 3700, { id: "bs", parent: "bp" })]);
+  // The think router's answer, cached as cache.ts writes it: section 1 reads Jev's range from it.
+  put(join(d, "replies.json"), [{ role: "draw-think", ordinal: 0, reqHash: `think-${run}-${c}-${a}`, cacheFile: `think-${run}-${c}-${a}.json`, offsets: [30] }]);
+  put(p.reply(`think-${run}-${c}-${a}`), { text: '{"think":{"type":"noul","noul":0.62}}' });
+  put(join(d, "spans.json"), [sp("build the prompt", 0, 3600, { id: "bp" }), sp("resolve references", 0, 3500, { id: "rr", parent: "bp" }), sp("model call · draw-refs · haiku", 0, 3500, { id: "mr", parent: "rr", attrs: { from: "draw-refs", model: "haiku" } }), sp("board screenshots", 3510, 3700, { id: "bs", parent: "bp" }),
+    sp("model call · draw · sonnet", 3700, 6000, { id: "md", attrs: { from: "draw", model: "sonnet", outTokens: 200 } }), sp("model: time to first text", 3700, 4500, { parent: "md" }),
+    sp("model: streaming the reply", 4500, 5500, { parent: "md" }), sp("op 1: shape(h, rect)", 5000, 5000, { attrs: { ok: true, line: "shape(h, rect)" } })]);
   put(join(p.run(run), "cases", c, "judge", "fidelity-1.json"), { winner: "left", confidence: 2, why: `A kept the header; B added a promo${c.startsWith("c-h") ? ` ${SECRET}` : ""}`, positions: { left: "A", right: "B" }, judgeId: "j1" });
 };
 const abCases = tuningCases.slice(200, 240);
@@ -175,14 +187,14 @@ for (const c of tuningCases.slice(100, 110)) armFiles("cp1", c.id, "A", false);
 rows("ab1", [...abCases.map((c, i) => rowOf(c.id, i % 4 === 0 ? -1 : i % 4 === 1 ? 0 : 1, { beat: c.beat })), ...heldCases.slice(0, 6).map((c) => rowOf(c.id, -1))]);
 
 // ---- The digest
-const digest = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, runs: ["ab1"], ledger: ["e1-h1 resolve.noThink: keep"], tried: ["e1-h2 draw prose opener | draw | 3f2a | revert"], failures: ['[{"case":"x","component":"draw","evidence":"e","tag":"t"}]'] });
+const digest = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, runs: ["ab1"], decisions: ["- e1-h2 code draw fidelity: draw prose opener → revert: Rule F at look 48 (1-2-3)"], failures: ['[{"case":"x","component":"draw","evidence":"e","tag":"t"}]'] });
 check(tokensOf(digest) <= DIGEST.maxTokens, `the digest is ${tokensOf(digest)} tokens (> ${DIGEST.maxTokens})`);
 check(digest.length / 4 <= DIGEST.maxTokens, `the digest is over 40k tokens even at 4 characters a token`);
 check(!digest.includes(SECRET) && !heldCases.some((c) => digest.includes(c.id)), "the digest includes a held-out case");
 const at = (s) => digest.indexOf(s);
-check(at("# 1. Where the champion fails") === 0 && at("# 1.") < at("# 2. Candidate losses") && at("# 2.") < at("# 3. The champion's traces"), "the digest's sections are out of order");
-const s1 = digest.slice(0, at("# 2."));
-const s2 = digest.slice(at("# 2."), at("# 3."));
+check(at("# 1. Where the time to first drawing goes") === 0 && at("# 1.") < at("# 2. Where the champion fails") && at("# 2.") < at("# 3. Candidate losses") && at("# 3.") < at("# 4. Failure analysts") && at("# 4.") < at("# 5. Every decision so far"), "the digest's sections are out of order");
+const s1 = digest.slice(at("# 2."), at("# 3."));
+const s2 = digest.slice(at("# 3."), at("# 4."));
 check(/\(\+\d+ more not shown\)/.test(s1), "section 1 isn't cut to its budget (the synthetic bank is larger than it)");
 for (const want of ["driver rated", "miss check no", "miss check partly", "lost to the anchor at the last checkpoint", "empty send", "failed ops", "failed pictures"]) check(s1.includes(want), `section 1 has no '${want}'`);
 for (const by of ["By beat:", "By ask type:", "By start:", "By component:"]) check(s1.includes(by), `section 1 isn't grouped: no '${by}'`);
@@ -190,15 +202,22 @@ for (const by of ["By beat:", "By ask type:", "By start:", "By component:"]) che
 const missed = (n) => n % 3 === 0 || n % 4 === 1 || n % 4 === 2 || n % 11 === 0 || n % 13 === 0 || n % 17 === 0 || cpLost.includes(tuningCases[n].id);
 const misses = tuningCases.filter((c, n) => c.beat === "amb-arrow" && missed(n)).length;
 check(s1.includes(`amb-arrow ${misses}/64`), `section 1's beat count for amb-arrow isn't ${misses}/64: ${/By beat:.*/.exec(s1)?.[0]}`);
+// The bar before a card is measured, and every target's case count, missed or not, so narrow cards drop before they're built.
+check(/Coverage: .*fewer than 32 .*too rare/.test(s1) && /by beat: [^;]*amb-arrow 64/.test(s1) && /by ask type: /.test(s1) && /with ink: \d+/.test(s1), `section 1 lacks the 32-case bar or the coverage counts: ${/Coverage:.*/.exec(s1)?.[0]}`);
 const scores = [...s1.matchAll(/^- (\S+) \[(\d+)\]/gm)].map((m) => [m[1], Number(m[2])]);
 check(scores[0]?.[0] === worst && scores.every((x, i) => !i || x[1] <= scores[i - 1][1]), `champion misses aren't ranked worst first: ${scores.slice(0, 5)}`);
 check(cpLost.every((c) => !scores.some(([id]) => id === c) || s1.includes(`${c} [`)), "a checkpoint loss is missing");
 check(s2.includes("LOST") && s2.indexOf("LOST") < s2.indexOf(" tie ") && /B's failed ops/.test(s2) && /judge: A kept/.test(s2) && /B's top spans/.test(s2) && /thinking A true B false/.test(s2) && /By persona:/.test(s2) && /By fixture:/.test(s2) && /differs in: draw/.test(s2), `section 2 lacks the candidate losses' fields: ${s2.slice(0, 400)}`);
 // 10 checkpoint cases + 40 decision cases (the 6 held-out ones never read).
-check(/Waiting on a slow answer only part of the work needs.*: 50 cases/.test(digest) && /Latency by step/.test(digest) && digest.includes("# 7. Tried"), "section 3 (patterns, latency, tried) is missing");
+check(/Waiting on a slow answer only part of the work needs.*: 50 cases/.test(digest) && /First drawing by step/.test(digest) && digest.includes("# 5. Every decision so far") && digest.includes("e1-h2 code draw fidelity"), "the patterns, latency or decisions are missing");
+// First drawing's phases on the champion's 50 sends: the call starts at 3700, first text 800 ms later, the op 500 ms after.
+for (const want of ["over 50 champion sends", "before the drawing call (Jev, screenshots, the prompt): 3700 ms", "the drawing model's first text: 800 ms", "streamed after it (nothing is drawn before a whole line): 500 ms",
+  "to the first drawing (paint, or a picture's strokes or a later op): 50 ms", "first drawing: 5050 ms (p90 5050); render per op: p50 0.9 ms", "draw · sonnet: first text 800 ms (p90 800), 200 tok/s, thought on",
+  "- draw-think: 0.62, 0.62–0.62, 0.62–0.62 (50 answers)"])
+  check(digest.includes(want), `section 3's first drawing steps lack "${want}": ${digest.slice(digest.indexOf("First drawing by step"), digest.indexOf("First drawing by step") + 900)}`);
 writeMissDigest("champ", { run: "cp1", champion: "A" });
 writeLossDigest("ab1");
-check(existsSync(p.digest("champ")) && readFileSync(p.digest("champ"), "utf8").startsWith("# 1. Where the champion fails") && existsSync(join(p.run("ab1"), "digest.md")), "the digests weren't written to digests/<sha>.md and runs/<run>/digest.md");
+check(existsSync(p.digest("champ")) && readFileSync(p.digest("champ"), "utf8").startsWith("# 2. Where the champion fails") && existsSync(join(p.run("ab1"), "digest.md")), "the digests weren't written to digests/<sha>.md and runs/<run>/digest.md");
 const fd = failureDigest([...heldCases.slice(0, 3).map((c) => ({ case: c.id })), ...tuningCases.slice(0, 14).map((c) => ({ case: c.id })), { case: abCases[0].id, run: "ab1" }]);
 check((fd.match(/^## /gm) ?? []).length === DIGEST.failureCases && !fd.includes(SECRET), `the failure digest holds ${(fd.match(/^## /gm) ?? []).length} cases or a held-out one`);
 check(/draw reply \(first 30 lines\):\n(?:shape.*\n){30}(?!shape)/.test(fd) && /thinking: draw/.test(fd) && /miss check: no/.test(fd) && /resolver: "the header" → a/.test(fd), "the failure digest lacks the draw reply's first 30 lines, the miss check, the resolver or thinking");
@@ -249,6 +268,7 @@ check(Object.entries(report).every(([id, r]) => r.cases.some((c) => c.case === `
 
 // ---- Prompts, seed cards, card rules
 check((prompts.LATENCY_PATTERNS.match(/^\| (?!Pattern|---)/gm) ?? []).length === 6 && prompts.ANALYST_SYSTEM.includes(prompts.LATENCY_PATTERNS), "the analyst prompt lacks the doc's 6-row latency table");
+check([prompts.ANALYST_SYSTEM, prompts.CRITIC_SYSTEM].every((x) => /fewer than 32 of them it is reverted unmeasured/.test(x)) && /at least 32 tuning cases/.test(prompts.CRITIC_SYSTEM), "the analyst or critic isn't told the 32-case bar");
 check(prompts.CRITIC_SYSTEM.includes(prompts.CARD_SCHEMA) && Object.keys(OVERUSE).every((d) => prompts.CARD_SCHEMA.includes(d)), "the critic prompt lacks the card schema or the detector names");
 check(["send(", "fromJSON", "render", "DEFAULTS", "tuningId", "needsPicture", "runScript", "SCREEN", "asPage", "pageTop", "Word", "Stroke", "finished", "boardStage"].every((x) => prompts.BRIDGE_CONTRACT.includes(x)) && prompts.ENGINEER_SYSTEM.includes(prompts.BRIDGE_CONTRACT), "the engineer prompt lacks the bridge contract");
 check(["The card's change only: one idea", "every model a send may take is warmed at Send and gets the current board", "No new tests or scaffolding", "knob in src/core/tuning.ts", "Never touch frozen paths", "Never turn a patch on", "Edit with Edit, not whole-file Write"].every((r) => prompts.ENGINEER_SYSTEM.includes(r)), "the engineer prompt lacks a rule");
@@ -299,6 +319,14 @@ check(sw.cards[0].id === "e5-h1" && vals === "e5-h2a=0.95,e5-h2b=1,e5-h2c=0.6" &
 check(sw.cards.filter((c) => c.sweep).every((c) => c.card.sweep?.values.join() === "0.95,1,0.6"), "a sweep's knob cards don't carry the values run, which share its error");
 const verdictMod = await import("../loop/verdict.ts");
 check(verdictMod.sweepShift(1) === 0 && Math.abs(verdictMod.sweepShift(4) - 0.606) < 0.01 && verdictMod.sweepShift(2) < verdictMod.sweepShift(3), `a sweep's keep line isn't raised by its values (LOOP-V2.md D3): ${[1, 2, 3, 4].map(verdictMod.sweepShift)}`);
+// A hedge (copies of a call) goes live on every scanned case, none from the cache: a scan or a replay can't see a copy.
+const { hedgeScan } = await import("../loop/decide.ts");
+const scanned = { run: "s", class: "N", mismatch: false, cases: [{ case: "c1", set: "tuning", affected: false }, { case: "c2", set: "heldout-gate", affected: false }], affected: {}, cached: ["h1"] };
+const hedged = hedgeScan({ knobs: { "draw.copies": 2 } }, scanned);
+check(hedged.class === "Q" && hedged.affected.tuning?.join() === "c1" && hedged.affected["heldout-gate"]?.join() === "c2" && !hedged.cached.length
+  && hedgeScan({ knobs: { "draw.thinkYes": 0.8 } }, scanned) === scanned && hedgeScan({ knobs: { "picture.copyAfterMs": 400 } }, { ...scanned, class: "Q" }).cached.length === 1
+  && hedgeScan({ kind: "code" }, scanned, ["jev.copies"]).class === "Q" && hedgeScan({ kind: "code" }, scanned, ["jev.model"]) === scanned,
+  `a hedge card isn't measured live on every scanned case, or another card is: ${JSON.stringify(hedged)}`);
 const [a, b, c2] = sw.cards.filter((c) => c.sweep);
 const row = (id, verdict, looks, o = {}) => ({ id, verdict, class: "Q", reasons: [`Rule F at look ${16 * looks}`], looks: Array.from({ length: looks }, () => ({ n: 16, decisive: 10, z: -1.5 })), ...o });
 const aLost = sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "revert" } : c));
@@ -318,11 +346,11 @@ check(/pruned: e5-h2a/.test(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 
 check(search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", reasons: ["Rule F keep at look 48", "held-out: ttfd ×1.004 isn't faster"] })]) === undefined && search.sweepSkip(aLost, b, [row("e5-h2a", "revert", 3, { goal: "latency", codes: ["floor"], reasons: ["fidelity Z -0.80 < -0.5"] })]) === undefined, "G3's direction rule or a fidelity floor on a latency value pruned the values beyond it");
 check(/the sweep kept e5-h2a/.test(search.sweepSkip(sw.cards.map((c) => (c === a ? { ...c, status: "done", verdict: "keep" } : c)), c2, []) ?? ""), "a keep doesn't end its sweep");
 const dec = (id, o) => ({ id, kind: "card", verdict: "revert", class: "Q", goal: "fidelity", reasons: ["Rule F at look 48"], counts: { wins: 20, losses: 15, ties: 13, exactTies: 0 }, looks: [{ n: 16 }, { n: 32 }, { n: 48 }], latency: { ttfc: { est: 1 }, ttd: { est: 1 }, ttfd: { est: 0.97 } }, card: { kind: "knob", component: "draw", change: id }, ...o });
-const near = search.nearWins([dec("w1"), dec("w2", { counts: { wins: 10, losses: 15, ties: 5 } }), dec("w3", { reasons: ["latency veto: ttfd ×1.1"] }), dec("w4", { class: "N" }), dec("w5", { goal: "latency", card: { kind: "code", component: "picture", change: "w5", metric: "ttfd" } }), dec("w6", { verdict: "keep" }),
-  dec("w7", { codes: ["heldout"], reasons: ["Rule F keep at look 48", "held-out: fidelity Z 0.00 doesn't lean"] }), dec("w8", { reasons: ["Rule F keep at look 32", "empty sends up 4.0 points"] }), dec("w9", { goal: "latency", reasons: ["fidelity Z -0.80 < -0.5"], card: { kind: "knob", component: "draw", change: "w9", metric: "ttfd" } })]);
-check(near.length === 2 && /^w5 /.test(near[0]) && /^w1 .*20-15-13 at look 48, first drawing ×0\.97/.test(near[1]), `near wins aren't the reverted cards that leaned the right way, newest first: ${near.join(" | ")}`);
-const nd = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, tried: ["e1-h2 draw prose opener | draw | 3f2a | revert"], nearWins: near });
-check(nd.includes("# 4. Near wins") && nd.indexOf("# 4. Near wins") < (nd.indexOf("# 7. Tried") >>> 0), "the analyst's digest lacks the near wins section, ahead of the tried index");
+// Every decision, newest first, with why it went the way it did (the tried index and the ledger said only "revert").
+const lines5 = decisionLines([dec("w1"), dec("w5", { goal: "latency", reasons: ["latency: ttfd ×0.97 (p slower 0.4, p faster 0.2)"], counts: { wins: 0, losses: 0, ties: 48 } }), { ...dec("o1"), kind: "owner-step" }]);
+check(lines5.length === 2 && /^- w5 .*latency: .* → revert: latency: ttfd ×0\.97 .*\(0-0-48, first drawing ×0\.970/.test(lines5[0]) && /^- w1 .* → revert: Rule F at look 48 \(20-15-13/.test(lines5[1]), `the decision lines: ${lines5.join(" | ")}`);
+const nd = analystDigest({ championSha: "champ", checkpoint: { run: "cp1", champion: "A" }, decisions: lines5 });
+check(nd.includes("# 5. Every decision so far, newest first") && nd.indexOf("# 5.") > nd.indexOf("# 2. Where the champion fails"), "the analyst's digest lacks every decision, after the champion's misses");
 
 // ---- The engineer's canUseTool
 const repo = p.repo;
@@ -347,7 +375,7 @@ for (const cmd of ["npx tsc --noEmit", "./node_modules/.bin/tsc --noEmit && curl
 for (const cmd of ["./node_modules/.bin/tsc --noEmit", "git diff", "git status", "git diff --stat src/core/x.ts", "node --permission --allow-fs-read=. --import ./evals/loop/node-hooks.mjs scripts/tune.ts sets/marks.json --parts marks,arrow"])
   check(await allowed("Bash", { command: cmd }), `the engineer may not run ${cmd}`);
 check(BASH_ALLOW.some((re) => re.test("./node_modules/.bin/tsc --noEmit")) && !BASH_ALLOW.some((re) => /npx/.test(re.source)), "the allowlist isn't tsc without npx");
-check(JSON.stringify(CAPS) === JSON.stringify({ analyst: { turns: 30, minutes: 12, usd: 2.5 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } }), `CAPS ${JSON.stringify(CAPS)}`);
+check(JSON.stringify(CAPS) === JSON.stringify({ analyst: { turns: 60, minutes: 25, usd: 8 }, critic: { turns: 30, minutes: 12, usd: 2.5 }, engineer: { turns: 60, minutes: 25, usd: 4 } }), `CAPS ${JSON.stringify(CAPS)}`);
 
 // ---- Agents on the fake API: the turn, $ and minute caps, cards, refused tools
 const token = { slot: 1, token: "sk-ant-oat01-fake-t18" };
@@ -375,9 +403,11 @@ const t0 = Date.now();
 const slow = await run(apiB, { caps: { turns: 20, minutes: 0.02, usd: 5 } });
 check(slow.result.stop === "minutes" && Date.now() - t0 < 4000, `the minute cap: ${JSON.stringify(slow.result)} after ${Date.now() - t0} ms`);
 await apiB.close();
-const apiC = await startFakeApi({ port: PORTS.fakeA, script: script("cards.json", [tool("Glob", { pattern: "*.md", path: tree }, 0), { content: [{ type: "text", text: `Here are the cards:\n\`\`\`json\n${JSON.stringify(cards)}\n\`\`\`` }] }]) });
+// The answer in two text blocks (e85's critic: the result's text is the last block alone, which lost the list's "[").
+const said = `Here are the cards:\n\`\`\`json\n${JSON.stringify(cards)}\n\`\`\``, half = said.length >> 1;
+const apiC = await startFakeApi({ port: PORTS.fakeA, script: script("cards.json", [tool("Glob", { pattern: "*.md", path: tree }, 0), { content: [{ type: "text", text: said.slice(0, half) }, { type: "text", text: said.slice(half) }] }]) });
 const good = await run(apiC, {});
-check(good.result.stop === "done" && good.cards.map((c) => c.id).join() === "h2,h5,h8,h1,h4,h6" && good.dropped.some((d) => /h3: kind bogus/.test(d)) && good.dropped.some((d) => /h7: over the 6-card limit/.test(d)), `the critic's cards: ${JSON.stringify({ cards: good.cards.map((c) => c.id), dropped: good.dropped, r: good.result })}`);
+check(good.result.stop === "done" && good.cards.map((c) => c.id).join() === "h1,h2,h4,h5,h6,h7" && good.dropped.some((d) => /h3: kind bogus/.test(d)) && good.dropped.some((d) => /h8: over the 6-card limit/.test(d)), `the critic's cards: ${JSON.stringify({ cards: good.cards.map((c) => c.id), dropped: good.dropped, r: good.result })}`);
 await apiC.close();
 const apiD = await startFakeApi({ port: PORTS.fakeA, script: script("engineer.json", [tool("Read", { file_path: "/etc/hostname" }, 0), tool("Write", { file_path: "src/core/x.ts", content: "export const x = 2;\n" }, 1), tool("Bash", { command: "npx tsc --noEmit" }, 2), tool("Read", { file_path: "src/core/x.ts" }, 3), { content: [{ type: "text", text: "Changed nothing: a check." }] }]) });
 const eng = await engineer({ run: "e1", token, mockApi: mockOf(apiD), card: card("h9", "code"), branch: "cand/e1-h9" });
@@ -391,11 +421,19 @@ check(!web("WebSearch", { query: "model routing cascades" }) && !web("WebFetch",
 const apiF = await startFakeApi({ port: PORTS.fakeA, script: script("analyst.json", [tool("WebFetch", { url: "http://100.94.227.92:5182/", prompt: "the sends" }, 0), { content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "draw"}]}' }] }]) });
 const agentsBefore = readMeter(p.calls).filter((l) => l.agent).length;
 const an = await analyst({ run: "e1", token, mockApi: mockOf(apiF), digest: "d", tree });
+// An agent's replies get the eval roles' output, not the product's 4096 tokens (e86's analyst ran out thinking).
+check(apiF.requests.every((r) => r.maxTokens === 128_000), `the analyst's requests ask for ${apiF.requests.map((r) => r.maxTokens)} output tokens, not 128000`);
 check(an.includes('"hypotheses"') && apiF.requests.length === 2 && readMeter(p.calls).filter((l) => l.agent).length === agentsBefore + 1, `the analyst's session: ${an} (${apiF.requests.length} requests)`);
 await apiF.close();
 for (const s of sessions) check(s.api.requests.length === sessions.filter((x) => x.api === s.api).reduce((a, x) => a + x.turns, 0), `a fake API got ${s.api.requests.length} requests for ${s.turns} turns`);
 const agentLines = readMeter(p.calls).filter((l) => l.agent);
-check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === "claude-sonnet-5-5" && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
+check(agentLines.length === 6 && agentLines.every((l) => l.token === 1 && l.model === (l.role === "analyst" ? "claude-opus-5-5" : "claude-sonnet-5-5") && l.turns > 0 && l.totalCostUsd > 0 && l.usage.cacheWrite1h === 0) && agentLines.map((l) => l.role).join() === "critic,critic,critic,critic,engineer,analyst", `the agents' meter lines: ${JSON.stringify(agentLines)}`);
+// A connection dropped mid-reply ends the session on an "API Error" answer (e89's analyst: ECONNRESET, so its critic read
+// that as the analysis and the epoch had no cards): the session runs once more.
+const apiG = await startFakeApi({ port: PORTS.fakeA, script: script("analyst-drop.json", [{ content: [{ type: "text", text: '{"components": [], "hypotheses": [{"component": "shot"}]}' }], drop: 3 }]) });
+const anG = await analyst({ run: "e1", token, mockApi: mockOf(apiG), digest: "d", tree });
+check(anG.includes('"shot"') && apiG.requests.filter((r) => r.dropped).length === 3, `after a dropped connection the analyst answered ${anG.slice(0, 160)} (${apiG.requests.length} requests, ${apiG.requests.filter((r) => r.dropped).length} dropped)`);
+await apiG.close();
 
 // ---- The failure analyst: one gateway call, on the gateway's token slot
 mkdirSync(join(home, "replies"));

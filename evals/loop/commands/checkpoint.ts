@@ -234,7 +234,7 @@ export async function sync(rte: Rte, gw: string, st: State): Promise<"merged" | 
   // refused; a yardstick case that fails is the owner's (B1 refrozen, a new era) before the champion can take it.
   const scenes = bankedScenes().filter((f) => !f.includes(".void"));
   const rt = sceneRoundTrip(tree, [...scenes, ...benchCases().map((c) => join(c.dir, "before.scene.json"))]);
-  const failed = rt.failed.filter((f) => f.startsWith(`${p.bankCases}/`));
+  const failed = rt.failed.filter((f) => f.startsWith(`${p.bankCases}/`) || f.startsWith(`${p.realBank}/`));
   const other = rt.failed.find((f) => !failed.includes(f));
   if (other) return block(`master's Scene.fromJSON refuses ${other}: refreeze the yardstick (bench freeze, a new era) first`);
   const commits = Number(git(p.repo, "rev-list", "--count", `${base}..${master}`));

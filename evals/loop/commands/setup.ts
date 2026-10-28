@@ -31,12 +31,13 @@ import { paths } from "../paths.ts";
 import { ready } from "../ready.ts";
 import { caseDir, put, runFile } from "../record.ts";
 import { acceptProbe, probe, probeDue, probeRefuses } from "../probe.ts";
-import { readState, stampNow } from "../state.ts";
+import { holder, lock, loopUnit, readState, stampNow } from "../state.ts";
 import { stubPictures } from "../stubs.ts";
 import { Slots } from "../tokens.ts";
 import { contentHash, treeOf } from "../trees.ts";
 import type { Arm, CaseInfo, Ratio, SendOutcome } from "../types.ts";
 import { aaPass } from "../verdict.ts";
+import { intakeView } from "../../real/review.ts";
 import { DAY, HOUR, IDENT, type Rte, banked, championArm, championPages, championSha, fakeTokens, git, initFrom, js, maybe, needBank, ordered, sleep, tryGit, tuningIdOf, upstream } from "../rte.ts";
 
 /** R8 and `aa`'s default: 16 cases, the champion against itself in timed replay. */
@@ -91,6 +92,15 @@ function pin(): string {
 }
 
 export async function init(rte: Rte) {
+  // A refresh moves the trees a running rig serves.
+  const held = await lock("init");
+  try {
+    await initLocked(rte);
+  } finally {
+    held.release();
+  }
+}
+async function initLocked(rte: Rte) {
   const p = paths();
   const before = rte.o.f.refresh ? tryGit(p.repo, "describe", "--tags", "--abbrev=0", "--match", "eval-harness-*", "HEAD") : undefined;
   if (rte.o.f.refresh) {
@@ -133,6 +143,13 @@ export async function exportTo(rte: Rte) {
   rte.say(`export: ${dirs.join(", ")} and eval/history (as eval/history-import) → ${there}; there: rte init --refresh`);
 }
 
+/** Intake at a glance (evals/real/README.md): each source's last pull and the cards by state, counts only. */
+function intakeLine() {
+  const v = intakeView();
+  const states = ["pulled", "labeled", "proposed", "admitted", "rejected", "skipped"].map((s) => `${v.states[s] ?? 0} ${s}`).join(", ");
+  return `intake: pulled live ${v.pull.live.pulledAt ?? "never"}, local ${v.pull.local.pulledAt ?? "never"}; cards ${states}`;
+}
+
 export async function status(rte: Rte) {
   const loaded = rte.tokens().length; // a tokens file at any mode but 600, or inside a repo, fails here
   const inhibit = spawnSync("systemd-inhibit", ["--list", "--no-pager"], { encoding: "utf8" });
@@ -144,13 +161,20 @@ export async function status(rte: Rte) {
     `launched: ${process.env.RT_EVAL_LAUNCHED === "1" ? "yes" : "no"}`,
     `inhibitor: ${inhibit.status === 0 ? (inhibit.stdout.includes("rt eval") ? "held ('rt eval')" : "not held") : "n/a"}`,
     `home: ${p.home}; champion ${tryGit(p.repo, "rev-parse", "--short", "loop/champion") ?? "none (init first)"}`,
-    `loop: ${st ? `epoch ${st.epoch}, ${st.cards.filter((c) => c.status === "done").length} of ${st.cards.length} cards decided${st.blocked ? `; blocked: ${st.blocked}` : ""}` : "not started"}; lock ${existsSync(p.lock) ? readFileSync(p.lock, "utf8") : "free"}`,
+    `loop: ${st ? `epoch ${st.epoch}, ${st.cards.filter((c) => c.status === "done").length} of ${st.cards.length} cards decided${st.blocked ? `; blocked: ${st.blocked}` : ""}` : "not started"}`,
+    `run: ${st?.run ? `${st.run.status}${st.run.code ? ` (${st.run.code})` : ""} since ${st.run.at}${st.run.phase ? `; ${st.run.phase}` : ""}${st.run.why ? `; ${st.run.why}` : ""}` : "never"}`,
+    `lock: ${(() => {
+      const h = holder();
+      return h ? `${h.cmd} (pid ${h.pid}, since ${h.start}${h.live ? "" : ", dead: stale"})` : "free";
+    })()}`,
+    `unit rt-loop: ${loopUnit()}`,
+    intakeLine(),
   ]) rte.say(l);
-  // Each token's use as the server last said it (meter/slots.json): the loop pauses at LOOP.fiveHourPauseAt and stops at LOOP.weekSevenDayMax.
+  // Each token's use as the server last said it (meter/slots.json): the loop pauses at LOOP.fiveHourPauseAt and LOOP.weekSevenDayMax.
   const pct = (x?: number) => (x === undefined ? "no reading" : `${Math.round(x * 100)}%`);
   const ago = (ms: number) => `${((Date.now() - ms) / HOUR).toFixed(1)} h ago`;
   for (const s of new Slots(rte.tokens().map((t) => t.slot), join(p.home, "meter", "slots.json")).status())
-    rte.say(`token ${s.slot}: five-hour ${pct(s.fiveHour)}${s.resetsAt ? ` (window ${s.resetsAt * 1000 < Date.now() ? "reset since" : `resets ${new Date(s.resetsAt * 1000).toISOString().slice(11, 16)} UTC`})` : ""}, week ${pct(s.sevenDay)}${s.sevenDayAt ? ` (read ${ago(s.sevenDayAt)})` : ""}; the loop pauses at ${pct(LOOP.fiveHourPauseAt)} and stops at ${pct(LOOP.weekSevenDayMax)}${s.why ? `; parked: ${s.why}` : ""}`);
+    rte.say(`token ${s.slot}: five-hour ${pct(s.fiveHour)}${s.resetsAt ? ` (window ${s.resetsAt * 1000 < Date.now() ? "reset since" : `resets ${new Date(s.resetsAt * 1000).toISOString().slice(11, 16)} UTC`})` : ""}, week ${pct(s.sevenDay)}${s.sevenDayAt ? ` (read ${ago(s.sevenDayAt)})` : ""}; the loop pauses past ${pct(LOOP.fiveHourPauseAt)} of five hours or ${pct(LOOP.weekSevenDayMax)} of the week${s.why ? `; parked: ${s.why}` : ""}`);
 }
 
 /** What runs cost (rte cost <run>…): upstream calls and list $ by role, each run with its sub-runs (<run>-g2, <run>~warm, …). */
@@ -167,7 +191,15 @@ export async function costCmd(rte: Rte) {
 }
 
 export async function readyCmd(rte: Rte) {
-  const results = await ready({ stub: !!rte.o.f.stub, mockApi: !!rte.o.f["mock-api"], port: rte.o.port, repo: initFrom(), aaCheck: () => aa(rte, AA_CASES) });
+  // Its arm servers and Chrome take the ports a loop's rig uses. Waited for: in the loop's unit, an intake pass finishing
+  // must not fail the start.
+  const held = await lock("ready", { wait: true, say: (l) => rte.say(l) });
+  let results: Awaited<ReturnType<typeof ready>>;
+  try {
+    results = await ready({ stub: !!rte.o.f.stub, mockApi: !!rte.o.f["mock-api"], port: rte.o.port, repo: initFrom(), aaCheck: () => aa(rte, AA_CASES) });
+  } finally {
+    held.release();
+  }
   const failed = results.filter((r) => !r.ok).map((r) => r.id);
   if (existsSync(join(paths().repo, ".git"))) {
     openHistory();
@@ -461,24 +493,41 @@ async function rerecord(rte: Rte) {
   rte.needCap("bank rerecord");
   const champ = championArm();
   const run = `rerecord-${stampNow()}`;
-  const ids = banked(["tuning", "fresh", "heldout-gate", "heldout-chart"]);
-  return rte.withGateway((gw) => rte.withRig(gw, [champ.tree, champ.tree], async (rig) => {
-    const { rows } = await runAB(rig, { run, kind: "ab", arms: { A: champ, B: champ }, mode: "live", share: true, seed: run, cases: ids });
-    let n = 0;
-    for (const r of rows) {
-      const from = join(caseDir(run, r.case), "A", "replies.json");
-      if (r.void || r.lost || !existsSync(from)) continue;
-      // Crash-safe: the old file copied aside, the new one copied beside it, then one rename over it, so the case
-      // always holds a whole replies.json.
-      const to = join(paths().bankCase(r.case), "replies.json"), tmp = `${to}.${run}.tmp`;
-      if (existsSync(to)) copyFileSync(to, join(paths().bankCase(r.case), `replies.${run}.json`));
-      copyFileSync(from, tmp);
-      renameSync(tmp, to);
-      n++;
+  const ids = banked(["tuning", "fresh", "heldout-gate", "heldout-chart", "real"]);
+  const n = (await rte.withGateway((gw) => recordOnChampion(rte, gw, ids, run))).length;
+  rte.say(`bank rerecord: ${n} of ${ids.length} cases recorded again on ${champ.sha.slice(0, 12)} (${run}); ${ids.length - n ? "the rest keep their old replies" : "every case"}`);
+  return n === ids.length ? 0 : 1;
+}
+
+/**
+ * Banked cases' replies recorded on today's champion through the gateway `gw` (one live A/A with sharing, each call paid
+ * once); the ids recorded, each passed to `recorded` as it's written. What finished is kept when the run throws (the
+ * call cap, a page that never loads), so the same run name resumes the rest.
+ */
+export function recordOnChampion(rte: Rte, gw: string, ids: string[], run: string, recorded?: (id: string) => void): Promise<string[]> {
+  const champ = championArm();
+  const want = new Set(ids);
+  if (!ids.length) return Promise.resolve([]);
+  return rte.withRig(gw, [champ.tree, champ.tree], async (rig) => {
+    const done: string[] = [];
+    try {
+      await runAB(rig, { run, kind: "ab", arms: { A: champ, B: champ }, mode: "live", share: true, seed: run, cases: ids });
+    } finally {
+      for (const r of readRows(run)) {
+        const from = join(caseDir(run, r.case), "A", "replies.json");
+        if (!want.has(r.case) || r.void || r.lost || !existsSync(from)) continue;
+        // Crash-safe: the old file copied aside, the new one copied beside it, then one rename over it, so the case
+        // always holds a whole replies.json.
+        const to = join(paths().bankCase(r.case), "replies.json"), tmp = `${to}.${run}.tmp`;
+        if (existsSync(to)) copyFileSync(to, join(paths().bankCase(r.case), `replies.${run}.json`));
+        copyFileSync(from, tmp);
+        renameSync(tmp, to);
+        done.push(r.case);
+        recorded?.(r.case);
+      }
     }
-    rte.say(`bank rerecord: ${n} of ${ids.length} cases recorded again on ${champ.sha.slice(0, 12)} (${run}); ${ids.length - n ? "the rest keep their old replies" : "every case"}`);
-    return n === ids.length ? 0 : 1;
-  }));
+    return done;
+  });
 }
 
 export async function benchCmd(rte: Rte) {

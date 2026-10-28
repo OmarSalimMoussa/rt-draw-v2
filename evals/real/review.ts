@@ -1,118 +1,146 @@
-// The owner's gold review (evals/real/README.md): each case's before (with the person's ink), what the app
-// made and gold side by side, with what triage read and what gold will be judged by. Approve or reject posts
-// to the review server (real.ts' serveReview), which appends review/verdicts.jsonl.
-import { readFileSync } from "node:fs";
+// Eval HQ's intake and review (evals/progress/, through evals/pages/plugin.ts, on the PGX only): where each pull's
+// sends are, how well they're labeled (the share of cards the owner edits, per field), and each card with everything
+// its verdict needs. Testers' words, drawings and images leave real/ only through these, to the owner's browser on the
+// tailnet; logs, tools and history get keys and counts.
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { GoldCase, Verdict } from "./real.ts";
-import type { Session } from "./sessions.ts";
+import type { Word } from "../../src/core/link.ts";
+import { paths } from "../loop/paths.ts";
+import { caseDir } from "../loop/record.ts";
+import type { SceneJSON } from "../loop/types.ts";
+import { type Card, type CardState, LOOK_DAYS, REJECT_REASONS, type Reason, type ReviewRow, type Rubric, addReview, bankInfo, cards, labelsOf } from "./cases.ts";
+import { runChecks } from "./checks.ts";
+import { goldCaseDir, imagesOf, maybe, realHome } from "./real.ts";
+import { type RealSend, type Source, beforeOf } from "./sessions.ts";
 
-const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const said = (s: Session, n: number) => {
-  const x = s.sends[n - 1];
-  return typeof x.words === "string" ? x.words : x.label;
+const said = (x: RealSend) => (typeof x.words === "string" ? x.words : x.words.map((w) => w.word).join(" ")) || x.label;
+const week = (iso: string) => {
+  const d = new Date(iso);
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
 };
 
-/** Only the send log keeps strokes: an older send's ink survives as the app's reading of it, not on the image. */
-const beforeCaption = (x: Session["sends"][number]) =>
-  x.strokes.length ? "before, with their ink" : x.replay === "ink" ? "before (their ink wasn't saved: the Ink line above is all that's left)" : "before (no ink)";
-
-function card(g: GoldCase & { verdict?: Verdict; note?: string }, ss: { dir: string; s: Session } | undefined): string {
-  if (!ss) return "";
-  const { s } = ss;
-  const x = s.sends[g.n - 1];
-  const imgs = (() => {
-    try {
-      return JSON.parse(readFileSync(join(ss.dir, "img", "index.json"), "utf8"))[x.key] as { before: string; after: string } | undefined;
-    } catch {
-      return undefined;
-    }
-  })();
-  const img = (src: string | undefined, cap: string) => `<figure>${src ? `<a href="${esc(src)}" target="_blank" title="full size"><img loading="lazy" src="${esc(src)}" alt="${esc(cap)}"></a>` : `<div class="none">none</div>`}<figcaption>${esc(cap)}</figcaption></figure>`;
-  const checks = (g.gold?.checks ?? []).map((c, i) => {
-    const a = g.appChecks[i], o = g.goldChecks[i];
-    return `<tr><td><code>${esc(JSON.stringify(c))}</code></td><td class="${a?.pass ? "ok" : "bad"}">${a?.pass ? "passes" : `fails${a?.why ? `: ${esc(a.why)}` : ""}`}</td><td class="${o?.pass ? "ok" : "bad"}">${o?.pass ? "passes" : `fails${o?.why ? `: ${esc(o.why)}` : ""}`}</td></tr>`;
-  }).join("");
-  const state = g.verdict?.verdict ?? (g.batch > 1 ? "auto" : "open");
-  return `<article id="${esc(g.key)}" data-state="${state}" data-key="${esc(g.key)}">
-  <header><h2>${esc(s.project.name)} <span>send ${g.n} of ${s.sends.length} · ${s.admin ? "owner" : "tester"} · ${esc(x.replay)}${g.batch > 1 ? ` · batch ${g.batch}` : ""}</span></h2>
-  <p class="said">“${esc(said(s, g.n) || "(nothing said)")}”</p>
-  ${x.marks.length ? `<p class="marks">Ink: ${esc(x.marks.join("; "))}</p>` : ""}</header>
-  <div class="row">${img(imgs && `sessions/${s.id}/img/${imgs.before}`, beforeCaption(x))}${img(imgs && `sessions/${s.id}/img/${imgs.after}`, "what the app made")}${img(g.gold ? `gold/${g.key.replace("#", "-")}/gold.jpg` : undefined, "gold")}</div>
-  <dl>
-    <dt>Meant</dt><dd>${esc(g.meant)}</dd>
-    <dt>Missed</dt><dd><b>${esc(g.categories.join(", "))}</b> ${esc(g.evidence)}</dd>
-    ${g.gold ? `<dt>Gold</dt><dd>${esc(g.gold.why)}</dd>
-    <dt>Should</dt><dd><ul>${g.gold.rubric.should.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></dd>
-    <dt>Must not</dt><dd><ul>${g.gold.rubric.mustNot.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></dd>` : `<dt>Error</dt><dd class="bad">${esc(g.error)}</dd>`}
-    ${g.problems.length ? `<dt>Problems</dt><dd class="bad">${g.problems.map(esc).join("<br>")}</dd>` : ""}
-  </dl>
-  ${checks ? `<table><thead><tr><th>Free check</th><th>On the app's result</th><th>On gold</th></tr></thead><tbody>${checks}</tbody></table>` : ""}
-  <footer>
-    <textarea placeholder="Note (optional, saved as you type): what's wrong with gold">${esc(g.note ?? "")}</textarea>
-    <button data-v="approve">Approve</button><button data-v="reject">Reject</button>
-    <span class="saved"></span><span class="state">${state === "open" ? "" : state === "auto" ? "goes in unless rejected" : `${esc(state)}d`}</span>
-  </footer>
-</article>`;
+/** A source's last pull: when it last ran, and the snapshot it holds (evals/real/pull.sh). */
+function pullOf(src: Source) {
+  const dir = join(realHome(), "raw", src);
+  const read = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").trim() : undefined);
+  return { pulledAt: read("pulled"), snapshot: read("latest") };
 }
 
-export function reviewPage(cases: (GoldCase & { verdict?: Verdict; note?: string })[], sessionOf: (key: string) => { dir: string; s: Session } | undefined): string {
-  const open = cases.filter((g) => !g.verdict && g.batch === 1).length;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gold Review</title>
-<style>
-:root { --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc; --card: #fff; --ok: #1f7a3a; --bad: #b3261e; --accent: #2b5fd9; }
-@media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe6; --muted: #9b9a94; --line: #34332f; --card: #1f1f1d; --ok: #6cc489; --bad: #f08a80; --accent: #8fb0ff; } }
-* { box-sizing: border-box; } body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
-main { max-width: 1400px; margin: 0 auto; padding: 16px; }
-h1 { font-size: 22px; margin: 8px 0 4px; } .top { color: var(--muted); margin-bottom: 16px; } .top label { margin-left: 12px; }
-article { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
-article[data-state="approve"] { border-color: var(--ok); } article[data-state="reject"] { border-color: var(--bad); }
-body.hide-done article[data-state="approve"], body.hide-done article[data-state="reject"] { display: none; }
-h2 { font-size: 17px; margin: 0; } h2 span { font-weight: 400; color: var(--muted); font-size: 14px; }
-.said { font-size: 16px; margin: 6px 0; } .marks { color: var(--muted); margin: 0 0 6px; font-size: 13px; }
-.row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }
-@media (max-width: 800px) { .row { grid-template-columns: 1fr; } }
-figure { margin: 0; } img { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; background: #fff; }
-.none { aspect-ratio: 1.6; display: grid; place-items: center; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); }
-figcaption { color: var(--muted); font-size: 13px; text-align: center; }
-dl { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; margin: 8px 0; } dt { color: var(--muted); } dd { margin: 0; } ul { margin: 0; padding-left: 18px; }
-table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; } td, th { border-top: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
-code { font-size: 12px; word-break: break-all; } .ok { color: var(--ok); } .bad { color: var(--bad); }
-footer { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-textarea { flex: 1 1 300px; min-height: 36px; font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
-button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
-.saved { color: var(--muted); font-size: 13px; } button[data-v="approve"]:hover { border-color: var(--ok); } button[data-v="reject"]:hover { border-color: var(--bad); } .state { color: var(--muted); }
-</style></head><body><main>
-<h1>Gold review</h1>
-<div class="top">${cases.length} cases · <b>${open}</b> of batch 1 still to look at · approved cases go into the real-use bench; a rejected one stays out.
-<label><input type="checkbox" id="hide"> hide decided</label></div>
-${cases.map((g) => card(g, sessionOf(g.key))).join("\n")}
-</main>
-<script>
-document.getElementById("hide").addEventListener("change", (e) => document.body.classList.toggle("hide-done", e.target.checked));
-// A note saves on its own, a moment after typing stops and when the box loses focus: never only with a verdict.
-const timers = new WeakMap();
-const saveNote = async (t) => {
-  clearTimeout(timers.get(t));
-  const a = t.closest("article"), s = a.querySelector(".saved");
-  if (t.value === t.dataset.sent) return;
-  const note = t.value;
-  const res = await fetch("/api/note", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: a.dataset.key, note }) }).catch(() => undefined);
-  if (res?.ok) { t.dataset.sent = note; s.textContent = "note saved"; } else s.textContent = "note not saved: try again";
+export type CardRow = {
+  key: string; state: CardState; tester: boolean; split: Card["split"]; project: string; at: string; said: string;
+  landed?: string; categories: string[]; gold: boolean; skip?: string; proposedAt?: string; admitAt?: string;
+  verdict?: "approve" | "reject"; reason?: Reason; edited: { meant: boolean; expectation: boolean };
 };
-for (const t of document.querySelectorAll("article textarea")) {
-  t.dataset.sent = t.value;
-  t.addEventListener("input", () => { t.closest("article").querySelector(".saved").textContent = "…"; clearTimeout(timers.get(t)); timers.set(t, setTimeout(() => saveNote(t), 700)); });
-  t.addEventListener("blur", () => saveNote(t));
-}
-document.addEventListener("click", async (e) => {
-  const b = e.target.closest("button[data-v]"); if (!b) return;
-  const a = b.closest("article"); const note = a.querySelector("textarea").value.trim();
-  const res = await fetch("/api/verdict", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: a.dataset.key, verdict: b.dataset.v, note }) });
-  const s = a.querySelector(".state");
-  if (!res.ok) { s.textContent = "not saved: " + (await res.text()); return; }
-  a.dataset.state = b.dataset.v; s.textContent = b.dataset.v + "d";
-  const t = a.querySelector("textarea"); t.dataset.sent = t.value;
+const rowOf = (c: Card): CardRow => ({
+  key: c.key, state: c.state, tester: c.who !== "owner", split: c.split, project: c.ss.s.project.name, at: c.x.at, said: said(c.x).slice(0, 160),
+  landed: c.triage?.landed, categories: c.triage?.categories ?? [], gold: !!c.gold?.gold, skip: c.skip, proposedAt: c.proposedAt, admitAt: c.admitAt,
+  verdict: c.review.verdict, reason: c.review.reason, edited: { meant: c.review.edits.meant !== undefined, expectation: c.review.edits.expectation !== undefined },
 });
-</script></body></html>`;
+
+/**
+ * GET /api/eval/intake: each source's pull, the cards by state and skipped ones by reason, the owner's edit and reject
+ * rates per week (the labeling's quality), and every card past triage.
+ */
+export function intakeView() {
+  const all = cards();
+  const count = <K extends string>(ks: K[]) => ks.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<K, number>());
+  const decided = all.filter((c) => c.review.verdict && c.review.at);
+  const quality = [...new Set(decided.map((c) => week(c.review.at!)))].sort().map((w) => {
+    const cs = decided.filter((c) => week(c.review.at!) === w);
+    return { week: w, decided: cs.length, rejected: cs.filter((c) => c.review.verdict === "reject").length, meant: cs.filter((c) => c.review.edits.meant !== undefined).length, expectation: cs.filter((c) => c.review.edits.expectation !== undefined).length };
+  });
+  const done = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done"))).length : 0);
+  return {
+    lookDays: LOOK_DAYS, reasons: REJECT_REASONS,
+    pull: { live: pullOf("live"), local: pullOf("local") },
+    bank: { driver: done(paths().bankCases), real: done(paths().realBank) },
+    states: Object.fromEntries(count(all.map((c) => c.state))),
+    skipped: Object.fromEntries(count(all.flatMap((c) => (c.skip ? [c.skip] : [])))),
+    rejected: Object.fromEntries(count(all.flatMap((c) => (c.state === "rejected" && c.review.reason ? [c.review.reason] : [])))),
+    quality,
+    cards: all.filter((c) => c.state !== "pulled" && c.state !== "skipped").map(rowOf),
+  };
+}
+
+/** The image of a card a page asks for: which is before (with their ink), then (the app's result), champion or gold. */
+export function cardImage(key: string, which: string): string | undefined {
+  const c = cards().find((x) => x.key === key);
+  if (!c) return undefined;
+  const img = imagesOf(c.ss.dir)[key];
+  const f =
+    which === "before" ? img && join(c.ss.dir, "img", img.before)
+    : which === "then" ? img && join(c.ss.dir, "img", img.after)
+    : which === "gold" ? join(goldCaseDir(key), "gold.jpg")
+    : which === "champion" && c.bank ? (() => {
+        const run = bankInfo(c.bank!)?.recordedRun;
+        return run && join(caseDir(run, c.bank!), "A", "after.jpg");
+      })()
+    : undefined;
+  return f && existsSync(f) ? f : undefined;
+}
+
+/** GET /api/eval/card?key=: one card whole, for its verdict. */
+export function cardView(key: string) {
+  const all = cards();
+  const i = all.findIndex((x) => x.key === key);
+  const c = all[i];
+  if (!c || c.state === "pulled") return undefined;
+  const { s } = c.ss;
+  const l = labelsOf(c);
+  const before = beforeOf(c.ss.dir, c.x);
+  const info = c.bank ? bankInfo(c.bank) : undefined;
+  const champion = info?.recordedRun ? maybe<SceneJSON>(join(caseDir(info.recordedRun, c.bank!), "A", "after.scene.json")) : undefined;
+  const g = c.gold?.gold;
+  const prev = s.sends[c.n - 2];
+  const img = (which: string) => (cardImage(key, which) ? `/api/eval/card-image?${new URLSearchParams({ key, which })}` : undefined);
+  const drafted = c.bank ? maybe<{ judgeId: string } & Rubric>(join(paths().bankCase(c.bank), "expectation.json")) : undefined;
+  return {
+    ...rowOf(c), lookDays: LOOK_DAYS, reasons: REJECT_REASONS,
+    send: { n: c.n, of: s.sends.length, kind: c.x.kind, replay: c.x.replay, words: c.x.words as Word[] | string, label: c.x.label, marks: c.x.marks, refs: c.x.refs, status: c.x.status },
+    previous: prev && { said: said(prev), at: prev.at },
+    feedback: s.feedback,
+    images: { before: img("before"), then: img("then"), champion: img("champion"), gold: img("gold") },
+    triage: c.triage && { meant: c.triage.meant, landed: c.triage.landed, categories: c.triage.categories, evidence: c.triage.evidence },
+    meant: { now: l.meant, drafted: c.triage?.meant ?? "", pinned: l.pinned.meant },
+    expectation: { now: l.expectation, from: l.pinned.expectation ? "owner" : g ? "gold" : drafted ? "judge" : undefined, pinned: l.pinned.expectation },
+    gold: c.gold && {
+      why: g?.why, error: c.gold.error, problems: c.gold.problems,
+      checks: (g?.checks ?? []).map((check, k) => ({ check, then: c.gold!.appChecks[k], now: champion ? runChecks([check], champion, before)[0] : undefined, gold: c.gold!.goldChecks[k] })),
+    },
+    champion: info?.recordedRun ? { sha: info.championSha, run: info.recordedRun } : undefined,
+    review: c.review,
+  };
+}
+
+/** POST /api/eval/verdict: the owner's verdict on a proposed or decided card, with edits; or a note alone (autosaved). */
+export function postReview(b: Record<string, unknown>): ReviewRow | { error: string } {
+  const key = typeof b.key === "string" ? b.key : "";
+  const c = cards().find((x) => x.key === key);
+  if (!c || !["proposed", "admitted", "rejected", "labeled"].includes(c.state)) return { error: `no card ${key} to judge` };
+  const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : undefined);
+  const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => text(x, 400)).filter((x): x is string => !!x) : undefined);
+  const row: ReviewRow = { key, at: new Date().toISOString() };
+  if (b.note !== undefined) row.note = text(b.note, 2000) ?? "";
+  if (b.verdict === undefined) {
+    if (row.note === undefined) return { error: "a note or a verdict" };
+  } else {
+    if (b.verdict !== "approve" && b.verdict !== "reject") return { error: "a verdict is approve or reject" };
+    if (c.state === "labeled") return { error: `${key} isn't proposed yet` };
+    row.verdict = b.verdict;
+    if (b.verdict === "reject") {
+      if (!(typeof b.reason === "string" && b.reason in REJECT_REASONS)) return { error: `a rejection needs a reason: ${Object.keys(REJECT_REASONS).join(", ")}` };
+      row.reason = b.reason as Reason;
+    }
+    if (b.meant !== undefined) row.meant = b.meant === null ? null : text(b.meant, 1000) || null;
+    if (b.expectation !== undefined) {
+      const e = b.expectation as Partial<Rubric> | null;
+      const should = list(e?.should), mustNot = list(e?.mustNot);
+      if (e !== null && !should?.length) return { error: "an expectation says at least one thing it should do" };
+      row.expectation = e === null ? null : { should: should!, mustNot: mustNot ?? [] };
+    }
+  }
+  addReview(row);
+  return row;
 }

@@ -3,13 +3,13 @@
 // the tree, no .env, voice refused, /api/model streamed to a gateway on time), Chrome
 // in pipe mode (gone with a SIGKILLed harness, two pages at ≥ 30 rAF/s, x-rt-* labels,
 // the allowlist aborting the run, captures), the ladder's knee and dispatch limit, the
-// machine guards, and launch.sh run for real as a systemd user unit. 0 model calls: the
+// machine guards, and launch.sh run for real as a systemd user unit (waited for under the inhibitor, or detached). 0 model calls: the
 // only /api/model server is this check's dummy gateway, and every request is counted.
 // Never a request to /api/tts or /api/stt-token: the voice refusal is checked through
 // the arm server's own middleware stack, in process.
 //   TMPDIR=<work dir> node --import ./evals/loop/node-hooks.mjs evals/checks/t7-infra.mjs
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { dirname, join } from "node:path";
@@ -322,7 +322,7 @@ Object.assign(window, { MARK, ENV, rtEval: { setView: async (v) => document.quer
   check([true, false, undefined].includes(onAC()), `onAC(): ${onAC()}`);
   check(inFactorySlice() === false, "this check thinks it runs in the factory slice");
 
-  // ---- launch.sh for real: a systemd user unit around a probe run.ts (and the tmux path with a fake tmux).
+  // ---- launch.sh for real: a systemd user unit around a probe run.ts, under the sleep inhibitor where there's a battery.
   const layout = join(home, "launch");
   mkdirSync(join(layout, "evals/loop"), { recursive: true });
   for (const f of ["launch.sh", "node-hooks.mjs"]) copyFileSync(join(ROOT, "evals/loop", f), join(layout, "evals/loop", f));
@@ -348,8 +348,8 @@ await new Promise((r) => setTimeout(r, process.argv.includes("--long") ? 60_000 
   const callerNode = execFileSync("bash", ["-c", "command -v node"], { env, encoding: "utf8" }).trim();
   const callerVersion = execFileSync(callerNode, ["--version"], { encoding: "utf8" }).trim();
 
-  // On aarch64 launch.sh opens a tmux window, never a unit: the unit is checked here on the laptop, the window by the fake tmux below.
-  if (process.arch === "x64") {
+  // With a battery (the laptop): the unit under the sleep inhibitor, waited for. Without one, the detached path below.
+  if (existsSync("/sys/class/power_supply") && readdirSync("/sys/class/power_supply").some((d) => d.startsWith("BAT"))) {
     const first = launch(["first", "--cap", "7"]);
     if (!(await until(() => existsSync(probe("first")), 15_000, "the first launch's probe never ran"))) fail(`launch.sh: ${(await first.done).err}`);
     const unit1 = readFileSync(join(home, "unit"), "utf8").trim();
@@ -379,24 +379,23 @@ await new Promise((r) => setTimeout(r, process.argv.includes("--long") ? 60_000 
     execFileSync("bash", [launchSh, "stop"], { env, stdio: "ignore" });
     const stopped = await Promise.race([long.done, sleep(10_000).then(() => undefined)]);
     check(stopped !== undefined && unitState(unit3) === "not-found", `launch.sh stop didn't stop the running probe (${unitState(unit3)})`);
-  } else console.log(`note: the systemd unit is checked on the laptop (this is ${process.arch})`);
+  } else console.log("note: the inhibitor's path is checked on a machine with a battery (the laptop)");
 
-  // The PGX's path (aarch64, a tmux window), as far as this laptop can check it: a uname that says aarch64 and a
-  // tmux that records what it was asked.
-  const bin = join(home, "fake-bin");
-  mkdirSync(bin);
-  writeFileSync(join(bin, "uname"), '#!/bin/sh\n[ "$1" = -m ] && echo aarch64 || exec /usr/bin/uname "$@"\n', { mode: 0o755 });
-  writeFileSync(join(bin, "tmux"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${home}/tmux-$1.args"\n`, { mode: 0o755 });
-  const fakeEnv = { ...env, PATH: `${bin}:${env.PATH}`, RT_EVAL_TMUX: "" }; // the default session, whatever the caller set
-  execFileSync("bash", [launchSh, "first", "--cap", "7"], { cwd: home, env: fakeEnv, stdio: "ignore" });
-  execFileSync("bash", [launchSh, "stop"], { cwd: home, env: fakeEnv, stdio: "ignore" });
-  const tmuxArgs = (verb) => (existsSync(join(home, `tmux-${verb}.args`)) ? readFileSync(join(home, `tmux-${verb}.args`), "utf8").trim().split("\n") : []);
-  const win = tmuxArgs("new-window");
-  const nodeAt = win.indexOf(callerNode);
-  check(win.slice(0, 12).join(" ") === `new-window -t =rt: -n loop -c ${layout} -e RT_EVAL_HOME=${home} -e RT_EVAL_LAUNCHED=1 /usr/bin/env`, `tmux new-window got: ${win.slice(0, 12).join(" ")}`);
-  check(["RT_EVAL_TOKEN_1", "RT_EVAL_TOKEN_2", "RT_EVAL_TOKEN_3", "CLAUDE_CODE_OAUTH_TOKEN"].every((k) => win.slice(12, nodeAt).includes(k)), `the tmux window keeps a token: env ${win.slice(12, nodeAt).join(" ")}`);
-  check(nodeAt > 0 && win.slice(nodeAt).join(" ") === `${callerNode} --import ./evals/loop/node-hooks.mjs evals/loop/run.ts first --cap 7`, `the tmux window runs: ${win.slice(nodeAt).join(" ")}`);
-  check(tmuxArgs("send-keys").join(" ") === "send-keys -t =rt:loop C-c", `launch.sh stop on aarch64 sent: ${tmuxArgs("send-keys").join(" ")}`);
+  // An always-on machine (no battery: the PGX): the unit starts detached, launch.sh returns at once, and stop ends it.
+  const detachedEnv = { ...env, RT_POWER_SUPPLY: join(home, "no-battery") };
+  mkdirSync(detachedEnv.RT_POWER_SUPPLY);
+  const startedAt = Date.now();
+  const said = execFileSync("bash", [launchSh, "detached", "--long", "--cap", "3"], { cwd: layout, env: detachedEnv, encoding: "utf8" });
+  check(Date.now() - startedAt < 10_000 && /runs in the unit rt-eval-\d+-\d+: journalctl --user -fu/.test(said), `a detached launch didn't return at once with its unit: ${said.trim()}`);
+  if (await until(() => existsSync(probe("detached")), 15_000, "the detached probe never ran")) {
+    const unitD = readFileSync(join(home, "unit"), "utf8").trim();
+    const outD = JSON.parse(readFileSync(probe("detached"), "utf8"));
+    check(outD.cgroup.includes(`${unitD}.service`) && outD.cwd === layout && outD.node === callerVersion, `the detached unit ran elsewhere: ${JSON.stringify({ cgroup: outD.cgroup.trim(), cwd: outD.cwd, node: outD.node })}`);
+    check(outD.argv.join(" ") === "detached --long --cap 3" && outD.env.includes("RT_EVAL_LAUNCHED"), `the detached unit got argv "${outD.argv.join(" ")}"`);
+    check(!outD.env.some((k) => /^RT_EVAL_TOKEN_/.test(k) || k === "CLAUDE_CODE_OAUTH_TOKEN"), `a token variable reached the detached unit: ${outD.env.filter((k) => /TOKEN/.test(k))}`);
+    execFileSync("bash", [launchSh, "stop"], { env: detachedEnv, stdio: "ignore" });
+    await until(() => unitState(unitD) === "not-found", 10_000, "launch.sh stop didn't stop the detached unit");
+  }
 
   // Inside emberhub-factory.slice (a transient one of this check's own, removed after): refused, and load.ts agrees.
   const slice = `rtcheck${process.pid}`;

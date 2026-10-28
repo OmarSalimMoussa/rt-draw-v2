@@ -1,6 +1,6 @@
-// The real-use loop's two Opus prompts (evals/real/README.md): triage reads a whole session and says, for each
-// send, what the person meant and whether it landed; gold draws what a send should have made. Editing either
-// changes what every later case is measured against, so a change here re-runs triage and gold for all of them.
+// Intake's two Opus prompts (evals/real/README.md): triage reads a whole session and says, for each new send, what
+// the person meant and whether it landed; gold draws what a send should have made. A change here labels new sends
+// only: what was already triaged or drawn keeps its labels (the owner's verdicts were given on them).
 import { SCREEN } from "../../src/core/board.ts";
 import { promptOf } from "../../src/core/prompts.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
@@ -38,14 +38,26 @@ Judge the result as the person would. How a subject is built doesn't matter; whe
 
 Reply with JSON only: {"sends": [{"n": 1, "meant": "...", "landed": "yes|partly|no", "categories": [], "evidence": "...", "gold": false}, ...]}`;
 
+/** Send numbers as runs: 3, 5 to 7. */
+const runs = (ns: number[]) => {
+  const out: string[] = [];
+  for (let i = 0; i < ns.length; i++) {
+    let j = i;
+    while (j + 1 < ns.length && ns[j + 1] === ns[j] + 1) j++;
+    out.push(j > i ? `${ns[i]} to ${ns[j]}` : `${ns[i]}`);
+    i = j;
+  }
+  return out.join(", ");
+};
+
 /**
- * The session as text blocks, for the sends from..from+count-1 (0-based) to be judged: those have images (all
- * the images come first, two per judged send: before, after); the others are only words, as context.
+ * The session as text blocks, for the sends at `judged` (0-based, in order) to be judged: those have images (all the
+ * images come first, two per judged send: before, after); the others are only words, as context.
  */
-export function triageTurns(s: Session, from: number, count: number): string[] {
+export function triageTurns(s: Session, judged: number[]): string[] {
   const head = `Session ${s.id}: project "${s.project.name}", ${s.sends.length} sends${s.restores.length ? `; restores: ${s.restores.map((r) => `${r.label} at ${r.at}`).join(", ")}` : ""}${s.feedback.length ? `; written feedback: ${s.feedback.map((f) => `"${f.text}" (on version ${f.version ?? "?"})`).join("; ")}` : ""}.`;
-  const judged = count === s.sends.length ? "Judge every send." : `Judge sends ${from + 1} to ${from + count} only; the others are here as context.`;
-  return [`${head} ${judged}`, ...s.sends.map((x, i) => sendText(x, i + 1, i >= from && i < from + count ? 2 * (i - from) + 1 : undefined))];
+  const which = judged.length === s.sends.length ? "Judge every send." : `Judge send${judged.length > 1 ? "s" : ""} ${runs(judged.map((i) => i + 1))} only; the others are here as context.`;
+  return [`${head} ${which}`, ...s.sends.map((x, i) => sendText(x, i + 1, judged.includes(i) ? 2 * judged.indexOf(i) + 1 : undefined))];
 }
 const said = (x: RealSend) => (typeof x.words === "string" ? x.words : x.label);
 const sendText = (x: RealSend, n: number, image?: number) =>

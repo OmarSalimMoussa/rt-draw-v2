@@ -57,3 +57,9 @@ Signed in as omar@emberhub.dev:
 
 A change to the script needs a new version of the deployment (Manage deployments →
 edit → New version); the URL stays the same.
+
+The eval loop mails the admin through the same script (its `notice` action) when it
+stops for a reason that's the owner's, or holds a decision for them: harness words and
+ids only, never a tester's. It reads the URL and secret from `~/.config/rt-eval/notify.env`
+on the PGX (mode 600; `evals/loop/notify.ts`). The `notice` action came after the first
+deployment: paste `deploy/mailer.gs` again and make a new version.

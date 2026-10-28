@@ -1,9 +1,9 @@
-// The eval pages' endpoints (frozen measuring side), in the owner's dev server
-// (vite.config.ts) and the harness pages server (evals/pages.vite.config.ts):
-// the history the progress page charts, the run files behind a decision, the
-// owner's calibration labels and his recorded sends. Reads only inside
-// $RT_EVAL_HOME (and the eval/history branch), writes only labels/ and human/
-// there, makes no model call and starts nothing until a request comes.
+// Eval HQ's endpoints (frozen measuring side), served by the harness pages server (evals/pages.vite.config.ts, on the
+// PGX): the history the progress page charts, the run files behind a decision, the owner's calibration labels, their
+// recorded sends, their threads with Claude, and intake's cards with their verdicts (evals/real/review.ts). Reads only
+// inside $RT_EVAL_HOME (and the eval/history branch), writes only labels/, human/, notes/ and real/review/ there, makes
+// no model call and starts nothing until a request comes. The owner's dev server (vite.config.ts) takes only record.ts:
+// testers' cards and images never leave the PGX's server.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -11,10 +11,14 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
 import { LOOP } from "../loop/config.ts";
 import { paths } from "../loop/paths.ts";
+import { championStatus } from "../loop/state.ts";
 import type { Arm, Packet } from "../loop/types.ts";
+import { type Note, THREAD_ID, chatId, isChat, threadsOf, waiting } from "../progress/attention.ts";
+import { cardImage, cardView, intakeView, postReview } from "../real/review.ts";
+import { saveRecord, sendFile } from "./record.ts";
 
 /** The tracked files the progress page reads (§5.3), plus the owner list for its open count. */
-export const HISTORY_FILES = ["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "health.jsonl", "anchors.json", "eras.json", "markers.jsonl", "smoke.jsonl", "owner-list.md"];
+export const HISTORY_FILES = ["epochs.jsonl", "decisions.jsonl", "checkpoints.jsonl", "budget.jsonl", "health.jsonl", "anchors.json", "eras.json", "markers.jsonl", "smoke.jsonl", "ships.jsonl", "owner-list.md"];
 /** What /api/eval/file may serve: run files, banked cases, the reply cache and its images, digests. */
 const SERVED_DIRS = ["runs", "bank", "cache", "digests"];
 /** Disk growth is re-measured at most this often: it walks cache/, runs/ and trees/. */
@@ -105,6 +109,7 @@ function disk(home: string) {
   return { freeGb, weekGrowthGb: growth.bytes / 1e9, daysLeft: perDayGb > 0 ? Math.max(0, (freeGb - LOOP.diskPauseGb) / perDayGb) : null, ownerGb: LOOP.diskOwnerGb, pauseGb: LOOP.diskPauseGb };
 }
 
+/** The champion, and how many of its keeps the owner's branch doesn't have yet (what a ship would take), from the loop's clone. */
 /** GET /api/eval/history: every §5.3 file's text (null when absent) and the loop's live status; ?f=<file> one tracked file. */
 function history(repo: string): Handler {
   return (q) => {
@@ -124,7 +129,7 @@ function history(repo: string): Handler {
     let status: Record<string, unknown> = {};
     try {
       const p = paths();
-      status = { heartbeat: readJson(p.heartbeat), state: readJson(p.state), disk: existsSync(p.home) ? disk(p.home) : undefined };
+      status = { heartbeat: readJson(p.heartbeat), state: readJson(p.state), disk: existsSync(p.home) ? disk(p.home) : undefined, champion: championStatus() };
     } catch (err) {
       status = { error: (err as Error).message };
     }
@@ -252,19 +257,13 @@ const label: Handler = async (_q, req) => {
 
 // ---- The owner's recorded sends (§2.8, human set U1)
 
-const sendFile = (id: string) => (/^h-[\w-]+$/.test(id) ? join(paths().human, `${id}.json`) : undefined);
-
-/** POST /api/eval/record {input, strokes, scene, view, at}: one real send from the playground's ?record=1, as human/<id>.json. */
+/** POST /api/eval/record: one send from the playground's ?record=1 (record.ts). */
 const record: Handler = async (_q, req) => {
-  const b = await body(req);
-  if (b.input === undefined || !b.scene) return refuse(400, "a send needs input and scene");
-  const id = `h-${new Date().toISOString().replace(/[-:.]/g, "").slice(0, 15)}-${Math.random().toString(36).slice(2, 6)}`;
-  mkdirSync(paths().human, { recursive: true });
-  writeFileSync(sendFile(id)!, JSON.stringify({ id, ...b, recordedAt: new Date().toISOString() }));
-  return json({ id });
+  const r = saveRecord(await body(req));
+  return "error" in r ? refuse(400, r.error) : json(r);
 };
 
-/** GET /api/eval/human: the recorded sends, oldest first. POST {id, meant}: writes what he meant into that send. */
+/** GET /api/eval/human: the recorded sends, oldest first. POST {id, meant}: writes what they meant into that send. */
 const human: Handler = async (_q, req) => {
   const dir = paths().human;
   if (req.method === "POST") {
@@ -280,13 +279,67 @@ const human: Handler = async (_q, req) => {
   return json(names.map((n) => JSON.parse(readFileSync(join(dir, n), "utf8"))));
 };
 
-/** The /api/eval/* endpoints. `git show` reads the branch from the repo this server serves. */
-export function evalPages(): Plugin {
+// ---- The owner's threads beside "Needs you" (evals/progress/attention.ts): notes/threads.jsonl, outside git
+
+/** Every note, oldest first; a line still being written is skipped. */
+export function readNotes(): Note[] {
+  const f = paths().notes;
+  return (existsSync(f) ? readFileSync(f, "utf8").split("\n") : []).flatMap((l) => {
+    try {
+      return l ? [JSON.parse(l) as Note] : [];
+    } catch {
+      return []; // the line rte note or the page is appending right now
+    }
+  });
+}
+/** Appends one note, a whole line in one write (a `tail -F` sees whole lines); a thread not a side chat is its item's. */
+export function addNote(n: { thread: string; who: Note["who"]; text: string; resolved?: boolean }): Note {
+  if (!THREAD_ID.test(n.thread)) throw new Error(`no thread "${n.thread}": letters, digits, . _ and - only`);
+  const note: Note = { at: new Date().toISOString(), thread: n.thread, ...(isChat(n.thread) ? {} : { item: n.thread }), who: n.who, text: n.text, ...(n.resolved === undefined ? {} : { resolved: n.resolved }) };
+  mkdirSync(dirname(paths().notes), { recursive: true });
+  appendFileSync(paths().notes, `${JSON.stringify(note)}\n`);
+  return note;
+}
+
+/**
+ * GET /api/eval/threads: every note ({notes}); ?waiting: the threads where the owner wrote last ({waiting}), for a watcher.
+ * POST {thread?, text, resolved?}: the owner's note (always "owner": Claude writes through rte note); no thread starts a side chat.
+ */
+const threads: Handler = async (q, req) => {
+  if (req.method === "POST") {
+    const b = await body(req);
+    const text = typeof b.text === "string" ? b.text.trim() : "";
+    const resolved = typeof b.resolved === "boolean" ? b.resolved : undefined;
+    if (!text && resolved === undefined) return refuse(400, "a note needs text, or resolved");
+    if (text.length > 20_000) return refuse(413, "a note is at most 20000 characters");
+    const thread = b.thread === undefined ? chatId() : String(b.thread);
+    if (!THREAD_ID.test(thread)) return refuse(400, `no thread "${thread}"`);
+    return json(addNote({ thread, who: "owner", text, resolved }));
+  }
+  return json(q.has("waiting") ? { waiting: waiting(threadsOf(readNotes())) } : { notes: readNotes() });
+};
+
+// ---- Intake and review (evals/real/review.ts)
+
+const intake: Handler = () => json(intakeView());
+const card: Handler = (q) => {
+  const c = cardView(q.get("key") ?? "");
+  return c ? json(c) : refuse(404, "no such card");
+};
+const cardImg: Handler = (q) => {
+  const f = cardImage(q.get("key") ?? "", q.get("which") ?? "");
+  return f ? { type: TYPES[".jpg"], body: readFileSync(f) } : refuse(404, "no such image");
+};
+const verdict: Handler = async (_q, req) => {
+  const r = postReview(await body(req));
+  return "error" in r ? refuse(400, r.error) : json(r);
+};
+
+function serve(name: string, routes: Record<string, Handler>): Plugin {
   return {
-    name: "eval-pages",
+    name,
     apply: "serve",
     configureServer(server) {
-      const routes: Record<string, Handler> = { "GET /history": history(server.config.root), "GET /file": file, "GET /calls": calls, "GET /pairs": pairs, "POST /label": label, "POST /record": record, "GET /human": human, "POST /human": human };
       server.middlewares.use("/api/eval", async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const u = new URL(req.url ?? "/", "http://x");
         const route = routes[`${req.method} ${u.pathname}`];
@@ -305,3 +358,13 @@ export function evalPages(): Plugin {
     },
   };
 }
+
+/** Eval HQ's /api/eval/* endpoints. `git show` reads the branch from the repo this server serves. */
+export function evalPages(repo: string): Plugin {
+  return serve("eval-pages", {
+    "GET /history": history(repo), "GET /file": file, "GET /calls": calls, "GET /pairs": pairs, "POST /label": label, "POST /record": record,
+    "GET /human": human, "POST /human": human, "GET /threads": threads, "POST /threads": threads,
+    "GET /intake": intake, "GET /card": card, "GET /card-image": cardImg, "POST /verdict": verdict,
+  });
+}
+

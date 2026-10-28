@@ -16,9 +16,10 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
 for (const [p, df, t] of [[0.975, 27, 2.052], [0.995, 27, 2.771], [0.9975, 27, 3.057], [0.95, 1, 6.314], [0.9, 10, 1.372]])
   check(near(tQuantile(p, df), t, 0.002), `t quantile ${p} df ${df} is ${tQuantile(p, df)}, want ${t}`);
 
-// ---- Rule F's operating characteristics: the planning row of work/spec-reviser/sim/rule-final-20k.out,
-// with that simulation's own generator (lean's genSends) and seeds: σS .5, σT .3, ties 15%, sessions of 5.
-const PLANNING = { 0.45: 2.2, 0.5: 8.0, 0.55: 21.4, 0.6: 41.9, 0.65: 65.6, 0.7: 84.7 };
+// ---- Rule F's operating characteristics, on the generator of work/spec-reviser/sim/rule-final-20k.out (lean's genSends)
+// and its seeds: σS .5, σT .3, ties 15%, sessions of 5, 32 of them for the 160 look. Its planning row for the looks to 80
+// was 2.2 / 8.0 / 21.4 / 41.9 / 65.6 / 84.7; these are the looks to 160 (the funnel audit, 2026-10-27).
+const PLANNING = { 0.45: 2.0, 0.5: 8.9, 0.55: 27.8, 0.6: 57.7, 0.65: 84.0, 0.7: 95.9 };
 const RUNS = 20000;
 const t0 = Date.now();
 const got = {};
@@ -28,7 +29,7 @@ for (const p of Object.keys(PLANNING).map(Number)) {
   for (let i = 0; i < RUNS; i++) {
     const tfx = Array.from({ length: 10 }, () => gauss(r) * 0.3);
     const rows = [];
-    for (let s = 0; s < 16; s++) {
+    for (let s = 0; s < 32; s++) {
       const us = gauss(r) * 0.5;
       for (let k = 0; k < 5; k++) {
         r(); // genSends' touch draw (every send touched here)
@@ -219,15 +220,17 @@ for (const [name, d] of Object.entries(nearMisses)) check(says(d, d.verdict === 
   check(sameContent(A, run1(3, "b")).A.own === "none", "an engine with no timing on the other board wasn't caught");
   // Too many cases without render go to the owner.
   const half = rows(32).map((r, i) => (i % 2 ? { ...r, render: [r.render[0], null] } : r));
-  check(says(run(half), "owner", /render not measured whole on 16 of 32/), `half the cases without render didn't go to the owner: ${run(half).verdict} ${run(half).vetoes}`);
+  check(says(run(half), "owner", /render not measured on 16 of 32/), `half the cases without render didn't go to the owner: ${run(half).verdict} ${run(half).vetoes}`);
   // A new shape kind on B's board: render still reads on A's board alone, but B's new paint was never timed.
   const kind = rows(32).map((r, i) => (i % 3 ? r : { ...r, renderSame: ["all", "none"] }));
-  check(says(run(kind), "owner", /render not measured whole on 11 of 32/), `cases timed only on A's board didn't count as unmeasured: ${run(kind).verdict} ${run(kind).vetoes}`);
+  check(says(run(kind), "owner", /render not measured on 11 of 32/), `cases timed only on A's board didn't count as unmeasured: ${run(kind).verdict} ${run(kind).vetoes}`);
   check(run(rows(32).map((r, i) => (i % 8 ? r : { ...r, renderSame: ["all", "paint"] }))).verdict === "keep", "a few cases with a new op went to the owner");
+  // A new op on over a third of the cases (e106-h1: 30 of 80) still compares their paint, nearly all of render.
+  check(run(rows(32).map((r, i) => (i % 8 > 2 ? r : { ...r, renderSame: ["all", "paint"] }))).verdict === "keep", "a new op on 12 of 32 cases went to the owner");
 }
 check(says(run(rows(32, { class: "N" })), "revert", /no effect/), "class N isn't reverted as no effect");
 const rare = decide({ tuning: rows(20), exhausted: true }, card());
-check(says(rare, "revert", /too rare/) && rare.ownerList, `20 affected cases after the top-ups isn't 'too rare': ${rare.verdict} ${rare.reasons}`);
+check(says(rare, "revert", /too rare/), `20 affected cases after the top-ups isn't 'too rare': ${rare.verdict} ${rare.reasons}`);
 const more = decide({ tuning: rows(20) }, card());
 check(more.verdict === "more" && more.next === 32, `20 cases with more to come doesn't ask for look 32: ${more.verdict} ${more.next}`);
 const d1 = run(rows(32, { class: "D" }), card({ dialogue: true }), { heldout: rows(16) });
@@ -236,6 +239,15 @@ const fewDecisive = decide({ tuning: rows(16, { s: (i) => (i < 6 ? -1 : 0) }) },
 check(fewDecisive.verdict === "more" && fewDecisive.next === 32, `a look with fewer than ${LOOP.minDecisive[0]} decisive cases isn't skipped: ${fewDecisive.verdict}`);
 const loses = run(rows(16, { s: (i) => [-1, -1, 1, 0][i % 4] }));
 check(says(loses, "revert") && loses.counts.look === 16, `a losing card isn't reverted at look 16: ${loses.verdict} ${loses.counts.look}`);
+// Out of cases short of a look: one last look on them all at that look's keep line, where a card used to revert unlooked
+// (e66-h5). 48 middling cases (Z 1.10 at look 48), then 24 winning ones: Z ≥ look 80's line on all 72.
+const MID = (i) => [1, -1, 1, 0, 0, 0, 1, -1][i % 8];
+const tail = rows(72, { s: (i) => (i < 48 ? MID(i) : [1, 1, 1, 0][i % 4]) });
+const last = decide({ tuning: tail, exhausted: true }, card());
+check(says(last, "keep") && last.counts.look === 72 && last.looks.at(-1).z >= LOOP.keepZ[3] && last.pending?.join() === "heldout", `a card out of cases at 72 isn't looked at once more and kept: ${last.verdict} ${JSON.stringify(last.looks)}`);
+check(decide({ tuning: tail }, card()).next === 80, "with more cases to come, the last look waits for look 80");
+const lastLoses = decide({ tuning: rows(59, { s: MID }), exhausted: true }, card());
+check(says(lastLoses, "revert", /Rule F at look 59/) && lastLoses.looks.at(-1).z < LOOP.keepZ[3], `a middling card out of cases at 59 isn't reverted on its last look: ${lastLoses.verdict} ${lastLoses.reasons}`);
 
 // ---- Goal latency (§1.3)
 const LAT = card({ goal: "latency", metric: "ttfd" });
@@ -263,6 +275,8 @@ check(says(flat, "revert") && flat.counts.look === 48, `a no-gain latency card (
 const late = [decide({ tuning: noisy(0.96, 6), exhausted: true }, LAT), decide({ tuning: noisy(0.96, 8), exhausted: true }, LAT)];
 check(says(late[0], "keep") && late[0].counts.look === 80 && late[0].latency.ttfd.p.faster < LOOP.latKeepP, `a small sure gain isn't kept at look 80: ${late[0].verdict} ${late[0].counts.look}`);
 check(says(late[1], "revert") && late[1].counts.look === 80 && late[1].latency.ttfd.p.faster >= LOOP.latKeepP, `an unsure small gain isn't reverted at look 80: ${late[1].verdict} ${late[1].counts.look}`);
+// The latency rule ends at 80 (LOOP.latFloorZ's looks) though more cases would come: Rule F's 160 look is fidelity's.
+check(says(decide({ tuning: noisy(0.96, 8) }, LAT), "revert") && decide({ tuning: noisy(0.96, 8) }, LAT).counts.look === 80, "a latency card unsure at look 80 asks for look 160");
 // The slow sends (LOOP.latTails): a quarter of the sends think (A ×3) and B stops that; the median send doesn't move,
 // so the median alone calls it no gain, and the p90 keeps it at look 32. A fidelity winner that makes those sends ×1.6
 // slower instead is reverted by the tail's latency veto.

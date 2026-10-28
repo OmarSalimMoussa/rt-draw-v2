@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { type Paths, isRealRun } from "./paths.ts";
+import { type Paths, isRealCase, underReal } from "./paths.ts";
 import type { RecordedReply } from "./types.ts";
 
 /** What a request is, for its hash: images by blob hash. */
@@ -22,12 +22,12 @@ export type Reply = { reqHash: string; run: string; role: string; at: string; re
 const sha256 = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 export const reqHash = (r: Req) => sha256(JSON.stringify([r.model, r.system, r.user, r.images, r.effort, r.thinking]));
 
-/** Writes each data: URL's bytes once as cache/blobs/<sha256>.jpg (a real run's under real/); returns the hashes. */
-export function storeImages(p: Paths, urls: string[], run = "-"): string[] {
+/** Writes each data: URL's bytes once as cache/blobs/<sha256>.jpg (a real run's or real send's under real/); returns the hashes. */
+export function storeImages(p: Paths, urls: string[], run = "-", caseId?: string): string[] {
   return urls.map((url) => {
     const bytes = Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
     const sha = sha256(bytes);
-    const file = p.blob(sha, isRealRun(run));
+    const file = p.blob(sha, underReal(run, caseId));
     if (!existsSync(file)) {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, bytes);
@@ -40,20 +40,20 @@ export function storeImages(p: Paths, urls: string[], run = "-"): string[] {
 const nameOf = (hash: string, run: string, perRun: boolean) => (perRun ? sha256(`${run}\n${hash}`) : hash);
 export const replyName = (hash: string, run: string, perRun: boolean) => `${nameOf(hash, run, perRun)}.json`;
 
-export function readReply(p: Paths, hash: string, run: string, perRun: boolean): Reply | undefined {
-  const file = p.reply(nameOf(hash, run, perRun), isRealRun(run));
+export function readReply(p: Paths, hash: string, run: string, perRun: boolean, caseId?: string): Reply | undefined {
+  const file = p.reply(nameOf(hash, run, perRun), underReal(run, caseId));
   return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Reply) : undefined;
 }
 
 /** Stores a reply (the first one for its name stays: it's the one the bank recorded). Returns its file name, a real run's whole path. */
-export function writeReply(p: Paths, r: Reply, perRun: boolean): string {
-  const name = nameOf(r.reqHash, r.run, perRun);
-  const file = p.reply(name, isRealRun(r.run));
+export function writeReply(p: Paths, r: Reply, perRun: boolean, caseId?: string): string {
+  const name = nameOf(r.reqHash, r.run, perRun), real = underReal(r.run, caseId);
+  const file = p.reply(name, real);
   if (!existsSync(file)) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(r));
   }
-  return isRealRun(r.run) ? file : `${name}.json`;
+  return real ? file : `${name}.json`;
 }
 
 const sleepUntil = (t: number) => new Promise((r) => setTimeout(r, Math.max(0, t - performance.now())));
@@ -126,6 +126,6 @@ export function standIn(p: Paths, caseId: string, role: string, ordinal: number,
   const recorded = (JSON.parse(readFileSync(file, "utf8")) as RecordedReply[]).filter((r) => !r.copy);
   const text = Array.isArray(user) ? user.join("\n") : user;
   const hit = recorded.find((r) => r.role === role && r.subject && text.includes(r.subject)) ?? recorded.find((r) => r.role === role && r.ordinal === ordinal);
-  const reply = hit && p.reply(basename(hit.cacheFile, ".json"));
+  const reply = hit && p.reply(basename(hit.cacheFile, ".json"), isRealCase(caseId));
   return reply && existsSync(reply) ? (JSON.parse(readFileSync(reply, "utf8")) as Reply) : undefined;
 }

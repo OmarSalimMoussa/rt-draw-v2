@@ -73,7 +73,8 @@ Most ideas don't work. A few it rejected:
 - **Sending every drawing call twice** and keeping whichever streams first. No faster at the median (×0.999) and 1.56
   times the cost. Handed to the owner, who didn't adopt it.
 - **Changes too rare to measure.** A change that affects fewer than 32 of the recorded requests can't be judged fairly,
-  so it's reverted and listed for a person.
+  so it's reverted. It was listed for a person too, until 49 of the list's first 110 lines were these; now the analyst
+  is told the bar and how many cases each kind of request has.
 - **13 void decisions.** The measurement itself was unfair, for example when one side started on cold processes 14% of
   the time and the other never did. A void is never a verdict on the change. The loop re-ran voids then, and every re-run
   voided again; now a void goes to a person, and every case is warmed up before it's timed.
@@ -143,7 +144,7 @@ flowchart TD
   end
   setup --> rounds
   KEEP --> CK["Checkpoint every 2 keeps: champion against the original on B1"]
-  CK --> PG["eval/history and the progress page"]
+  CK --> PG["eval/history and Eval HQ"]
 ```
 
 ### Simulated users and the bank
@@ -243,5 +244,19 @@ more", "did nothing"). The first check asked for more labels; the second passed:
 Every model call goes through `loop/gateway.ts`, its own process so the coordinator's work can't delay a stream. Calls
 are never queued (a queue would read as model latency); each case slot pools its processes like one user's server.
 Byte-identical requests from both arms share one real call, each arm getting the chunks on its own clock
-(`loop/cache.ts`). An event-loop delay over 20 ms voids the case. `--cap n` refuses call n+1, so a loop or retry bug
+(`loop/cache.ts`). An event-loop delay over 100 ms voids the case. `--cap n` refuses call n+1, so a loop or retry bug
 stops at the cap instead of burning a usage window.
+
+### Real sends
+
+The bank's cases are a driver's, so the loop could get good at what a model makes up. Intake (`real/README.md`) takes
+what testers did on the hosted app. Each send that replays becomes a card: Opus says what it meant and whether it
+landed, and draws gold for a clear miss. The owner can look at every card in Eval HQ. A card joins the bank after a
+two-day window unless they reject it. Then decisions measure on it like a driver's case, and its gold makes benchmark
+R1, scored beside every keep. Testers' words and drawings never leave the eval machine.
+
+## Running it
+
+The loop, Eval HQ and intake run on one always-on machine as systemd units, and restart by themselves. The owner looks
+at new cards, answers what the loop holds for them, and ships the champion with one command. Claude sessions run the
+rest through five MCP tools. `RUNBOOK.md` has the commands.

@@ -14,7 +14,7 @@ import { readRows } from "./metrics.ts";
 import { paths } from "./paths.ts";
 import { runFile, voidPath } from "./record.ts";
 import { clusteredZ } from "./stats.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, HypothesisCard, Marker, Ratio, Row, RunInfo, SmokeRow } from "./types.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, HypothesisCard, Marker, Ratio, Row, RunInfo, ShipRow, SmokeRow } from "./types.ts";
 import type { Decision } from "./verdict.ts";
 
 export const BRANCH = "eval/history";
@@ -84,7 +84,7 @@ export function commitHistory(message: string): string | undefined {
 
 // ---- The files of §5.3
 
-type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker; "smoke.jsonl": SmokeRow };
+type Rows = { "epochs.jsonl": EpochRow; "decisions.jsonl": DecisionRow; "checkpoints.jsonl": CheckpointRow; "budget.jsonl": BudgetRow; "health.jsonl": HealthRow; "markers.jsonl": Marker; "smoke.jsonl": SmokeRow; "ships.jsonl": ShipRow };
 /** anchors.json: A0, checkpoint 0's champion, which every checkpoint runs against (§5.2); `tuning` when it was a commit plus knobs. */
 export type Anchor = { id: string; sha: string; tuning?: Record<string, number> };
 type Whole = { "anchors.json": Anchor[] };
@@ -150,15 +150,6 @@ export function triedPatch(d: DecisionRow, repo = paths().repo) {
   const head = [`rt-eval tried: ${d.id}`, `title: ${d.card?.change ?? ""}`, `component: ${d.card?.component ?? ""}`, `verdict: ${d.verdict}: ${d.reasons.join("; ")}`, `diff: ${sha256(body).slice(0, 12)}`, `card: ${JSON.stringify(d.card)}`];
   mkdirSync(at("tried"), { recursive: true });
   writeFileSync(at("tried", `${d.id}.patch`), `${head.join("\n")}\n---\n${body}\n`);
-}
-
-/** The critic's tried index, one line per patch: "<id> <title> | <component> | <diff hash> | <verdict>". */
-export function triedIndex(): string[] {
-  const dir = at("tried");
-  return (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".patch")).sort() : []).map((f) => {
-    const h = Object.fromEntries(readFileSync(join(dir, f), "utf8").split("\n---\n")[0].split("\n").map((l) => [l.slice(0, l.indexOf(":")), l.slice(l.indexOf(":") + 2)]));
-    return `${h["rt-eval tried"]} ${h.title} | ${h.component} | ${h.diff} | ${h.verdict.split(":")[0]}`;
-  });
 }
 
 /** One open owner-list item (a markdown task), once. */

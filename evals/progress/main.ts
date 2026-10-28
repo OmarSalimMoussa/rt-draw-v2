@@ -1,22 +1,27 @@
-// The eval's progress page (§5.4, frozen measuring side): quality against A0
-// (checkpoint 0's champion, which never moves), each era of the yardstick charted
-// apart, latency against A0 in the same run, cost and speed against v1, the
-// decisions with every case and call behind them, health, and the loop's status.
-// Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the
-// eval/history branch); the page holds no state and polls every 60 s while the
-// loop's heartbeat is fresh. ?sample=1 draws the fake history in ./sample/.
-// Rows written before 2026-10-26 may carry Q, anchor moves, chained ratios and
-// debts: the page ignores them, and skips their "anchor" markers.
+// Eval HQ's home (§5.4, frozen measuring side): the pipeline at a glance (pull, intake, review, bank, loop, champion),
+// "Needs you" (attention.ts: what waits for the owner, each with a thread they write in and Claude answers through
+// `rte note`, $RT_EVAL_HOME/notes/threads.jsonl outside git, read every 20 s), the loop (its status and the decisions
+// with every case and call behind them), the benchmarks (quality against A0, checkpoint 0's champion, which never moves,
+// each era of the yardstick charted apart; latency against A0 in the same run; cost and speed against v1; health), and
+// the playgrounds. Everything comes from GET /api/eval/history (evals/pages/plugin.ts: the eval/history branch) and
+// /api/eval/intake; the page holds no state and polls every 60 s while the loop's heartbeat is fresh. ?sample=1 draws
+// the fake history in ./sample/ (its threads kept in memory). Rows written before 2026-10-26 may carry Q, anchor moves,
+// chained ratios and debts: the page ignores them, and skips their "anchor" markers.
 import { openModal } from "../../src/modal.ts";
-import { $, shell } from "../../src/ui.ts";
+import { $, PLAYGROUNDS } from "../../src/ui.ts";
 import { LOOP } from "../loop/config.ts";
-import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, SmokeRow } from "../loop/types.ts";
+import type { Run } from "../loop/state.ts";
+import type { BudgetRow, CheckpointRow, DecisionRow, EpochRow, HealthRow, Marker, ShipRow, SmokeRow } from "../loop/types.ts";
+import { type Item, type Note, type Thread, chatId, isChat, needsYou, yourTurn } from "./attention.ts";
 import { type Dot, type Frame, INK, type XY, frame, legend } from "./charts.ts";
+import { hq } from "./hq.ts";
 
-shell("", "Eval progress: what the loop kept and reverted, quality against A0 (a frozen first champion) on cases no decision sees, latency, and what it cost against v1. Read from the eval/history branch; no model call.");
+hq("home", "The eval's pipeline: testers' sends become cases you review, the loop tries changes on them and keeps what wins, and the champion waits for you to ship it. Read from the eval/history branch and the PGX's files; no model call.");
 
 type Disk = { freeGb: number; weekGrowthGb: number; daysLeft: number | null; ownerGb: number; pauseGb: number };
-type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; now: number; error?: string };
+type Status = { heartbeat?: Record<string, unknown>; state?: Record<string, unknown>; disk?: Disk; champion?: { sha: string; unshipped?: number }; now: number; error?: string };
+/** What the overview takes of GET /api/eval/intake (evals/real/review.ts); absent where intake isn't served (the sample). */
+type Intake = { lookDays: number; pull: Record<"live" | "local", { pulledAt?: string }>; states: Record<string, number>; bank: { driver: number; real: number }; cards: { state: string; admitAt?: string }[] };
 type History = { source: string; files: Record<string, string | null>; status: Status };
 type Data = ReturnType<typeof parse>;
 
@@ -45,9 +50,10 @@ function parse(h: History) {
     source: h.source, status: h.status,
     epochs: rowsOf<EpochRow>(f["epochs.jsonl"]), decisions: rowsOf<DecisionRow>(f["decisions.jsonl"]), checkpoints: rowsOf<CheckpointRow>(f["checkpoints.jsonl"]),
     budget: rowsOf<BudgetRow>(f["budget.jsonl"]), health: rowsOf<HealthRow>(f["health.jsonl"]), markers: rowsOf<Marker>(f["markers.jsonl"]),
-    smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]),
+    smokes: rowsOf<SmokeRow>(f["smoke.jsonl"]), ships: rowsOf<ShipRow>(f["ships.jsonl"]),
     /** Open owner-list items: unchecked markdown tasks. */
     ownerOpen: (f["owner-list.md"]?.match(/^\s*- \[ \]/gm) ?? []).length,
+    ownerList: f["owner-list.md"] ?? "",
   };
 }
 
@@ -56,7 +62,7 @@ async function sample(): Promise<History> {
   const files: Record<string, string> = {};
   for (const [path, load] of Object.entries(raw)) files[path.split("/").pop()!] = (await load()) as string;
   const now = Date.parse(rowsOf<EpochRow>(files["epochs.jsonl"]).at(-1)!.at) + 300_000;
-  return { source: "sample", files, status: { now, heartbeat: { wall: now - 4000 }, state: { status: "running", phase: "e21-h1 measuring, look 32", slot: 2 }, disk: { freeGb: 84.2, weekGrowthGb: 16.9, daysLeft: 30.6, ownerGb: LOOP.diskOwnerGb, pauseGb: LOOP.diskPauseGb } } };
+  return { source: "sample", files, status: { now, heartbeat: { wall: now - 4000 }, state: { run: { status: "running", at: new Date(now - 60_000).toISOString(), phase: "e21-h1: deciding (latency, draw)", slot: 2 } }, disk: { freeGb: 84.2, weekGrowthGb: 16.9, daysLeft: 30.6, ownerGb: LOOP.diskOwnerGb, pauseGb: LOOP.diskPauseGb } } };
 }
 
 // ---- The x axis: epochs, with everything that has a time placed between them.
@@ -282,14 +288,15 @@ function decisions(d: Data) {
   const host = card("decisions", true);
   const comp = (r: DecisionRow) => (r.kind === "owner-step" ? "<b>owner step</b>" : esc(r.card?.component ?? "-"));
   const trustColor = { green: "ok", amber: "", void: "bad" };
-  const rows = [...d.decisions].reverse().map((r) => {
+  // Keyed by place, not id: a card decided again (rte decide --card) has a row per run under one id.
+  const rows = [...d.decisions].map((r, i) => [r, i] as const).reverse().map(([r, i]) => {
     const n = r.counts.wins + r.counts.losses + r.counts.ties;
-    return `<tr data-decision="${esc(r.id)}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
+    return `<tr data-decision="${esc(r.id)}" data-i="${i}"><td>e${r.epoch}</td><td>${comp(r)}<div class="muted">${esc(r.card?.change ?? r.reasons[0] ?? "")}</div></td><td>${r.goal}</td><td>${r.class}</td><td>${r.verdict}</td><td class="${trustColor[r.trust]}">${r.trust}</td><td>${n}</td><td>${r.looks.at(-1)?.z.toFixed(2) ?? "-"}</td><td>×${(r.latency.ttfd ?? r.latency.ttfc).est.toFixed(2)}${r.latency.render ? ` · ×${r.latency.render.est.toFixed(2)}` : ""}</td><td>$${r.cost.listUsd.toFixed(2)}</td><td>${r.minutes}</td><td><a href="/api/eval/history?f=ledger.md" target="_blank" rel="noopener">ledger</a></td></tr>`;
   });
   host.innerHTML = `<h2>Decisions, latest first</h2><div class="scroll"><table class="marks"><thead><tr><th>epoch</th><th>component</th><th>goal</th><th>class</th><th>verdict</th><th>trust</th><th>cases</th><th>last Z</th><th>first drawing · render</th><th>$</th><th>min</th><th></th></tr></thead><tbody>${rows.join("") || '<tr><td colspan="12" class="muted">No decisions yet.</td></tr>'}</tbody></table></div>`;
   host.addEventListener("click", (e) => {
     const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-decision]");
-    if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions.find((r) => r.id === tr.dataset.decision)!);
+    if (tr && !(e.target as HTMLElement).closest("a")) void drill(d.decisions[Number(tr.dataset.i)]);
   });
 }
 
@@ -312,14 +319,15 @@ function status(d: Data) {
   const s = d.status;
   const hb = timeOf(s.heartbeat?.wall ?? s.heartbeat?.at);
   const age = Number.isNaN(hb) ? undefined : s.now - hb;
-  const st = s.state ?? {};
+  const st = (s.state?.run ?? {}) as Partial<Run>;
   const running = age !== undefined && age < STALE_MS;
-  const said = String(st.status ?? (running ? "running" : "stopped"));
-  const state = running ? said : said === "running" ? "stopped (no heartbeat)" : said;
-  const slot = Number(st.slot) || d.epochs.at(-1)?.slots.find((x) => x.status === "active")?.slot;
+  const said = st.status ?? (running ? "running" : "stopped");
+  // A loop that died without a word (a kill, a reboot) still says running: its heartbeat says otherwise.
+  const state = running || said === "stopped" ? `${said}${st.code ? ` (${st.code})` : ""}` : "stopped (no heartbeat)";
+  const slot = st.slot ?? d.epochs.at(-1)?.slots.find((x) => x.status === "active")?.slot;
   const use = d.epochs.at(-1)?.slots.find((x) => x.slot === slot);
   const disk = s.disk;
-  host.innerHTML = `<div class="strip"><b>${esc(state)}</b>${st.why ? `<span>${esc(st.why)}</span>` : ""}<span>phase: ${esc(st.phase ?? "-")}</span>
+  host.innerHTML = `<div class="strip"><b>${esc(state)}</b>${st.why ? `<span>${esc(st.why)}</span>` : ""}${st.until ? `<span>until ${esc(st.until.slice(11, 16))} UTC</span>` : ""}<span>phase: ${esc(st.phase ?? "-")}</span>
     <span>token ${slot ?? "-"}${use ? `: 5-hour ${use.fiveHour !== undefined ? pct(use.fiveHour) : "?"}, 7-day ${use.sevenDay !== undefined ? pct(use.sevenDay) : "?"}` : ""}</span>
     <span>heartbeat ${age === undefined ? "none" : ago(age)}</span><span>owner list: ${d.ownerOpen} open</span>
     <span class="${disk && disk.freeGb < disk.ownerGb ? "bad" : ""}">${disk ? `disk ${disk.freeGb.toFixed(0)} GB free · ${disk.daysLeft === null || disk.daysLeft > 365 ? "days left: plenty" : `~${disk.daysLeft.toFixed(0)} days left`} (to the ${disk.pauseGb} GB pause at last week's ${disk.weekGrowthGb.toFixed(1)} GB)` : "free disk: unknown here"}</span>
@@ -376,28 +384,262 @@ async function drill(dec: DecisionRow) {
   });
 }
 
+// ---- Needs you: what waits for the owner, newest first, each with its thread
+
+const NOTES_MS = 20_000;
+const TITLE = document.title;
+const SAMPLE = new URLSearchParams(location.search).has("sample");
+const VERDICT: Record<DecisionRow["verdict"], string> = { keep: "kept", revert: "reverted", void: "void", owner: "held" };
+let notes: Note[] = [];
+let sampleNotes: Note[] | undefined;
+let notesError: string | undefined;
+let sendError: string | undefined;
+/** What he is typing and which forms are open: a redraw (a reply landing) keeps both, and the caret. */
+const drafts = new Map<string, string>();
+const opened = new Set<string>();
+let settledOpen = false;
+
+const now = () => (SAMPLE && data ? data.status.now : Date.now());
+const noteHtml = (n: Note) =>
+  `<div class="note ${n.who}"><span class="stat muted">${n.who === "owner" ? "you" : "Claude"}, ${ago(Math.max(0, now() - Date.parse(n.at)))}${n.resolved === true ? " · resolved" : n.resolved === false ? " · reopened" : ""}</span>${n.text ? `<div class="text">${esc(n.text)}</div>` : ""}</div>`;
+const turnChip = (t?: Thread) => (!t?.last ? "" : t.last.who === "claude" ? '<span class="chip reply">Claude replied</span>' : '<span class="chip">waiting for Claude</span>');
+const form = (key: string, resolvable: boolean) =>
+  `<div data-form="${esc(key)}"${opened.has(key) || drafts.get(key) ? "" : " hidden"}><textarea data-key="${esc(key)}" rows="3" placeholder="${key === "new" ? "A side chat with Claude, about anything" : "Your answer or comment; Claude replies here"} (Ctrl+Enter sends)">${esc(drafts.get(key) ?? "")}</textarea>` +
+  `<div class="row"><button class="primary" data-to="${esc(key)}">Send</button>${resolvable ? `<button data-to="${esc(key)}" data-and-resolve>Send and resolve</button>` : ""}</div></div>`;
+const acts = (key: string, links = "") => `<div class="row acts">${links}<button data-open="${esc(key)}">answer</button><button data-resolve="${esc(key)}">resolve</button></div>`;
+
+function itemHtml(it: Item) {
+  const d = it.decision;
+  const link = (f: string, label: string) => `<a href="/api/eval/history?f=${encodeURIComponent(f)}" target="_blank" rel="noopener">${label}</a>`;
+  const links = d ? `<button data-drill="${esc(d.id)}">cases and calls</button>${link("ledger.md", "ledger")}${d.kind === "card" && d.verdict !== "keep" ? link(`tried/${d.id}.patch`, "patch") : ""}` : "";
+  const state = it.held ? '<span class="chip held">held for your call</span>' : d ? `<span class="chip">${VERDICT[d.verdict]}</span>` : it.notice ? '<span class="chip">notice</span>' : "";
+  const meta = [d?.card?.component, d?.goal === "owner" ? undefined : d?.goal, it.date].filter(Boolean).join(" · ");
+  return `<li class="item${it.held ? " held" : ""}${it.turn ? "" : " answered"}" data-item="${esc(it.id)}"><div class="row">${state}${it.notice ? "" : `<b>${esc(it.id)}</b>`}<span class="muted">${esc(meta)}</span>` +
+    `${it.since ? `<span class="chip">re-decided since: ${VERDICT[it.since.verdict]} (${esc(it.since.id)})</span>` : ""}${turnChip(it.thread)}</div>` +
+    `<p class="what"${d?.card ? ` title="${esc(d.card.change)}"` : ""}>${esc(it.what)}</p>${it.why.length ? `<ul class="why">${it.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}` +
+    `${(it.thread?.notes ?? []).map(noteHtml).join("")}${acts(it.id, links)}${form(it.id, true)}</li>`;
+}
+const chatHtml = (t: Thread) =>
+  `<li class="item${t.last?.who === "owner" ? " answered" : ""}" data-item="${esc(t.id)}"><div class="row"><span class="chip">side chat</span><span class="muted">${esc(t.id)}</span>${turnChip(t)}</div>${t.notes.map(noteHtml).join("")}${acts(t.id)}${form(t.id, true)}</li>`;
+
+/** What the pipeline itself waits on the owner for: a loop stopped for them, and cards waiting for their look. */
+function pipelineNeeds(): string[] {
+  const out: string[] = [];
+  const st = (data?.status.state?.run ?? {}) as Partial<Run>;
+  if (st.status === "stopped" && st.code && st.code !== "asked" && st.code !== "done")
+    out.push(`<li class="item held"><p class="what">The loop stopped (${esc(st.code)})</p><p class="why">${esc(st.why ?? "")} Once it's dealt with, <code>bin/rte run</code> on the PGX starts it again.</p></li>`);
+  const proposed = intakeData?.cards.filter((c) => c.state === "proposed") ?? [];
+  if (proposed.length) {
+    const next = proposed.map((c) => c.admitAt ?? "").sort()[0];
+    out.push(`<li class="item"><p class="what">${proposed.length} card${proposed.length > 1 ? "s wait" : " waits"} for your look</p><p class="why">The next joins ${esc(day(next))} unless you reject it. <a href="/evals/review/">Intake and review</a></p></li>`);
+  }
+  return out;
+}
+
+function needs() {
+  if (!data) return;
+  const host = $("#needs");
+  const n = needsYou(data.ownerList, data.decisions, notes);
+  const pipe = pipelineNeeds();
+  const count = yourTurn(n) + pipe.length;
+  document.title = count ? `(${count}) ${TITLE}` : TITLE;
+  const held = n.items.filter((x) => x.held).length;
+  const answered = n.items.filter((x) => !x.turn).length + n.chats.filter((t) => t.last?.who === "owner").length;
+  const replies = [...n.items.map((x) => x.thread), ...n.chats].filter((t) => t?.last?.who === "claude").length;
+  const parts = [held && `${held} held for your call`, n.items.length - held && `${n.items.length - held} on the owner list`, replies && `${replies} answered by Claude`, answered && `${answered} waiting for Claude`];
+  const active = document.activeElement;
+  const caret = active instanceof HTMLTextAreaElement && host.contains(active) ? { key: active.dataset.key!, at: [active.selectionStart, active.selectionEnd] as const } : undefined;
+  const quiet = !n.items.length && !n.chats.length && !pipe.length;
+  const settled = [...n.settled.map((x) => [x.id, x.what] as const), ...n.closed.map((t) => [t.id, t.last?.text ?? ""] as const)];
+  host.hidden = false;
+  host.classList.toggle("quiet", quiet);
+  host.innerHTML = `<div class="row"><h2>${quiet ? "Nothing needs you" : "Needs you"}${count ? ` <span class="badge" data-count>${count}</span>` : ""}</h2><span class="muted">${parts.filter(Boolean).join(" · ")}</span><span class="grow"></span><button data-open="new">New side chat</button></div>${form("new", false)}` +
+    `${pipe.length ? `<ol data-pipeline>${pipe.join("")}</ol>` : ""}${n.items.length ? `<ol data-items>${n.items.map(itemHtml).join("")}</ol>` : ""}${n.chats.length ? `<h3>Side chats</h3><ol data-chats>${n.chats.map(chatHtml).join("")}</ol>` : ""}` +
+    `${settled.length ? `<details${settledOpen ? " open" : ""}><summary class="muted">Resolved here (${settled.length})${n.settled.length ? ": owner-list.md keeps them open until Claude ticks them there" : ""}</summary><ol>${settled.map(([id, what]) => `<li class="row"><b>${esc(id)}</b><span class="muted">${esc(what.slice(0, 140))}</span><button data-resolve="${esc(id)}" data-reopen>reopen</button></li>`).join("")}</ol></details>` : ""}` +
+    `${notesError || sendError ? `<div class="stat bad">${esc(sendError ? `Not sent: ${sendError}` : `Threads unavailable here: ${notesError}`)}</div>` : ""}`;
+  if (caret) {
+    const t = host.querySelector<HTMLTextAreaElement>(`textarea[data-key="${CSS.escape(caret.key)}"]`);
+    t?.focus();
+    t?.setSelectionRange(...caret.at);
+  }
+}
+
+/** The owner's note: to the pages server, or (?sample) to the sample's threads in memory. */
+async function post(b: { thread?: string; text: string; resolved?: boolean }) {
+  if (SAMPLE) {
+    const thread = b.thread ?? chatId(new Date(now() + (sampleNotes ?? []).length * 1000));
+    return void (sampleNotes ??= []).push({ at: new Date(now()).toISOString(), thread, ...(isChat(thread) ? {} : { item: thread }), who: "owner", text: b.text, ...(b.resolved === undefined ? {} : { resolved: b.resolved }) });
+  }
+  const r = await fetch("/api/eval/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+}
+let busy = false;
+async function send(key: string, resolved?: boolean) {
+  const text = (drafts.get(key) ?? "").trim();
+  if (busy || (!text && resolved === undefined)) return;
+  busy = true;
+  try {
+    await post({ ...(key === "new" ? {} : { thread: key }), text, ...(resolved === undefined ? {} : { resolved }) });
+    drafts.delete(key);
+    opened.delete(key);
+    sendError = undefined;
+  } catch (err) {
+    sendError = (err as Error).message;
+  }
+  busy = false;
+  await pollNotes();
+}
+
+let notesTimer: ReturnType<typeof setTimeout> | undefined;
+async function pollNotes() {
+  clearTimeout(notesTimer);
+  try {
+    if (SAMPLE) notes = [...(sampleNotes ?? [])];
+    else {
+      const r = await fetch("/api/eval/threads");
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      notes = j.notes;
+    }
+    notesError = undefined;
+  } catch (err) {
+    notesError = (err as Error).message;
+  }
+  needs();
+  notesTimer = setTimeout(pollNotes, NOTES_MS);
+}
+
+{
+  const host = $("#needs");
+  host.addEventListener("input", (e) => {
+    const t = e.target as HTMLTextAreaElement;
+    if (t.dataset.key) drafts.set(t.dataset.key, t.value);
+  });
+  host.addEventListener("keydown", (e) => {
+    const key = (e.target as HTMLElement).dataset.key;
+    if (key && e.key === "Enter" && (e.ctrlKey || e.metaKey)) e.preventDefault(), void send(key);
+  });
+  host.addEventListener("toggle", (e) => e.target instanceof HTMLDetailsElement && (settledOpen = e.target.open), true);
+  host.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("button");
+    const { open, to, resolve, drill: id } = b?.dataset ?? {};
+    if (open !== undefined) {
+      const f = host.querySelector<HTMLElement>(`[data-form="${CSS.escape(open)}"]`)!;
+      f.hidden = !f.hidden;
+      if (f.hidden) opened.delete(open);
+      else opened.add(open), f.querySelector("textarea")!.focus();
+    } else if (to !== undefined) void send(to, b!.dataset.andResolve !== undefined || undefined);
+    else if (resolve !== undefined) void send(resolve, b!.dataset.reopen === undefined);
+    else if (id !== undefined) {
+      const d = data?.decisions.findLast((x) => x.id === id);
+      if (d) void drill(d);
+    }
+  });
+  // Back on the tab: the replies now, not at the next poll.
+  window.addEventListener("focus", () => void pollNotes());
+}
+
+// ---- The pipeline at a glance, and the playgrounds
+
+const day = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) : "");
+function overview(d: Data, i?: Intake) {
+  const host = $("#overview");
+  const st = (d.status.state?.run ?? {}) as Partial<Run>;
+  const n = (k: string) => i?.states[k] ?? 0;
+  const next = i?.cards.filter((c) => c.state === "proposed").map((c) => c.admitAt ?? "").sort()[0];
+  const pulled = i && [i.pull.live.pulledAt, i.pull.local.pulledAt].filter(Boolean).sort().at(-1);
+  const stage = (name: string, href: string, main: string, sub: string) => `<a class="stage-link" href="${href}"><span class="muted">${name}</span><b>${esc(main)}</b><span class="muted">${esc(sub)}</span></a>`;
+  host.innerHTML = `<div class="pipeline">${[
+    i ? stage("Pull", "/evals/review/", pulled ? ago(now() - Date.parse(pulled)) : "never", `${n("pulled")} new sends`) : "",
+    i ? stage("Intake", "/evals/review/?state=labeled", `${n("labeled")} being labeled`, `${n("skipped")} skipped`) : "",
+    i ? stage("Review", "/evals/review/", `${n("proposed")} waiting for you`, next ? `next joins ${day(next)}` : "none waiting") : "",
+    i ? stage("Bank", "/evals/review/?state=admitted", `${i.bank.driver} driver · ${i.bank.real} real`, "cases decisions measure") : "",
+    stage("Loop", "#loop", `${st.status ?? "stopped"}${st.code ? ` (${st.code})` : ""}`, st.phase ?? st.why ?? ""),
+    d.status.champion ? stage("Champion", "#loop", d.status.champion.sha.slice(0, 7), d.status.champion.unshipped === undefined ? "" : `${d.status.champion.unshipped} keeps not on master`) : "",
+    d.ships.length ? stage("Prod", "#loop", d.ships.at(-1)!.tag, `shipped ${day(d.ships.at(-1)!.at)}`) : "",
+  ].join("")}</div>`;
+}
+
+/** What each product playground is for, in the order they feed a send. They run on the dev server, where the product's API is. */
+const PLAYGROUND_USE: Record<string, string> = {
+  speech: "words with their times: a spoken send's input",
+  ink: "strokes with their times, the ink a case replays on the person's clock",
+  hittest: "what a stroke touches or encloses: the first reading of the ink",
+  marks: "each mark's reading (a loop, an arrow, a tap), as the drawing model is told it",
+  link: "ink tied to the words said while drawing it: a send's [ink n] markers",
+  describe: "shape descriptions good enough for \"that button\": what words are resolved against",
+  resolve: "words and ink to the shapes they mean: the resolver, and Jev's guess",
+  router: "the fast lane or the full one, per send",
+  board: "which pictures of the board are worth a model's look",
+  shot: "the screenshot the drawing model gets",
+  coords: "how the model writes places on the board",
+  draw: "the product's send end to end; ?record=1 records your sends for the human set U1",
+  ops: "the drawing model's op lines, applied as they stream: the engine every arm runs",
+  tidy: "the tidy pass after the ops: sizes, edges and gaps evened out",
+  picture: "a few words to a doodle: the picture model gold is drawn against",
+  camera: "camera moves the way a person means them",
+  render: "the board's renderer: what render time measures",
+};
+function playgrounds() {
+  const host = card("playgrounds", true);
+  let origin = "http://localhost:5173";
+  try {
+    origin = localStorage.getItem("hq.dev") ?? origin;
+  } catch {} // no storage here: the default
+  const names = new Map<string, string>(PLAYGROUNDS);
+  const list = () => Object.entries(PLAYGROUND_USE).map(([p, use]) => `<li><a href="${esc(origin)}/playgrounds/${p}/" target="_blank" rel="noopener">${esc(names.get(p) ?? p)}</a> <span class="muted">${esc(use)}</span></li>`).join("");
+  host.innerHTML = `<h2>The product's playgrounds</h2><p class="muted">Each tries one part of a send by hand. They open on the laptop's dev server (npm run dev), where the product's model API runs: <label>at <input data-origin value="${esc(origin)}" size="28"></label></p><ul data-list>${list()}</ul>`;
+  host.querySelector<HTMLInputElement>("[data-origin]")!.addEventListener("change", (e) => {
+    origin = (e.target as HTMLInputElement).value.replace(/\/$/, "");
+    try {
+      localStorage.setItem("hq.dev", origin);
+    } catch {} // kept for this view only
+    host.querySelector("[data-list]")!.innerHTML = list();
+  });
+}
+
+/** A view's heading in the page: its anchor, and one sentence on what its stage does and what it needs of the owner. */
+function view(id: string, title: string, blurb: string) {
+  const h = document.createElement("div");
+  h.className = "wide view";
+  h.id = id;
+  h.innerHTML = `<h2>${esc(title)}</h2><p class="muted">${esc(blurb)}</p>`;
+  $("#panels").append(h);
+}
+
 // ---- Load, draw, poll
 
 let data: Data | undefined;
+let intakeData: Intake | undefined;
 function draw() {
   if (!data) return;
   $("#panels").replaceChildren();
+  overview(data, intakeData);
   const x = xAxis(data);
   const evs = ownerSteps(data, x);
+  view("loop", "Loop", "The loop tries changes the analyst and critic propose, measures each against the champion on the bank's cases, and keeps what is faster with nothing worse. It needs you only for what it holds (Needs you).");
   const running = status(data);
+  decisions(data);
+  view("benchmarks", "Benchmarks", "Every few keeps, the champion against A0 on the frozen benches: B1 (the driver's held-out cases), U1 (your recorded sends) and R1 (testers' sends with gold, a report beside every keep).");
   quality(data, x, evs);
   latency(data, x, evs);
   health(data, x);
   cost(data, x);
-  decisions(data);
+  view("playgrounds", "Playgrounds", "The product's parts, one at a time, for trying a change by hand before the loop measures it.");
+  playgrounds();
   return running;
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
 async function refresh() {
   try {
-    data = parse(new URLSearchParams(location.search).has("sample") ? await sample() : await (await fetch("/api/eval/history")).json());
+    const h: History = SAMPLE ? await sample() : await (await fetch("/api/eval/history")).json();
+    if (SAMPLE) sampleNotes ??= rowsOf<Note>(h.files["threads.jsonl"]);
+    // Intake is served on the PGX only: elsewhere the overview leaves it out.
+    intakeData = SAMPLE ? undefined : await fetch("/api/eval/intake").then((r) => (r.ok ? r.json() : undefined), () => undefined);
+    data = parse(h);
     const running = draw();
+    needs();
     clearTimeout(timer);
     if (running) timer = setTimeout(refresh, POLL_MS);
   } catch (err) {
@@ -410,4 +652,4 @@ window.addEventListener("resize", () => {
   cancelAnimationFrame(resizing);
   resizing = requestAnimationFrame(() => draw());
 });
-void document.fonts.load("15px Excalifont").then(refresh, refresh);
+void document.fonts.load("15px Excalifont").then(refresh, refresh).then(pollNotes);

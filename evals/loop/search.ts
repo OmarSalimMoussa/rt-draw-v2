@@ -133,20 +133,3 @@ export function sweepSkip(cards: CardState[], c: CardState, decisions: DecisionR
   });
   return lost ? `pruned: ${lost.id}, nearer the champion's value on this side, lost clearly` : undefined;
 }
-
-/**
- * Reverted cards that leaned the right way without proving it (LOOP-V2.md D1), newest first: more wins than losses,
- * or a latency card faster on its metric, with no veto against them. The critic may combine or retry them.
- */
-export function nearWins(decisions: DecisionRow[]): string[] {
-  return decisions
-    // Not one a veto, a fidelity floor or "no change" reverted: those leaned the wrong way, or nowhere.
-    .filter((d) => d.kind === "card" && d.verdict === "revert" && d.class !== "N" && !has(d, [...VETO, "floor", "no-change"]))
-    .filter((d) => (d.goal === "latency" ? (d.latency[d.card?.metric === "render" ? "render" : "ttfd"]?.est ?? 1) < 1 : d.counts.wins > d.counts.losses))
-    .slice(-LOOP.search.nearWins)
-    .reverse()
-    .map((d) => {
-      const lat = [d.latency.ttfd && `first drawing ×${d.latency.ttfd.est.toFixed(2)}`, d.latency.render && `render ×${d.latency.render.est.toFixed(2)}`].filter(Boolean).join(", ");
-      return `${d.id} (${d.card?.kind} ${d.card?.component}, ${d.goal}) ${d.card?.change}: ${d.counts.wins}-${d.counts.losses}-${d.counts.ties} at look ${d.looks.at(-1)?.n ?? "-"}${lat ? `, ${lat}` : ""} → ${d.reasons.join("; ")}`;
-    });
-}

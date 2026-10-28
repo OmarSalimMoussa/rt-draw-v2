@@ -1,8 +1,8 @@
-// R1 beside a keep and every checkpoint (LOOP-V2.md A5): testers' real sends replayed on both arms of a decision
-// or checkpoint, as the bank's cases are, and each arm's result scored by gold's free checks. The fidelity judge
-// compares the arms against the owner-approved rubric. R1 decides nothing until the judge is calibrated on
-// illustrations: it is reported, so the owner sees whether what the loop keeps helps what testers actually do.
-// A case both arms already get right is a tie, not noise to remove: R1 has no "already fixed" list.
+// R1 beside a keep and every checkpoint (LOOP-V2.md A5): admitted real sends with gold (evals/real/cases.ts) replayed
+// on both arms of a decision or checkpoint, as the bank's cases are, and each arm's result scored by gold's free checks.
+// The fidelity judge compares the arms against the card's rubric (gold's, or the owner's edit of it). R1 is a report and
+// decides nothing, so the owner sees whether what the loop keeps helps what testers actually do, R-hold's people (whom
+// the loop never tunes on) apart. A case both arms already get right is a tie, not noise to remove.
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { RUBRIC } from "../judge/judge.ts";
@@ -42,7 +42,7 @@ export async function realShadow(rig: Rig, o: { run: string; arms: Arms; seed: s
   const ids = r1Cases();
   if (!ids.length) return undefined;
   const root = benchRoot();
-  // The gold rubric is the expectation, all of it: the owner approved it, so no expectation judge re-makes or trims it.
+  // The card's rubric is the expectation, all of it: admitted by the owner, so no expectation judge re-makes or trims it.
   for (const id of ids) {
     const rubric = json<{ should: string[]; mustNot: string[] }>(join(root, id, "rubric.json"));
     mkdirSync(caseDir(o.run, id), { recursive: true });

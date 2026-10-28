@@ -37,6 +37,10 @@ function insideWorkTree(dir: string): boolean {
  * `<run>~warm`), and no other run's does.
  */
 export const isRealRun = (id: string) => id.startsWith("real-");
+/** A real send's bank case (evals/real/README.md): c-r-<hash of its input>. Its files and calls stay under real/ in any run. */
+export const isRealCase = (id?: string) => !!id && id.startsWith("c-r-");
+/** Whether a run's case keeps its files and calls under real/: any case of a real run, and a real send's in every run. */
+export const underReal = (run: string, caseId?: string) => isRealRun(run) || isRealCase(caseId);
 
 /** Every path of §3.1 (the home checked as in evalHome). Folders the loop fills by id are functions of the id. */
 export function paths(home?: string) {
@@ -53,7 +57,10 @@ export function paths(home?: string) {
     /** Worktree of branch eval/history: the only git-tracked output. */
     history: at("history"),
     bankCases: at("bank", "cases"),
-    bankCase: (id: string) => at("bank", "cases", id),
+    /** A banked case; a real send's is under real/bank (isRealCase), with the rest of testers' data. */
+    bankCase: (id: string) => (isRealCase(id) ? at("real", "bank", id) : at("bank", "cases", id)),
+    /** People's own sends in the bank (evals/real/README.md): the driver's cases stay in bankCases. */
+    realBank: at("real", "bank"),
     bankArchive: at("bank", "archive"),
     /** A first-timer's half-built page, or a held-out site start. */
     resume: (target: string) => at("bank", "resume", `${target}.json`),
@@ -68,6 +75,8 @@ export function paths(home?: string) {
     calls: at("meter", "calls.jsonl"),
     labels: at("labels", "labels.jsonl"),
     human: at("human"),
+    /** The owner's and Claude's threads beside the progress page's "Needs you": never in history/, which is public. */
+    notes: at("notes", "threads.jsonl"),
     /** RT_DATA_DIR for any product plugin the harness starts. */
     data: at("data"),
     /** The empty CLAUDE_CONFIG_DIR for every Claude process the harness starts. */

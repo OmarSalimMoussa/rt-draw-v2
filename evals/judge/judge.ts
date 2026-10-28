@@ -5,13 +5,13 @@
 // positions balanced exactly, a second order only for confidence-1 decisive verdicts and a seeded
 // audit, both orders for the rest of a run whose audit flips too often.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { MODEL_IDS, SDK_VERSION } from "../../dev/claude.ts";
 import { ask } from "../loop/client.ts";
 import { LOOP } from "../loop/config.ts";
 import { paths } from "../loop/paths.ts";
-import { appendLine, caseDir, isDone, put, runFile } from "../loop/record.ts";
+import { appendLine, caseDir, isDone, put, runCaseIds, runFile } from "../loop/record.ts";
 import type { Arm, Expectation, Judged, Miss, Packet } from "../loop/types.ts";
 import { PACKET_VERSION, type Positions, imageOf, stepOf, writePacket } from "./packet.ts";
 import * as P from "./prompts.ts";
@@ -44,15 +44,16 @@ export function judgeId(role: Role, served: string | undefined, variant: P.Varia
 /** The model the API last said it served (message_start): existing expectations and miss checks are reused while their judgeId matches it. */
 let servedNow: string | undefined;
 export const lastServed = () => servedNow;
-/** An expectation from an owner-approved rubric (bench R1's gold, evals/real/shadow.ts): no judge made it, so none re-makes it. */
+/** Expectations no judge made, so none re-makes: gold's rubric (evals/real/gold.ts), and the owner's own edit of one (evals/real/cases.ts). */
 export const RUBRIC = "rubric";
-const current = (have: { judgeId: string } | undefined, role: Role) => !!have && (have.judgeId === RUBRIC || servedNow === undefined || have.judgeId === judgeId(role, servedNow));
+export const OWNER = "owner";
+const current = (have: { judgeId: string } | undefined, role: Role) => !!have && (have.judgeId === RUBRIC || have.judgeId === OWNER || servedNow === undefined || have.judgeId === judgeId(role, servedNow));
 
 export const calibrationFile = () => join(paths().history, "judge", "calibration.json");
 /**
  * The prompt variants calibration chose (§4.5): 1 until a check adopts 2. craftCalibrated false: craft-goal keeps go
  * to the owner list. illustrationsCalibrated false (the owner hasn't labeled illustrations yet): keeps that switch the
- * picture model go there too, and R1 decides nothing (LOOP-V2.md A5, C3).
+ * picture model go there too (LOOP-V2.md C3).
  */
 export function variants(): { fidelity: P.Variant; craft: P.Variant; craftCalibrated: boolean; illustrationsCalibrated: boolean } {
   const use = maybe<{ use?: { fidelity?: P.Variant | null; craft?: P.Variant | null; illustrations?: boolean } }>(calibrationFile())?.use;
@@ -93,7 +94,7 @@ function verdictOf(text: string, positions: Positions, judgeId: string, variant:
   const ok = !!j && ["left", "right", "tie"].includes(j.winner);
   const c = Number(j?.confidence);
   return {
-    winner: ok ? j.winner : "tie", confidence: ok && (c === 2 || c === 3) ? c : 1, why: ok ? String(j.why ?? "") : `unreadable reply: ${text.slice(0, 120)}`,
+    winner: ok ? j.winner : "tie", confidence: ok && (c === 2 || c === 3) ? c : 1, why: ok ? String(j.why ?? "") : `unreadable reply (${text.length} characters)`,
     ...(ok && j.left !== undefined ? { left: String(j.left), right: String(j.right) } : {}), positions, judgeId, variant,
   };
 }
@@ -117,7 +118,8 @@ export async function expectationFor(caseId: string, run: string): Promise<Expec
   const r = await call("expectation", P.expectation(stepOf(caseId, run)), [imageOf(caseId, "before-ink.jpg", run)], run, caseId);
   const j = jsonIn(r.text);
   const [should, mustNot] = [strings(j?.should), strings(j?.mustNot)];
-  if (!should?.length || !mustNot) throw new Error(`unreadable expectation for ${caseId}: ${r.text.slice(0, 120)}`);
+  // Never the reply in the message: it can quote what the person said, and errors reach rows and logs.
+  if (!should?.length || !mustNot) throw new Error(`unreadable expectation for ${caseId} (${r.text.length} characters of reply)`);
   const e: Expectation = { judgeId: r.judgeId, should: should.slice(0, 4), mustNot: mustNot.slice(0, 2) };
   put(file, e);
   return e;
@@ -134,7 +136,7 @@ export async function missCheck(caseId: string, run: string, changes: string[]):
   const e = await expectationFor(caseId, run);
   const r = await call("miss", P.miss(stepOf(caseId), e, changes), [imageOf(caseId, "before-ink.jpg"), imageOf(caseId, "champion-after.jpg")], run, caseId);
   const met = jsonIn(r.text)?.met;
-  if (!["yes", "partly", "no"].includes(met)) throw new Error(`unreadable miss check for ${caseId}: ${r.text.slice(0, 120)}`);
+  if (!["yes", "partly", "no"].includes(met)) throw new Error(`unreadable miss check for ${caseId} (${r.text.length} characters of reply)`);
   const m: Miss = { judgeId: r.judgeId, met, why: String(jsonIn(r.text).why ?? "") };
   put(file, m);
   return m;
@@ -179,7 +181,8 @@ export function positionsFor(caseIds: string[], seed: string | number): Map<stri
 
 /** §4.4's fallback: above LOOP.flipAlarm once LOOP.flipFallbackAfter audited cases are in, the rest of the run is judged in both orders. */
 export const bothOrders = (audited: number, flipped: number) => audited >= LOOP.flipFallbackAfter && flipped / audited > LOOP.flipAlarm;
-const audited = (seed: string | number, caseId: string) => draw(seed, "audit", caseId) < LOOP.auditShare;
+/** The audit sample: the cases judged in both orders whatever the first verdict's confidence, so their flips measure the judge. */
+export const inAudit = (seed: string | number, caseId: string) => draw(seed, "audit", caseId) < LOOP.auditShare;
 
 export type CaseVerdict = { s: -1 | 0 | 1; sCraft?: -1 | 0 | 1; first: Judged; second?: Judged; craft?: Judged };
 
@@ -192,10 +195,9 @@ export type CaseVerdict = { s: -1 | 0 | 1; sCraft?: -1 | 0 | 1; first: Judged; s
 export function judging(run: string, o: { seed: string | number; craft: "all" | "none" }) {
   const v = variants();
   const st = { audited: 0, flipped: 0, both: false };
-  const cases = runFile(run, "cases");
-  for (const c of existsSync(cases) ? readdirSync(cases) : []) {
-    const [f1, f2] = ["fidelity-1.json", "fidelity-2.json"].map((f) => maybe<Judged>(join(cases, c, "judge", f)));
-    if (!isDone(join(cases, c)) || !f1 || !f2 || !audited(o.seed, c)) continue;
+  for (const c of runCaseIds(run)) {
+    const [f1, f2] = ["fidelity-1.json", "fidelity-2.json"].map((f) => maybe<Judged>(join(caseDir(run, c), "judge", f)));
+    if (!isDone(caseDir(run, c)) || !f1 || !f2 || !inAudit(o.seed, c)) continue;
     st.audited++;
     if (pick(f1) !== pick(f2)) st.flipped++;
   }
@@ -206,7 +208,7 @@ export function judging(run: string, o: { seed: string | number; craft: "all" | 
     const first = await fidelityCall(run, p, p.positions, v.fidelity);
     put(file("fidelity-1.json"), first);
     // A tie is never re-judged: a second order could only disagree, which is a tie again.
-    const audit = audited(o.seed, caseId);
+    const audit = inAudit(o.seed, caseId);
     if (first.winner === "tie" || !(audit || first.confidence <= LOOP.lowConfidence || st.both)) return { first };
     const second = await fidelityCall(run, p, swap(p.positions), v.fidelity);
     put(file("fidelity-2.json"), second);

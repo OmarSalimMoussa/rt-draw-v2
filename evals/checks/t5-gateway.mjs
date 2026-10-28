@@ -274,14 +274,14 @@ const under = s2r.why(1);
 s2r.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.91 } });
 check(!under && /five-hour/.test(s2r.why(1) ?? ""), `the server's five-hour reading doesn't pause at 0.90: ${under} / ${s2r.why(1)}`);
 const s3 = new Slots([1, 2, 3], undefined, () => now);
-// The loop's week stops at half the account's (LOOP.weekSevenDayMax 0.50): 0.49 runs, 0.51 parks.
+// The loop pauses past 70% of the account's week (LOOP.weekSevenDayMax 0.70): 0.69 runs, 0.71 parks.
 const s3w = new Slots([1], undefined, () => now);
-s3w.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.49 } });
-check(!s3w.why(1), `a week at 0.49 is parked: ${s3w.why(1)}`);
-s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.51 } });
+s3w.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.69 } });
+check(!s3w.why(1), `a week at 0.69 is parked: ${s3w.why(1)}`);
+s3.record(1, { usd: 0.01, rateLimit: { status: "allowed", fiveHour: 0.1, sevenDay: 0.71 } });
 for (let h = 0; h < 6; h++) {
   now += 3600_000 * 5.5; // across windows: a week's reading stays until the next
-  s3.record(2, { usd: 100, ...(h ? {} : { rateLimit: { status: "allowed", sevenDay: 0.6 } }) });
+  s3.record(2, { usd: 100, ...(h ? {} : { rateLimit: { status: "allowed", sevenDay: 0.8 } }) });
 }
 check(s3.why(1) === "weekly allowance" && s3.why(2) === "weekly allowance" && s3.boundary() === 3, `the weekly allowance: ${s3.why(1)} / ${s3.why(2)}`);
 const reset = Math.floor(now / 1000) + 1800;
@@ -364,7 +364,14 @@ for (const h of homes) {
   const replies = readdirSync(join(h, "cache", "replies"));
   check(!replies.some((f) => secrets.some((t) => readFileSync(join(h, "cache", "replies", f), "utf8").includes(t))), `a token is in ${h}'s reply cache`);
 }
-const { rollup } = await import("../loop/meter.ts");
+const { rollup, rotateMeter } = await import("../loop/meter.ts");
+// A meter past its size moves aside whole and is kept (e101's loop died reading a 512 MB one into one string).
+const rot = mkdtempSync(join(tmpdir(), "rt-t5-rotate-"));
+writeFileSync(join(rot, "calls.jsonl"), '{"at":"x"}\n'.repeat(10));
+const small = rotateMeter(join(rot, "calls.jsonl"), new Date("2026-10-27T17:18:00Z"), 1000);
+const moved = rotateMeter(join(rot, "calls.jsonl"), new Date("2026-10-27T17:18:00Z"), 100);
+check(!small && moved === join(rot, "calls-2026-10-27T17-18-00-000Z.jsonl") && !existsSync(join(rot, "calls.jsonl")) && readFileSync(moved, "utf8").split("\n").length === 11,
+  `the meter's rotation: under the size ${small}, over it ${moved}`);
 const byRole = rollup(meterLines(), (l) => l.role);
 check(byRole.judge?.calls === 12 && byRole.judge.usd > 0 && byRole.judge.write1h === 0 && byRole.draw?.calls >= 3, `rollup by role: ${JSON.stringify(byRole.judge)}`);
 const live = meterLines().filter((l) => l.mode === "live" && l.shared !== "follower");

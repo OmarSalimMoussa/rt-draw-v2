@@ -17,6 +17,7 @@ import { historyRows } from "./history.ts";
 import type { Machine } from "./load.ts";
 import { paths } from "./paths.ts";
 import { ARM_PORT } from "./servers.ts";
+import { lock } from "./state.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { type Token, loadDevToken, loadTokens } from "./tokens.ts";
 import { treeOf } from "./trees.ts";
@@ -55,14 +56,6 @@ export class Rte {
   private tokenCache?: Token[];
   constructor(o: Opts) {
     this.o = o;
-  }
-
-  /** The same command line with other positionals or cap (rte real update's steps), its fakes and tokens kept. */
-  with(o: Partial<Opts>): Rte {
-    const r = new Rte({ ...this.o, ...o });
-    r.fakes = this.fakes;
-    r.tokenCache = this.tokenCache;
-    return r;
   }
 
   str(k: string): string | undefined {
@@ -107,12 +100,18 @@ export class Rte {
     return this.o.mockApi ? { baseUrl: this.o.mockApi, deadProxyPort: await closedPort() } : undefined;
   }
 
+  /** Arm servers and Chrome for `f`, under loop.lock (state.ts lock): they share ports and the bank with any other rig. */
   async withRig<T>(gw: string, trees: string[], f: (rig: Rig) => Promise<T>, slots = slotsHere()): Promise<T> {
-    const rig = await openRig({ trees, gateway: gw, slots, port: this.o.port });
+    const held = await lock(this.o.cmd);
     try {
-      return await f(rig);
+      const rig = await openRig({ trees, gateway: gw, slots, port: this.o.port });
+      try {
+        return await f(rig);
+      } finally {
+        await rig.close();
+      }
     } finally {
-      await rig.close();
+      held.release();
     }
   }
 
@@ -169,8 +168,9 @@ export const tuningIdOf = async (page: Page) => (await page.eval<{ tuningId: str
 
 /** Done, unvoided banked cases of these sets, by id. */
 export function banked(sets: string[]): string[] {
-  const dir = paths().bankCases;
-  return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done")) && sets.includes(maybe<CaseInfo>(join(dir, id, "case.json"))!.set)).sort();
+  const p = paths();
+  return [p.bankCases, p.realBank].flatMap((d) => (existsSync(d) ? readdirSync(d) : []))
+    .filter((id) => !id.includes(".void") && existsSync(join(p.bankCase(id), "done")) && sets.includes(maybe<CaseInfo>(join(p.bankCase(id), "case.json"))!.set)).sort();
 }
 /** Cases in a seeded order that keeps each origin session together (as decisions enter them). */
 export const ordered = (ids: string[], seed: string) => entryOrder(ids, (id) => maybe<CaseInfo>(join(paths().bankCase(id), "case.json"))!.originSession, seedOf(seed));
@@ -178,7 +178,7 @@ export const ordered = (ids: string[], seed: string) => entryOrder(ids, (id) => 
  * What a decision's diffscan runs: every H-gate case, and every tuning case up to LOOP.bank.scanMax; past it a sample of
  * whole sessions seeded by the decision, a different one each time, so no case drops out for good.
  */
-export const scanCases = (seed: string) => [...ordered(banked(["tuning", "fresh"]), seed).slice(0, LOOP.bank.scanMax), ...banked(["heldout-gate"])].sort();
+export const scanCases = (seed: string) => [...ordered(banked(["tuning", "fresh", "real"]), seed).slice(0, LOOP.bank.scanMax), ...banked(["heldout-gate"])].sort();
 
 /** A bank that failed §2.3 is used by nothing after it (bench, checkpoints, calibration, decisions) until rebuilt or accepted. */
 export function needBank() {

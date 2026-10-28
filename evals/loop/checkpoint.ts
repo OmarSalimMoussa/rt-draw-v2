@@ -12,7 +12,7 @@ import { HitIndex } from "../../src/core/hittest.ts";
 import { groupStrokes, readMark } from "../../src/core/marks.ts";
 import { Scene } from "../../src/core/scene.ts";
 import { ASKS, ASK_WORDS, POINTING } from "../core/scenarios.ts";
-import { judging, pick } from "../judge/judge.ts";
+import { inAudit, judging, pick } from "../judge/judge.ts";
 import { type ArmSpec, INPUT_FILES, type Rig, benchCases, checkpointRun, harnessTag, product } from "./ab.ts";
 import { LOOP, configId } from "./config.ts";
 import { AMBER, type Anchor, ONE, commitHistory, historyAdd, historyRead, historyRows, historyWrite, ledger, openHistory, ownerItem, saveRun, trustOf } from "./history.ts";
@@ -177,9 +177,10 @@ function judgeOf(run: string): string | undefined {
   return [...n].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
-function healthOf(run: string, rows: Row[], bench: Map<string, BenchCase>): CheckpointRow["health"] {
+/** Flips are counted on the audit sample only, as judging() counts them: a low-confidence verdict's second order flips more. */
+function healthOf(run: string, seed: string, rows: Row[], bench: Map<string, BenchCase>): CheckpointRow["health"] {
   let audited = 0, flipped = 0;
-  for (const r of rows) {
+  for (const r of rows.filter((x) => inAudit(seed, x.case))) {
     const [a, b] = ["fidelity-1.json", "fidelity-2.json"].map((f) => maybe<Judged>(join(caseDir(run, r.case), "judge", f)));
     if (a && b) audited++, (flipped += Number(pick(a) !== pick(b)));
   }
@@ -288,7 +289,7 @@ export async function checkpoint(o: { rig?: Rig; epoch: number; champion: ArmSpe
   const all = share.all;
   if (!all) throw new Error(`checkpoint ${id}: every case is void (runs/${run}/invariants.jsonl)`);
   const craft = shareOf(ok, (r) => r.sCraft, `${seed} craft`) ?? { n: 0, share: 0.5, lo90: 0.5, hi90: 0.5 };
-  const health = healthOf(run, rows, byId);
+  const health = healthOf(run, seed, rows, byId);
   const voided = health.voidPct > LOOP.voidMax || health.flipPct > LOOP.flipAlarm;
   // Hedges and beat compliance are the frozen yardstick's, the same at every checkpoint of an era: reported in health, never
   // colouring a point (one low B1 would otherwise empty the era's trend lines).

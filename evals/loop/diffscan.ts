@@ -81,8 +81,8 @@ export async function scan(rig: Rig, o: Pick<RunSpec, "run" | "arms" | "seed" | 
   const { rows } = await runAB(rig, { ...o, kind: "scan", mode: "scan", share: true, classify });
   // A resumed scan reuses the cases it finished: they're compared from their files.
   const cases = rows.map((r) => per.get(r.case) ?? caseScan(r.case));
-  // Refresh cases (set fresh) are tuning cases the bank added later.
-  const tuning = cases.filter((c) => c.set === "tuning" || c.set === "fresh");
+  // Refresh cases (set fresh) are tuning cases the bank added later; real ones are people's own sends.
+  const tuning = cases.filter((c) => c.set === "tuning" || c.set === "fresh" || c.set === "real");
   let cls: DecisionClass;
   let timed: ScanResult["timed"];
   if (tuning.some((c) => c.scene && !c.svg)) cls = "D";

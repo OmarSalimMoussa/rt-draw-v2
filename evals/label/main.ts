@@ -1,16 +1,15 @@
-// The owner's labeling page (§4.5): the packet the judge saw, labelled by key
-// (1/2 clearly left/right, q/w slightly, 3 tie or both bad, s skip, u undo), then a
-// craft pass on the screens only; and "your sends", where he writes what he meant
-// in each send he recorded with /playgrounds/draw/?record=1 (§2.8). Everything is
-// kept on the server: the page stores nothing in the browser and never learns
-// which side is which arm.
+// Eval HQ's Judge view (§4.5): the packet the judge saw, labelled by key (1/2 clearly left/right, q/w slightly, 3 tie
+// or both bad, s skip, u undo), then a craft pass on the screens only; and "your sends", where the owner writes what they
+// meant in each send they recorded with /playgrounds/draw/?record=1 (§2.8). Everything is kept on the server: the page
+// stores nothing in the browser and never learns which side is which arm.
 import { type Stroke, strokePath } from "../../src/core/ink.ts";
 import { render } from "../../src/core/render.ts";
 import { Scene, type Shape } from "../../src/core/scene.ts";
 import { DEFAULTS } from "../../src/core/tuning.ts";
-import { $, fontsReady, shell } from "../../src/ui.ts";
+import { $, fontsReady } from "../../src/ui.ts";
+import { hq } from "../progress/hq.ts";
 
-shell("", "Labels for the eval's judges: pick the better result the way the judge is asked to, one key per pair (~15 s each, ~25–30 min once). Your labels and your recorded sends stay on the server. No model call.");
+hq("judge", "Judge: the judge decides only after your labels agree with it. Pick the better result the way it is asked to, one key per pair (~15 s each, ~25–30 min a round); calibration then says whether it can be trusted. Your labels and recorded sends stay on the server. No model call.");
 
 type Side = { image: string; changed?: string; changes?: string[]; framed?: boolean };
 type Pair = { id: string; question: "fidelity" | "craft"; said?: string; meant?: string; hedged?: boolean; targetParts?: string; before?: string; left: Side; right: Side };

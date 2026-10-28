@@ -185,8 +185,9 @@ const OUTLINE_SET = /\b(roughness|strokeWidth)\s*(:|=(?!=))/;
  * and INK can't be redefined or dropped, no text gets a font of its own (the grid labels' monospace aside), and these go
  * to the owner (a crisp page could win the craft judge): a hand-drawn knob set under 0.8× today's value, an outline's
  * roughness or width set in render.ts, picture.ts or ops.ts other than from its knob, a dropped read of one of those knobs, and
- * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape). The word itself: "a rough
- * box" is the user's ink (e80-h3's false hold), and every true one in history named roughness or stroke-width.
+ * a prompt line about roughness or stroke width (the drawing model's ops can set both per shape, as `roughness` and
+ * `strokeWidth`). The words themselves: "a rough box" is the user's ink (e80-h3's false hold), and SVG's `stroke-width`
+ * is what the picture prompt already asks of every element (e83-h3 held for copying its examples into the draw prompt).
  */
 export function lookGate(files: FileDiff[]): Finding[] {
   const out: Finding[] = [];
@@ -208,7 +209,7 @@ export function lookGate(files: FileDiff[]): Finding[] {
   const reads = (ls: string[]) => ls.filter(knobRead).length;
   if (reads(core.flatMap((f) => f.added)) < reads(core.flatMap((f) => f.removed))) out.push({ verdict: "owner", why: `a read of ${HAND_DRAWN.join(", ")} dropped: how hand-drawn the page looks is the owner's` });
   for (const l of files.find((f) => f.path === "src/core/prompts.ts")?.added ?? [])
-    if (/roughness|stroke.?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
+    if (/roughness|stroke ?width/i.test(l)) out.push({ verdict: "owner", why: `a prompt line about roughness or stroke width in src/core/prompts.ts: "${l.trim().slice(0, 120)}"` });
   // More effects added than removed: moving or re-indenting today's (render.ts' fade filter) isn't a new one.
   for (const f of files.filter((x) => x.path.startsWith("src/") && !/\.test\.tsx?$/.test(x.path))) {
     const n = (ls: string[]) => ls.reduce((a, l) => a + effectsIn(l).length, 0);
@@ -254,10 +255,10 @@ export function typecheck(tree: string): Finding[] {
   return [{ verdict: "reject", why: `typecheck: ${(errors.length ? errors : [`${r.stdout}${r.stderr}`.trim() || `tsc exited ${r.status}`]).slice(0, 3).join(" | ")}` }];
 }
 
-/** Every banked case's before-scene. */
+/** Every banked case's before-scene, voided ones left out. */
 export function bankedScenes(): string[] {
-  const dir = paths().bankCases;
-  return existsSync(dir) ? readdirSync(dir).map((id) => join(dir, id, "before.scene.json")).filter((f) => existsSync(join(f, "..", "done")) && existsSync(f)) : [];
+  const p = paths();
+  return [p.bankCases, p.realBank].flatMap((dir) => (existsSync(dir) ? readdirSync(dir).filter((id) => !id.includes(".void")).map((id) => join(dir, id, "before.scene.json")) : [])).filter((f) => existsSync(join(f, "..", "done")) && existsSync(f));
 }
 
 // Runs in the candidate's tree, in its own process: the candidate's code never runs inside the harness.
@@ -289,13 +290,23 @@ export function sceneRoundTrip(tree: string, files: string[]): { loaded: number;
   }
 }
 
+/** The caps the owner ruled out (LOOP-V2.md B1): a picture's elements and colors, where 0 is none. */
+const NO_CAPS = ["picture.maxPaths", "picture.colors"];
+/** A default that sets one of them: a reject (e77-h2's and e82-h1's sweeps set them, six decisions on a rule the owner made). */
+export function capGate(files: FileDiff[]): Finding[] {
+  return (files.find((f) => f.path === "src/core/tuning.ts")?.added ?? []).flatMap((l) => {
+    const m = /\bK\("([\w.]+)",\s*(-?[\d.]+)/.exec(l);
+    return m && NO_CAPS.includes(m[1]) && Number(m[2]) !== 0 ? [{ verdict: "reject" as const, why: `${m[1]} ${m[2]}: no caps on a picture's elements or colors (the owner's rule, LOOP-V2.md B1)` }] : [];
+  });
+}
+
 /**
  * G0 on a candidate: the diff's checks first (cheapest), then, given its tree, the typecheck and the scene round trip.
  * Any finding stops it: a reject wins over an owner item.
  */
 export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?: boolean }): G0Result {
   const files = parseDiff(o.diff);
-  const all = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files)];
+  const all = [...pathGate(files), ...lint(files), ...networkGate(files), ...patchGate(files), ...lookGate(files), ...capGate(files)];
   // The owner's say-so (rte decide --owner-ok) waives the findings that are the owner's call; a reject still stands.
   const waived = o.ownerOk ? all.filter((f) => f.verdict === "owner") : [];
   const found = all.filter((f) => !waived.includes(f));
@@ -303,8 +314,13 @@ export function g0(o: { diff: string; tree?: string; scenes?: string[]; ownerOk?
   if (!found.length && o.tree) {
     found.push(...typecheck(o.tree));
     if (!found.length && files.some((f) => touched(f).includes("src/core/scene.ts"))) {
-      scenes = sceneRoundTrip(o.tree, o.scenes ?? bankedScenes());
-      if (scenes.failed.length) found.push({ verdict: "owner", why: `scene format: ${scenes.failed.length} banked before-scenes don't load through the candidate's Scene.fromJSON (${scenes.failed[0]})` });
+      // Real sends' boards in a process of their own, counted only: the candidate's code and messages never get near a
+      // driver case's report with what a person drew.
+      const all = o.scenes ?? bankedScenes(), real = all.filter((f) => f.startsWith(`${paths().realBank}/`));
+      const mine = sceneRoundTrip(o.tree, all.filter((f) => !real.includes(f)));
+      const theirs = real.length ? sceneRoundTrip(o.tree, real) : { loaded: 0, failed: [] };
+      scenes = { loaded: mine.loaded + theirs.loaded, failed: [...mine.failed, ...theirs.failed.map(() => "a real send's board")] };
+      if (scenes.failed.length) found.push({ verdict: "owner", why: `scene format: ${scenes.failed.length} banked before-scenes don't load through the candidate's Scene.fromJSON (${mine.failed[0] ?? `${theirs.failed.length} real sends' boards`})` });
     }
   }
   return { verdict: found.some((f) => f.verdict === "reject") ? "reject" : found.length ? "owner" : "pass", reasons: found.map((f) => f.why), ...(waived.length ? { waived: waived.map((f) => f.why) } : {}), ...(scenes ? { scenes } : {}) };

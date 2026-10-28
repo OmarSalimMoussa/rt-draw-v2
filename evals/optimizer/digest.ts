@@ -5,10 +5,11 @@
 // after the seed cards the analyst would be guessing from noise.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { LOOP } from "../loop/config.ts";
 import { readRows } from "../loop/metrics.ts";
 import { paths } from "../loop/paths.ts";
 import { caseDir, put, runFile } from "../loop/record.ts";
-import type { Arm, ArmResult, ArmTiming, CaseInfo, CaseInput, ChampionOutcome, Judged, Meant, Miss, Packet, Rating, Readings, RecordedReply, SpanJSON } from "../loop/types.ts";
+import type { Arm, ArmResult, ArmTiming, CaseInfo, CaseInput, ChampionOutcome, DecisionRow, Judged, Meant, Miss, Packet, Rating, Readings, RecordedReply, SpanJSON } from "../loop/types.ts";
 import { tracePatterns } from "./patterns.ts";
 
 /** Frozen numbers of the digests. */
@@ -16,14 +17,18 @@ export const DIGEST = {
   maxTokens: 40_000,
   /** Conservative: prose and JSON run 3.5–4.5 characters a token. */
   charsPerToken: 3.5,
-  /** Each section's share of maxTokens, in order: champion misses, candidate losses, the rest. */
-  share: { misses: 0.5, losses: 0.3, rest: 0.2 },
+  /**
+   * Each section's share of maxTokens: where first drawing's time goes, champion misses, candidate losses, and the
+   * failure analysts with every decision so far. Misses had half and decisions a tail end until 2026-10-27, when the
+   * digest's misses were 60% of it and its latency 2%, and 4 of era 3's 111 decisions fit in its tried list.
+   */
+  share: { time: 0.05, misses: 0.3, losses: 0.2, rest: 0.45 },
   /** Cases in a failure analyst's digest. */
   failureCases: 12,
   /** Lines of the draw reply a failure digest shows. */
   drawLines: 30,
-  /** Longest spans a loss shows; cases shown per trace pattern; steps in the latency list. */
-  spans: 3, examples: 3, steps: 15,
+  /** Longest spans a loss shows; cases shown per trace pattern. */
+  spans: 3, examples: 3,
   /** Characters of said, meant and judge text per case line. */
   textChars: 220,
 };
@@ -130,18 +135,43 @@ export function championMisses(checkpoint?: CheckpointRef): { cases: CaseInfo[];
   return { cases, misses };
 }
 
+/** Every value of one dimension with its case count, most first: what a card targeting it can be measured on. */
+const counts = (cases: CaseInfo[], key: (c: CaseInfo) => string) => {
+  const by = new Map<string, number>();
+  for (const c of cases) by.set(key(c), (by.get(key(c)) ?? 0) + 1);
+  return [...by].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(", ");
+};
+/** Real sends in the bank: measured beside the tuning cases, never digested (what people said stays private). */
+const realCases = () => {
+  const dir = paths().realBank;
+  return existsSync(dir) ? readdirSync(dir).filter((id) => !id.includes(".void") && existsSync(join(dir, id, "done"))).length : 0;
+};
+/**
+ * The bar a card must clear before it's measured at all, and how many cases each target has: a card for a narrow
+ * situation reverts unmeasured (19 of 146 decisions from epoch 80 to 111), so the analyst and critic can drop it first.
+ */
+function coverage(cases: CaseInfo[]): string[] {
+  const ink = cases.filter((c) => (bank<CaseInput>(c.id, "input.json")?.strokes ?? []).length).length;
+  const real = realCases();
+  return [
+    `Coverage: a change is measured only on the cases where it changes a call's request or how a reply is read (a free scan finds them); on fewer than ${LOOP.rareMin} it is reverted unmeasured, as too rare. The ${cases.length} tuning cases by ask type: ${counts(cases, (c) => c.ask)}; by beat: ${counts(cases, (c) => c.beat ?? "-")}; by start: ${counts(cases, (c) => c.start)}; with ink: ${ink}; a session's second send or later: ${cases.filter((c) => c.send > 1).length}.`,
+    ...(real ? [`Also measured: ${real} real sends from people using the product, scored like the tuning cases but never shown here (what they said stays private).`] : []),
+  ];
+}
+
 /** Section 1: the champion's misses with counts per beat, ask type, start and component, then the cases worst first. */
 export function missSection(championSha: string, checkpoint?: CheckpointRef, chars = DIGEST.maxTokens * DIGEST.share.misses * DIGEST.charsPerToken): string {
   const { cases, misses } = championMisses(checkpoint);
   const hit = new Set(misses.map((m) => m.id));
   const n = (re: RegExp) => misses.filter((m) => m.why.some((w) => re.test(w))).length;
   const head = [
-    `# 1. Where the champion fails (tuning bank, champion ${championSha})`,
+    `# 2. Where the champion fails (tuning bank, champion ${championSha})`,
     `${misses.length} of ${cases.length} tuning cases miss: driver rating ≤ 2: ${n(/^driver rated/)}, miss check no or partly: ${n(/^miss check/)}, lost to the anchor at the last checkpoint: ${n(/^lost to/)}, empty: ${n(/^empty/)}, failed ops: ${n(/failed ops/)}, failed pictures: ${n(/failed pictures/)}.`,
     table("beat", cases.map((c) => ({ key: c.beat ?? "-", hit: hit.has(c.id) }))),
     table("ask type", cases.map((c) => ({ key: c.ask, hit: hit.has(c.id) }))),
     table("start", cases.map((c) => ({ key: c.start, hit: hit.has(c.id) }))),
     table("component", misses.flatMap((m) => m.components.map((key) => ({ key, hit: true })))),
+    ...coverage(cases),
     "Cases, worst first:",
   ];
   const items = misses.map((m) => `- ${m.id} [${m.score}] ${tags(m.info)}: said ${q(saidOf(m.id))}; meant ${q(bank<Meant>(m.id, "meant.json")?.meant)}; ${m.why.join("; ")}`);
@@ -203,55 +233,145 @@ export function writeLossDigest(run: string): string {
 
 // ---- 3. The champion's traces: patterns and latency per component
 
-/** The champion's spans per tuning case in these runs. */
-function championSpans(runs: CheckpointRef[]): { case: string; spans: SpanJSON[] }[] {
+/** The champion's arm of each tuning case in these runs: its spans, its clock, its calls and their replies. */
+function championArms(runs: CheckpointRef[]): { case: string; spans: SpanJSON[]; timing?: ArmTiming; calls: ArmResult["calls"]; replies: RecordedReply[] }[] {
   return runs.flatMap(({ run, champion }) => {
     const dir = runFile(run, "cases");
-    return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => tuningInfo(id)).map((id) => ({ case: id, spans: arm<SpanJSON[]>(run, id, champion, "spans.json") ?? [] }));
+    return (existsSync(dir) ? readdirSync(dir) : []).filter((id) => tuningInfo(id)).map((id) => ({
+      case: id, spans: arm<SpanJSON[]>(run, id, champion, "spans.json") ?? [], timing: arm<ArmTiming>(run, id, champion, "timing.json"),
+      calls: arm<ArmResult>(run, id, champion, "result.json")?.calls ?? [], replies: arm<RecordedReply[]>(run, id, champion, "replies.json") ?? [],
+    }));
   });
 }
 
-const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-/** Median ms per step and per model role, by total time (the latency share). */
-function spanMedians(cases: { spans: SpanJSON[] }[]): string[] {
-  const by = new Map<string, number[]>();
-  for (const s of cases.flatMap((c) => c.spans)) {
-    const name = s.name.startsWith("model call · ") ? `model call · ${componentOf(String(s.attributes.from ?? s.name.split(" · ")[1]))}` : s.name.replace(/^picture: .*/, "picture: *");
-    by.set(name, [...(by.get(name) ?? []), s.endMs - s.startMs]);
+const pct = (xs: number[], p: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))];
+const msOf = (xs: number[]) => (xs.length ? `${Math.round(pct(xs, 0.5))} ms (p90 ${Math.round(pct(xs, 0.9))})` : "-");
+const PICTURE_OP = /^(illustration|drawing|picture)\(/;
+
+/**
+ * Time to first drawing, the deciding latency, by phase over the champion's sends: before the drawing call, its model's
+ * first text, the first op line streamed after it, then to the first visible stroke; and per role and model, first text,
+ * output speed and how often it thought. It replaced a table of every step by total time, which read pictures and time
+ * to done as the latency and mixed the Jev calls' first text in with the drawing model's (2026-10-27).
+ */
+function firstDrawingSteps(arms: ReturnType<typeof championArms>): string[] {
+  const P = { prep: [] as number[], first: [] as number[], op: [] as number[], after: [] as number[], ttfd: [] as number[], render: [] as number[] };
+  const models = new Map<string, { first: number[]; tps: number[]; calls: number; thought: number }>();
+  let sends = 0, pictureFirst = 0;
+  for (const a of arms) {
+    const e = a.timing?.enterAt;
+    const kid = (s: SpanJSON, name: string) => a.spans.find((k) => k.parentId === s.spanId && k.name === name);
+    const calls = a.spans.filter((s) => s.name.startsWith("model call · ")).sort((x, y) => x.startMs - y.startMs);
+    const modelOf = new Map(calls.map((s) => [s.name.split(" · ")[1], s.name.split(" · ")[2]] as const));
+    for (const s of calls) {
+      const key = s.name.split(" · ").slice(1, 3).join(" · ");
+      const m = models.get(key) ?? { first: [], tps: [], calls: 0, thought: 0 };
+      const ft = kid(s, "model: time to first text"), sr = kid(s, "model: streaming the reply");
+      const out = Number(s.attributes.outTokens ?? 0);
+      if (ft) m.first.push(ft.endMs - ft.startMs);
+      if (sr && out > 50 && sr.endMs > sr.startMs) m.tps.push((out / (sr.endMs - sr.startMs)) * 1000);
+      models.set(key, m);
+    }
+    for (const c of a.calls) {
+      const m = models.get(`${c.role} · ${modelOf.get(c.role) ?? "?"}`);
+      if (m) (m.calls++, (m.thought += (c.thinkingTokens ?? 0) > 0 ? 1 : 0));
+    }
+    const draw = calls.find((s) => s.name.startsWith("model call · draw · "));
+    if (e === undefined || !draw || a.timing?.ttfdMs === undefined) continue;
+    sends++;
+    const ft = kid(draw, "model: time to first text");
+    const op = a.spans.filter((s) => s.name.startsWith("op ") && s.attributes.ok).sort((x, y) => x.startMs - y.startMs)[0];
+    P.prep.push(draw.startMs - e);
+    P.ttfd.push(a.timing.ttfdMs);
+    if (ft) P.first.push(ft.endMs - ft.startMs);
+    if (ft && op) P.op.push(op.startMs - ft.endMs);
+    if (op) P.after.push(Math.max(0, e + a.timing.ttfdMs - op.startMs));
+    if (op && PICTURE_OP.test(String(op.attributes.line ?? ""))) pictureFirst++;
+    if (a.timing.renderP50Ms !== undefined) P.render.push(a.timing.renderP50Ms);
   }
-  return [...by].sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0)).slice(0, DIGEST.steps).map(([k, v]) => `${k}: median ${Math.round(median(v))} ms over ${v.length}`);
+  if (!sends) return ["First drawing by step: no champion send with a drawing call and a first drawing in these runs"];
+  const rate = (xs: number[]) => (xs.length ? `${Math.round(pct(xs, 0.5))} tok/s` : "- tok/s");
+  return [
+    `First drawing by step (the deciding latency, median and p90 over ${sends} champion sends):`,
+    `- before the drawing call (Jev, screenshots, the prompt): ${msOf(P.prep)}`,
+    `- the drawing model's first text: ${msOf(P.first)}`,
+    `- the first op line, streamed after it (nothing is drawn before a whole line): ${msOf(P.op)}`,
+    `- from the first op to the first drawing (paint, or a picture's strokes or a later op): ${msOf(P.after)}`,
+    `- first drawing: ${msOf(P.ttfd)}; render per op: p50 ${P.render.length ? pct(P.render, 0.5) : "-"} ms`,
+    `- ${pictureFirst} of ${sends} sends start with a picture op`,
+    "Models by role (first text, output speed while streaming, calls that thought):",
+    ...[...models].sort((a, b) => b[1].first.length - a[1].first.length)
+      .map(([k, m]) => `- ${k}: first text ${msOf(m.first)}, ${rate(m.tps)}, thought on ${m.thought} of ${m.calls}`),
+  ];
+}
+
+/**
+ * Jev's yes/no answers by role over the champion's sends: a knob's bar outside their range never fires (e107-h3 and
+ * e107-h4 put theirs at 0.3 on draw-think, whose answers ran 0.41–0.78, and measured nothing, 2026-10-27).
+ */
+function jevAnswers(arms: ReturnType<typeof championArms>): string[] {
+  const by = new Map<string, number[]>();
+  for (const r of arms.flatMap((a) => a.replies)) {
+    const text = replyText(r);
+    if (!text?.startsWith("{")) continue;
+    let answer: Record<string, { noul?: unknown } | null>;
+    try {
+      answer = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    const ps = Object.values(answer).flatMap((v) => (typeof v?.noul === "number" ? [v.noul] : []));
+    if (ps.length) by.set(r.role, [...(by.get(r.role) ?? []), ...ps]);
+  }
+  const f = (x: number) => x.toFixed(2);
+  return by.size
+    ? ["Jev's answers by role (median, p10–p90, min–max; a knob's bar outside them never fires):",
+      ...[...by].map(([role, ps]) => `- ${role}: ${f(pct(ps, 0.5))}, ${f(pct(ps, 0.1))}–${f(pct(ps, 0.9))}, ${f(Math.min(...ps))}–${f(Math.max(...ps))} (${ps.length} answers)`)]
+    : [];
 }
 
 export type DigestInput = {
   championSha: string;
   checkpoint?: CheckpointRef;
-  /** The last decisions' runs. */
+  /** The last decisions' runs: only the live A/Bs among them are read. */
   runs?: string[];
-  /** The failure analysts' answers, the ledger's one-liners, the tried index (title, component, diff hash, verdict). */
-  failures?: string[]; ledger?: string[]; tried?: string[];
+  /** The failure analysts' answers; every decision so far, newest first, with why (decisionLines). */
+  failures?: string[]; decisions?: string[];
   /** What the coordinator would drop unrun now (paused components, --quality-only, owner-only kinds). */
   wont?: string[];
-  /** Reverted cards that leaned the right way without proving it (run.ts' nearWins): to combine or retry. */
-  nearWins?: string[];
 };
 
-/** The analyst's input: champion misses first, then candidate losses, trace patterns, latency, failures, ledger, tried. */
+/**
+ * A run with live sends: a diffscan's (kind "scan") replays recorded replies in ~0.2 s and a G0 run has no cases, so
+ * neither says anything of latency or losses (in 9 of era 3's 17 digests, replays were 34–89% of the latency sample).
+ */
+const live = (run: string) => existsSync(runFile(run, "cases")) && read<{ kind?: string }>(runFile(run, "run.json"))?.kind !== "scan";
+
+/** One line per decided card, newest first: what it changed and why it went the way it did. */
+export function decisionLines(rows: DecisionRow[]): string[] {
+  return rows.filter((d) => d.kind === "card").reverse().map((d) => {
+    const lat = [d.latency?.ttfd && `first drawing ×${d.latency.ttfd.est.toFixed(3)}`, d.latency?.render && `render ×${d.latency.render.est.toFixed(3)}`].filter(Boolean).join(", ");
+    const n = d.affected ? `, ${d.affected.tuning} of ${d.affected.of} cases affected${d.affected.real ? ` (${d.affected.real} real sends)` : ""}` : "";
+    return `- ${d.id} ${d.card?.kind ?? "-"} ${d.card?.component ?? "-"} ${d.goal}: ${cut(d.card?.change, 120)} → ${d.verdict}: ${cut(d.reasons[0] ?? "-", 160)} (${d.counts.wins}-${d.counts.losses}-${d.counts.ties}${lat ? `, ${lat}` : ""}${n})`;
+  });
+}
+
+/** The analyst's input: where first drawing's time goes, where the champion fails, candidate losses, failures, every decision. */
 export function analystDigest(o: DigestInput): string {
   const budget = (share: number) => DIGEST.maxTokens * share * DIGEST.charsPerToken;
-  const runs = o.runs ?? [];
+  const runs = (o.runs ?? []).filter(live);
+  const arms = championArms([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
+  const report = Object.values(tracePatterns(arms)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
+  const time = fit(["# 1. Where the time to first drawing goes (the champion's live sends)", ...firstDrawingSteps(arms), ...jevAnswers(arms), "Trace patterns:"], report, budget(DIGEST.share.time));
   const losses = runs.length
-    ? fit(["# 2. Candidate losses (the last decisions)"], runs.map((r) => lossSection(r, budget(DIGEST.share.losses) / runs.length - 20)), budget(DIGEST.share.losses))
-    : "# 2. Candidate losses (the last decisions)\nnone yet";
-  const spans = championSpans([...(o.checkpoint ? [o.checkpoint] : []), ...runs.map((run) => ({ run, champion: "A" as const }))]);
-  const report = Object.values(tracePatterns(spans)).map((p) => `- ${p.title} (fix: ${p.fix}): ${p.cases.length} cases${p.cases.length ? `, e.g. ${p.cases.slice(0, DIGEST.examples).map((c) => `${c.case} [${c.fired[0].spans.join(" → ")}: ${c.fired[0].note}]`).join("; ")}` : ""}`);
-  const rest = fit(["# 3. The champion's traces", "Patterns:", ...report, "Latency by step (median):", ...spanMedians(spans)],
-    [
-      ...(o.nearWins?.length ? ["# 4. Near wins (reverted, but leaning the right way: combine them in a combo card, or retry with what differs)", ...o.nearWins] : []),
-      ...(o.failures?.length ? ["# 5. Failure analysts", ...o.failures] : []), ...(o.ledger?.length ? ["# 6. Ledger", ...o.ledger] : []), ...(o.tried?.length ? ["# 7. Tried (don't repeat without saying what differs)", ...o.tried] : []),
-    ],
-    budget(DIGEST.share.rest));
+    ? fit(["# 3. Candidate losses (the last decisions)"], runs.map((r) => lossSection(r, budget(DIGEST.share.losses) / runs.length - 20)), budget(DIGEST.share.losses))
+    : "# 3. Candidate losses (the last decisions)\nnone yet";
+  const rest = fit([], [
+    ...(o.failures?.length ? ["# 4. Failure analysts", ...o.failures] : []),
+    ...(o.decisions?.length ? ["# 5. Every decision so far, newest first (don't repeat one without saying what differs)", ...o.decisions] : []),
+  ], budget(DIGEST.share.rest));
   const wont = o.wont?.length ? `# 0. What the loop won't run now (don't propose it)\n${o.wont.map((w) => `- ${w}`).join("\n")}` : undefined;
-  return [...(wont ? [wont] : []), missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
+  return [...(wont ? [wont] : []), time, missSection(o.championSha, o.checkpoint), losses, rest].join("\n\n");
 }
 
 // ---- The failure analyst's digest: at most 12 cases in full

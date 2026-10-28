@@ -10,7 +10,8 @@ import type { Dropped, Turn } from "../core/driver.ts";
 
 // ---- Ids shared by scenarios, cases and cards (§2.1–2.2)
 
-export type SetId = "tuning" | "heldout-gate" | "heldout-chart" | "fresh";
+/** real: people's own sends on the hosted app, measured like tuning cases and never digested (evals/real/README.md). */
+export type SetId = "tuning" | "heldout-gate" | "heldout-chart" | "fresh" | "real";
 export type PersonaId = "first-timer" | "explorer" | "breaker";
 export type StyleId = "typical" | "pointer" | "talker" | "precise" | "rambler";
 /** Today's 8 targets plus notion and uber. */
@@ -130,7 +131,7 @@ export type Row = {
   ttfd?: Pair<number | null>; render?: Pair<number | null>;
   /** An arm's render() left work for after it returned (Engine.deferred): B's alone vetoes a keep. */
   deferred?: Pair<boolean>;
-  /** What of each arm's own board both engines' timings shared (Engine.same), when not all of it: a new op's apply or a new shape kind's paint untimed. */
+  /** What of each arm's own board both engines' timings shared (Engine.same), when not all of it: paint alone (a new op), or nothing (a new shape kind). */
   renderSame?: Pair<Same>;
   /** Pictures drawn and failed, for the failed-picture veto (§1.4 item 5). */
   pics: Pair<[drawn: number, failed: number]>;
@@ -203,7 +204,8 @@ export type DecisionRow = { id: string; kind: "card" | "owner-step"; epoch: numb
   /** The reasons as data (absent before 2026-10-26: search.ts reads those rows' words). */ codes?: Code[];
   trust: "green" | "amber" | "void";
   looks: { n: number; decisive: number; z: number }[]; counts: { wins: number; losses: number; ties: number; exactTies: number };
-  affected: { tuning: number; of: number; topUp: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
+  /** tuning counts every measured case, the real sends among them as real (absent before 2026-10-28). */
+  affected: { tuning: number; of: number; topUp: number; real?: number }; heldOutZ?: number; craftZ?: number; continuationZ?: number;
   overuse?: { detector: string; a: number; b: number }; checkpoint?: string /* owner steps */;
   /** ttfd and render decide (absent before LOOP-V2); ttfc and ttd are reported. tails: "ttfd p90" … "render p95". */
   latency: { ttfc: Ratio; ttd: Ratio; ttfd?: Ratio; render?: Ratio; byThinking?: Record<string, Ratio>; tails?: Record<string, Ratio> }; work: number; emptyRise: number; failedPicRise: number;
@@ -238,6 +240,8 @@ export type BudgetRow = { at: string; epoch: number; slot: 1 | 2 | 3; usdThisWin
 /** health.jsonl: A/A, canary, readiness and calibration outcomes. */
 export type HealthRow = { at: string; kind: "aa" | "canary" | "ready" | "calib"; pass: boolean; detail: Record<string, unknown> };
 /** smoke.jsonl: §11 step 1, the page's first point before any epoch: its A/B's share and median latency, and its cost. */
+/** ships.jsonl: what evals/ops/ship.sh put on prod (rte shipped). */
+export type ShipRow = { at: string; sha: string; tag: string };
 export type SmokeRow = { at: string; run: string; pass: boolean; calls: number; listUsd: number; minutes: number; cases: number; share?: number; ttfcP50?: number; ttdP50?: number; ttfdP50?: number; renderP50?: number };
 /** bench/B1/manifest.json, bench/U1/manifest.json: file → sha256, and the hash over them (N7). */
 export type BenchManifest = { version: string; files: Record<string, string>; hash: string };

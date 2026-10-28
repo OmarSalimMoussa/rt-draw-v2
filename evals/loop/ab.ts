@@ -24,8 +24,9 @@ import { eachSlot } from "./drive.ts";
 import type { RunMode } from "./gateway.ts";
 import { type Machine, beforeWave, sampleLoad } from "./load.ts";
 import { appendRow, caseMetrics, isProduct, readRows, rowOf } from "./metrics.ts";
-import { paths } from "./paths.ts";
+import { isRealCase, paths } from "./paths.ts";
 import { appendLine, caseDir, isDone, put, putImage, runCaseDone, runFile, writeArm, writeRun } from "./record.ts";
+import type { Pace } from "./state.ts";
 import { ARM_PORT, type ArmServer, serveArm } from "./servers.ts";
 import { entryOrder, seedOf } from "./stats.ts";
 import { type Decision, decide } from "./verdict.ts";
@@ -42,25 +43,33 @@ let pausedMs = 0, waiters = 0, pauseStart = 0;
 /** Milliseconds waited out the budget's pause so far: a decision's own clock leaves them out. */
 export const budgetPausedMs = () => pausedMs + (waiters ? Date.now() - pauseStart : 0);
 
+/** Every token is past its week: the step in flight ends, and its card is decided again after the loop's pause. */
+export class WeekSpent extends Error {
+  constructor() {
+    super(`budget: every token is past ${Math.round(LOOP.weekSevenDayMax * 100)}% of its week`);
+  }
+}
+
 /**
  * The budget before each paying step (LOOP-V2.md A4), not only between steps: a case sent live or judged, a top-up
- * session, a continuation send. Every token slot past LOOP.fiveHourPauseAt of its five-hour window waits here for the
- * earliest reset, so a decision started at 59% can't run on to 85%; a stop (the week) ends the run, and the card is
- * decided again when the loop resumes (calls paid so far are cached). True when it waited.
+ * session, a continuation send, a real-use triage or gold call. Every token slot past LOOP.fiveHourPauseAt of its
+ * five-hour window waits here for the earliest reset, so a decision started at 59% can't run on to 95%. Every token past
+ * its week ends the step (WeekSpent): only the loop's pause reads the week again, and calls paid so far are cached.
+ * True when it waited.
  */
 export async function budgetGate(gateway: string, runId: string): Promise<boolean> {
   let waited = false;
   try {
     for (;;) {
-      const { pace } = (await gatewayStatus(gateway)) as { pace: { ok: boolean; stop?: string; pauseUntil?: number } };
+      const { pace } = (await gatewayStatus(gateway)) as { pace: Pace };
       if (pace.ok) return waited;
-      if (pace.stop) throw new Error(`budget: ${pace.stop}`);
+      if (pace.week) throw new WeekSpent();
       if (!waited) {
         appendLine(runFile(runId, "budget-pause.jsonl"), { at: new Date().toISOString(), until: pace.pauseUntil ? new Date(pace.pauseUntil).toISOString() : undefined });
         if (!waiters++) pauseStart = Date.now();
         waited = true;
       }
-      await new Promise((r) => setTimeout(r, Math.min(PACE_POLL_MS, Math.max(1000, (pace.pauseUntil ?? 0) - Date.now()))));
+      await new Promise((r) => setTimeout(r, Math.min(PACE_POLL_MS, Math.max(1000, pace.pauseUntil - Date.now()))));
     }
   } finally {
     if (waited && !--waiters) pausedMs += Date.now() - pauseStart;
@@ -592,8 +601,11 @@ export async function runAB(rig: Rig, s: RunSpec & { cases: string[] }, d?: Deci
       }
       if (dec.pending?.includes("continuation")) {
         if (!d.continueFrom) throw new Error("class D needs continuation forks: pass continueFrom");
-        // An origin case per slot at a time (one slot alone added ~18 min to a D decision), rows in case order.
-        const from = rows.filter((x) => x.affected && !x.void).slice(0, LOOP.cont.cases);
+        // An origin case per slot at a time (one slot alone added ~18 min to a D decision), rows in case order. Never a
+        // real send: the driver can't take a person's next turn.
+        const from = rows.filter((x) => x.affected && !x.void && !isRealCase(x.case)).slice(0, LOOP.cont.cases);
+        // Every affected case a real send: no G4 can run, so the keep is the owner's, never one G4 didn't check.
+        if (!from.length) return done({ ...dec, verdict: "owner", pending: undefined, vetoes: [...dec.vetoes, "G4: every affected case is a real send, which the driver can't continue"], codes: [...dec.codes, "owner"] });
         const out: Row[][] = [];
         let at = 0;
         await eachSlot(rig.slots, (slot) => {

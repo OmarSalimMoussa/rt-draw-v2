@@ -3,7 +3,7 @@
 // Anthropic's list prices. Hashes and numbers only: prompts and replies live in the
 // reply cache. Rollups give $ by role, run or epoch, and the shares v1 never saw
 // (1-hour writes, thinking, cold starts).
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { JEV_PRICE, isJev } from "../../dev/jev.ts";
 import type { AgentLog, CallLog } from "./types.ts";
@@ -37,6 +37,19 @@ export const meterAgent = (file: string, l: AgentLog) => append(file, l);
 function append(file: string, line: object) {
   mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify(line)}\n`);
+}
+
+/**
+ * Past this size the meter moves aside whole, kept as calls-<at>.jsonl beside it, when an epoch starts afresh (no run,
+ * no epoch split across two files): readMeter loads it into one string, and V8's strings stop at 512 MB (e101's loop
+ * died there, 2026-10-27).
+ */
+export const METER_ROTATE_BYTES = 256 << 20;
+export function rotateMeter(file: string, at = new Date(), max = METER_ROTATE_BYTES): string | undefined {
+  if (!existsSync(file) || statSync(file).size < max) return undefined;
+  const to = file.replace(/\.jsonl$/, `-${at.toISOString().replace(/[:.]/g, "-")}.jsonl`);
+  renameSync(file, to);
+  return to;
 }
 
 export function readMeter(file: string): (MeterCall | AgentLog)[] {

@@ -4,12 +4,16 @@
 
 /** Every number the loop decides with. Frozen measuring side: the optimizer can read it, never write it. */
 export const LOOP = {
-  // Rule F (§1.3), looks on affected cases
-  looks: [16, 32, 48, 80], keepZ: [Infinity, 2.3, 1.8, 1.4], revertZ: [-0.2, 0.3, 0.7, 1.4], minDecisive: [10, 20, 30, 0],
+  // Rule F (§1.3), looks on affected cases. To 160 with looser early reverts (the funnel audit, 2026-10-27): the early
+  // reverts stopped a third of the 60/40 winners before 80. On t13's planning generator a 60/40 card now keeps 58% of
+  // the time (was 42%), a no-op 8.9% (was 8.2%; the audit's 1.6 and 1.5 lines at 80 and 160 made it 11.3%), and a
+  // no-op costs 66 cases where it cost 35.
+  looks: [16, 32, 48, 80, 160], keepZ: [Infinity, 2.3, 1.9, 1.8, 1.7], revertZ: [-1, -0.5, 0, 0.6, 1.7], minDecisive: [10, 20, 30, 0, 0],
   rareMin: 32, topUpMaxSends: 48,
   // latency and craft goals (§1.3)
   latFutility16: 1.0, latKeepP: 0.10, latRevert48: 0.98, qualityFloorZ: -1.0, workFloorZ: -0.5,
-  // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on
+  // a latency keep's fidelity floor by look (none at 16), and its fidelity futility from look 32 on. Its length is the
+  // latency rule's looks: it ends at 80, so the 160 look is fidelity's and craft's (another p < latKeepP look adds false keeps).
   latFloorZ: [Infinity, 0, -0.5, -1.0], latFutilityZ: -1.25,
   // the slow sends too (the owner, 2026-10-19): a latency keep may come from the p90 or p95 send (both arms' quantile,
   // B/A) as well as the median paired ratio: a tail keeps when surely under latTailKeepHi95 (swap test p < latTailKeepP), at least
@@ -29,13 +33,15 @@ export const LOOP = {
   // vetoes and trust (§1.4)
   latVeto: { p: 0.05 },
   // G3 confirms in direction (held-out fidelity or craft Z above 0, a latency card's metric faster) once it has
-  // heldoutConfirmMin affected cases; with fewer it can only veto.
-  heldoutVetoZ: -1.0, heldoutMax: 32, heldoutConfirmMin: 8,
+  // heldoutConfirmMin affected cases; with fewer it can only veto. Was −1.0 and 8 until the funnel audit (2026-10-27):
+  // two G2 keeps were thrown away on held-out fidelity, d-cand-e70-h1 at Z −1.15 and d-cand-e80-h3 at −0.63 on 13 cases
+  // (pooled with G2's, 1.50).
+  heldoutVetoZ: -1.645, heldoutMax: 32, heldoutConfirmMin: 16,
   // The search (LOOP-V2.md D1, D3, D4): the analyst's hypotheses an epoch, the critic's cards (a sweep is one card of up
   // to sweepMax values, a combo one card of up to comboMax tried patches), and the near wins the digest lists.
   // A sweep's k values share one card's error (D3): each keeps past keepZ raised by z(1 − sweepAlpha/k) − z(1 − sweepAlpha),
   // sweepAlpha being Rule F's one-sided pass rate for a no-op at G2 (5.5% simulated), and a latency value on a p k times smaller.
-  search: { hypotheses: [8, 16], cards: 6, sweepMax: 4, comboMax: 3, nearWins: 8, pruneZ: -1.0, sweepAlpha: 0.055 },
+  search: { hypotheses: [4, 8], cards: 6, sweepMax: 4, comboMax: 3, pruneZ: -1.0, sweepAlpha: 0.055 },
   // renderUnmeasuredMax: past this share of a keep's cases without a render both engines could compare (a new shape
   // kind), the render veto can't speak for it: the owner's.
   workMin: 0.85, emptyRiseMax: 0.02, failedPicRiseMax: 0.02, renderUnmeasuredMax: 0.25,
@@ -64,13 +70,14 @@ export const LOOP = {
   // owner steps (§8.6)
   sync: { minHours: 24, sceneFailMax: 0.10 },
   // budget (§6.7). The token is shared with testers on prod (the owner, 2026-10-24): new work pauses at fiveHourPauseAt of
-  // the five-hour window (0.60 until the owner raised it on 2026-10-26) and stops at weekSevenDayMax of the week, both the server's reading of the whole account (every
+  // the five-hour window (0.60 until the owner raised it on 2026-10-26) and at weekSevenDayMax of the week (0.50 until the
+  // owner raised it on 2026-10-27; a stop until 2026-10-28, now read again until it's under), both the server's reading of the whole account (every
   // call on a slot brings one). A decision past state.ts' RULES.decisionMaxMin of measuring is void (overrun); --cap
   // bounds every step's calls.
-  fiveHourPauseAt: 0.90, weekSevenDayMax: 0.50,
+  fiveHourPauseAt: 0.90, weekSevenDayMax: 0.70,
   // machine (§7); the per-machine dispatch limit is the ladder's p99 at the knee (machine.json), capped here
   loadMax: 0.6, psiMax: 0.10, sendTimeoutMs: 120_000, quiesceMs: 500, suspendGapMs: 10_000,
-  dispatchOffsetCapMs: 25, eventLoopP99MaxMs: 20, heapGrowMaxMb: 20, diskOwnerGb: 20, diskPauseGb: 10,
+  dispatchOffsetCapMs: 25, eventLoopP99MaxMs: 100, heapGrowMaxMb: 20, diskOwnerGb: 20, diskPauseGb: 10,
 } as const;
 /** The driver's eyes and hand: today's values, frozen, so a candidate's shot.* or camera.* knobs can't move the simulated user. */
 export const DRIVE_VIEW = { screenW: 960, screenH: 600, jpegQuality: 0.8, inkSize: 5, lookMinPx: 160, zoomMinPx: 160, zoomMaxPx: 20000, maxLooks: 3 } as const;
@@ -116,21 +123,19 @@ export function sha256(text: string): string {
 }
 
 /**
- * The owner's notices, while the harness is young. The loop never stops for these: it tells the owner (the log and
- * $RT_EVAL_HOME/notices.jsonl, which a watcher relays) as each comes near (`soon` of the way) and when it's reached:
- * every `decisions` decisions, `minutes` minutes and `usd` list $ of a leg (the loop since it last started or resumed),
- * and after each checkpoint. The owner stops it between steps with
- * `rte stop-after` (nothing lost; `loop --resume` goes on). `--notify-<name> n` sets one for a leg, 0 turns it off.
- * Not in configId: they decide when the owner hears, not what is measured.
- */
-export const NOTIFY = { decisions: 2, minutes: 120, usd: 20, checkpoint: 1, soon: 0.8 };
-
-/**
  * A token parked for its week (the server's 7-day use past LOOP.weekSevenDayMax) gets no calls, so nothing would read
  * its week again: once its reading is `afterH` hours old, the loop spends one one-word Haiku call on it to read it.
  * Not in configId: it decides which token pays, not what is measured.
  */
 export const WEEK_CHECK = { afterH: 6 };
+
+/**
+ * An eval role's output, at most: the model's own maximum. Only the product's calls keep dev/claude.ts' MAX_TOKENS, as
+ * the hosted app does: gold is the ideal the product aims at, so nothing throttles it, nor triage, the judge or the
+ * loop's agents (e86's Opus analyst ran out at 4096 thinking). Here, not in dev/: a candidate's tree has the champion's.
+ * Not in configId: it bounds no measurement.
+ */
+export const EVAL_MAX_TOKENS = 128_000;
 
 /** Logged on every decision and checkpoint: a change to LOOP or DRIVE_VIEW changes it. */
 export const configId = sha256(JSON.stringify({ LOOP, DRIVE_VIEW }));

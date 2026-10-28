@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 # rte: the eval loop's command line (evals/loop/run.ts, evals/RUNBOOK.md) from the checkout this file is in, plus two
-# for long steps on the PGX, which run supervised in the tmux window `loop` (evals/loop/launch.sh):
-#   bin/rte <command> [flags…]        e.g. bin/rte status, bin/rte real gold --cap 40
-#   bin/rte job <command> [flags…]    the same, supervised (a closed ssh doesn't end it); prints where its log is
-#   bin/rte wait                      until the supervised step ends, then its log's last lines
+# that go through systemd:
+#   bin/rte <command> [flags…]        e.g. bin/rte status, bin/rte stop-after
+#   bin/rte run                       starts the loop's unit (evals/ops/units.sh): it resumes where the loop stopped
+#   bin/rte job <command> [flags…]    a long step in a unit of its own (evals/loop/launch.sh), e.g. bin/rte job calib --check --cap 150
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export RT_EVAL_HOME="${RT_EVAL_HOME:-$HOME/rt-eval}"
 case "${1:-}" in
+  run)
+    systemctl --user cat rt-loop.service >/dev/null 2>&1 || { echo "rte run: no rt-loop unit here: bash evals/ops/units.sh installs it (the PGX)" >&2; exit 1; }
+    # The owner's word: a stop of theirs no longer holds it (rte wanted), and a unit that gave up after its restarts is reset.
+    node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts wanted --set
+    systemctl --user reset-failed rt-loop.service 2>/dev/null || true
+    # The loop does intake between its epochs from now: a pass of the timer's stops (what it paid for is cached).
+    systemctl --user stop rt-intake.service 2>/dev/null || true
+    systemctl --user start --no-block rt-loop.service
+    echo "rte run: the loop's unit is starting (readiness first, then loop --resume): bin/rte status, journalctl --user -fu rt-loop"
+    ;;
   job)
     shift
-    bash evals/loop/launch.sh "$@"
-    echo "rte job: $* in tmux ${RT_EVAL_TMUX:-rt}:loop; its log is $RT_EVAL_HOME/logs/run-$(date -u +%F).log (bin/rte wait)"
-    ;;
-  wait)
-    s="${RT_EVAL_TMUX:-rt}"
-    while tmux list-windows -t "=$s" -F '#W' 2>/dev/null | grep -qx loop; do sleep 30; done
-    tail -n 20 "$RT_EVAL_HOME/logs/run-$(date -u +%F).log" 2>/dev/null || true
+    exec bash evals/loop/launch.sh "$@"
     ;;
   *) exec node --import ./evals/loop/node-hooks.mjs evals/loop/run.ts "$@" ;;
 esac
