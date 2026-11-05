@@ -22,8 +22,8 @@ page and can join the waitlist.
 From a shell, without the page (this is how the first admin got in):
 
 ```bash
-ssh deploy@31.220.50.146 docker exec rtdraw-app node app/server/invite.ts someone@example.com
-ssh deploy@31.220.50.146 docker exec rtdraw-app node app/server/invite.ts you@emberhub.dev --admin
+ssh deploy@2.29.144.6 docker exec rtdraw-app node app/server/invite.ts someone@example.com
+ssh deploy@2.29.144.6 docker exec rtdraw-app node app/server/invite.ts you@emberhub.dev --admin
 ```
 
 Everything is in the `rtdraw-v2-data` volume: `access/access.json` (people, the
@@ -53,7 +53,7 @@ Signed in as omar@emberhub.dev:
 5. Put the deployment URL, ending in `/exec`, in the box's shared env file and restart:
 
    ```bash
-   ssh deploy@31.220.50.146 'sed -i "s|^MAILER_URL=.*|MAILER_URL=https://script.google.com/macros/s/…/exec|" /srv/emberhub.env && cd /srv/rtdraw && RTDRAW_TAG=$(tail -1 deployed) docker compose up -d --wait'
+   ssh deploy@2.29.144.6 'sed -i "s|^MAILER_URL=.*|MAILER_URL=https://script.google.com/macros/s/…/exec|" /srv/emberhub.env && cd /srv/rtdraw && RTDRAW_TAG=$(tail -1 deployed) docker compose up -d --wait'
    ```
 
 A change to the script needs a new version of the deployment (Manage deployments →
