@@ -14,8 +14,8 @@
 # TYPESAFE_API_KEY and ELEVENLABS_API_KEY (and MAILER_URL and MAILER_SECRET for the mailer).
 set -euo pipefail
 
-# The box by address: the name prod.emberhub.dev no longer resolves.
-BOX=${RTDRAW_BOX:-deploy@31.220.50.146}
+# The box by address: the Hetzner box in Helsinki since 2026-11-05 (the Hostinger one is gone).
+BOX=${RTDRAW_BOX:-deploy@2.29.144.6}
 HOST=imagine.emberhub.dev
 DIR=/srv/rtdraw
 SITES=/srv/edge/sites
